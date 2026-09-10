@@ -248,7 +248,7 @@ def test_track_a_dispatch_control_is_forward_only_and_documented() -> None:
         assert forbidden not in combined.lower()
     for required in (
         "PENNY_ARTIFACT_DISPATCH_MODE",
-        "ARTIFACT_DISPATCH_MODE_INVALID",
+        "DISPATCH_MODE_INVALID",
         "checkpoint_preserved",
     ):
         assert required in combined

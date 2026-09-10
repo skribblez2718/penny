@@ -120,7 +120,7 @@ const GENERATED_DIRECTORY_NAMES = new Set([
   "node_modules",
   "out",
 ]);
-const IGNORED_STAGING_ROOTS = new Set(["ideas", "plans", "research"]);
+const IGNORED_STAGING_ROOTS = new Set(["audits", "backups", "ideas", "plans", "research"]);
 const TYPESCRIPT_PATTERN = /(?:\.d)?\.tsx?$/u;
 const JAVASCRIPT_PATTERN = /\.(?:c|m)?js$/u;
 

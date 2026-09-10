@@ -52,7 +52,8 @@ export interface PlaywrightConfig {
   headless: boolean;
   timeout: number;
   browserPath?: string;
-  networkAllowlist: string[];
+  /** Canonical, validated process-level browser destination ceiling. */
+  networkAllowlist: readonly string[];
   downloadDir: string;
   outputDir: string;
   enableVision: boolean;

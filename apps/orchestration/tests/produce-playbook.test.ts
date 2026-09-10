@@ -5,32 +5,39 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  EFFECT_POLICY_VIOLATION_LIMITATION,
+  PRODUCE_EFFECT_PHASES,
   PRODUCE_PLAYBOOK_REGISTRATION,
   PRODUCE_PLAYBOOK_NAME,
   PRODUCE_START_ADMISSION,
   OrchestrationService,
   ProducePlaybook,
+  UNKNOWN_EFFECT_LIMITATION,
   canonicalJson,
   evaluateProduceLatestReviewedArtifactDod,
   initializePennyState,
   mediaTypeForArtifactKind,
   sha256,
-  validateProduceProductEnvelope,
-  validateProduceProductIntegrity,
-  validateProduceQualityReceipt,
-  validateProduceValidityReceipt,
-  validateProducedArtifact,
+  unknownEffectEvidenceGraph,
+  validateEffectEvidenceGraph,
+  validateProduceEvidenceBundle,
+  validateProduceProductEnvelopeV2,
+  validateProduceProductIntegrityV2,
+  validateProduceQualityReceiptV2,
+  validateProduceValidityReceiptV2,
+  validateProducedArtifactV2,
   type AgentCompletion,
   type AgentInvocation,
   type ArtifactApproachDecisionV1,
   type ArtifactApproachV1,
   type Directive,
+  type EffectEvidenceRequestV1,
   type JsonValue,
   type ModelClient,
   type PlaybookRegistrationV1,
   type ProduceArtifactKind,
   type ProduceRequestV1,
-  type ProducedArtifactDraftV1,
+  type ProducedArtifactDraftV2,
 } from "../src/index.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
@@ -177,9 +184,9 @@ function coverage(value = request()) {
 function draft(
   content = "# Greeting\n\nHello, world.\n\n*Supplied by the caller.*",
   requestValue = request()
-): ProducedArtifactDraftV1 {
+): ProducedArtifactDraftV2 {
   return {
-    schema_version: 1,
+    schema_version: 2,
     disposition: "produced",
     output_name: requestValue.output_name,
     artifact_kind: requestValue.artifact_kind,
@@ -190,13 +197,10 @@ function draft(
     uncertainties: ["Tone beyond concise was not specified."],
     request_coverage: coverage(requestValue),
     confidence: "PROBABLE",
-    external_actions_performed: false,
-    filesystem_writes_performed: false,
-    tests_executed: false,
   };
 }
 
-function notApplicableDraft(requestValue: ProduceRequestV1): ProducedArtifactDraftV1 {
+function notApplicableDraft(requestValue: ProduceRequestV1): ProducedArtifactDraftV2 {
   return {
     ...draft("placeholder", requestValue),
     disposition: "not_applicable",
@@ -206,7 +210,7 @@ function notApplicableDraft(requestValue: ProduceRequestV1): ProducedArtifactDra
   };
 }
 
-function persistedDraft(value: ProducedArtifactDraftV1): string {
+function persistedDraft(value: ProducedArtifactDraftV2): string {
   return `PRODUCED_ARTIFACT_DRAFT:${canonicalJson(value)}\nSUMMARY:{"confidence":"${value.confidence}","complete":true}`;
 }
 
@@ -214,6 +218,41 @@ function routingOnly(output: string): string {
   const marker = output.lastIndexOf("SUMMARY:");
   if (marker < 0) throw new Error("scripted routing summary is absent");
   return output.slice(marker);
+}
+
+function violatingEffects(requestValue: EffectEvidenceRequestV1) {
+  const base = structuredClone(
+    unknownEffectEvidenceGraph({ runId: requestValue.run_id, phases: requestValue.phases })
+  );
+  const categories = base.categories.map((entry, index) =>
+    index === 0
+      ? {
+          ...entry,
+          observation: {
+            status: "observed",
+            scope: entry.policy.scope,
+            coverage: "partial",
+            result: "violation",
+            evidence_refs: [
+              {
+                evidence_id: `synthetic-trace:${requestValue.run_id}:${entry.category}`,
+                evidence_sha256: sha256(`${requestValue.run_id}:${entry.category}:violation`),
+                media_type: "application/json",
+              },
+            ],
+          },
+        }
+      : entry
+  );
+  return validateEffectEvidenceGraph(
+    {
+      ...base,
+      categories,
+      assurance: "policy_violation",
+      limitations: [EFFECT_POLICY_VIOLATION_LIMITATION],
+    },
+    { runId: requestValue.run_id, phases: requestValue.phases }
+  );
 }
 
 function qualityApprove(): string {
@@ -383,14 +422,14 @@ describe("orchestrated produce workflow", () => {
     ).toBe(true);
 
     const product = productRef(terminal);
-    expect(validateProducedArtifact(readJson(service, String(product.artifact_id)))).toMatchObject({
-      schema_id: "penny.produced-artifact.v1",
+    expect(
+      validateProducedArtifactV2(readJson(service, String(product.artifact_id)))
+    ).toMatchObject({
+      schema_id: "penny.produced-artifact.v2",
       disposition: "produced",
       output_name: "greeting.md",
       artifact_kind: "markdown",
-      external_actions_performed: false,
-      filesystem_writes_performed: false,
-      tests_executed: false,
+      effect_evidence: { assurance: "unknown" },
     });
     const quality = terminal.artifacts.find(
       (artifact) => artifact.kind === "produce-quality-receipt"
@@ -412,38 +451,53 @@ describe("orchestrated produce workflow", () => {
     ) {
       throw new Error("produce product evidence graph is incomplete");
     }
-    expect(validateProduceQualityReceipt(readJson(service, quality.artifact_id))).toMatchObject({
+    expect(validateProduceQualityReceiptV2(readJson(service, quality.artifact_id))).toMatchObject({
       verdict: "APPROVE",
       reviewer: "carren",
       product_ref: { artifact_id: product.artifact_id },
     });
-    expect(validateProduceValidityReceipt(readJson(service, validity.artifact_id))).toMatchObject({
-      verdict: "PASS",
-      reviewer: "vera",
-      product_ref: { artifact_id: product.artifact_id },
-      quality_receipt_ref: { artifact_id: quality.artifact_id },
-    });
-    expect(validateProduceProductIntegrity(readJson(service, integrity.artifact_id))).toMatchObject(
+    expect(validateProduceValidityReceiptV2(readJson(service, validity.artifact_id))).toMatchObject(
       {
-        status: "PASS",
+        verdict: "PASS",
+        reviewer: "vera",
         product_ref: { artifact_id: product.artifact_id },
         quality_receipt_ref: { artifact_id: quality.artifact_id },
-        validity_receipt_ref: { artifact_id: validity.artifact_id },
       }
     );
-    expect(validateProduceProductEnvelope(readJson(service, envelope.artifact_id))).toMatchObject({
-      status: "complete",
+    expect(
+      validateProduceProductIntegrityV2(readJson(service, integrity.artifact_id))
+    ).toMatchObject({
+      status: "PASS",
       product_ref: { artifact_id: product.artifact_id },
-      integrity_ref: { artifact_id: integrity.artifact_id },
+      quality_receipt_ref: { artifact_id: quality.artifact_id },
+      validity_receipt_ref: { artifact_id: validity.artifact_id },
     });
+    expect(validateProduceProductEnvelopeV2(readJson(service, envelope.artifact_id))).toMatchObject(
+      {
+        status: "complete",
+        product_ref: { artifact_id: product.artifact_id },
+        integrity_ref: { artifact_id: integrity.artifact_id },
+      }
+    );
+    expect(
+      validateProduceEvidenceBundle({
+        runId: terminal.identity.run_id,
+        phases: PRODUCE_EFFECT_PHASES,
+        product: readJson(service, String(product.artifact_id)),
+        qualityReceipt: readJson(service, quality.artifact_id),
+        validityReceipt: readJson(service, validity.artifact_id),
+        integrity: readJson(service, integrity.artifact_id),
+        envelope: readJson(service, envelope.artifact_id),
+      })
+    ).toMatchObject({ contract_version: 2, effect_evidence: { assurance: "unknown" } });
     expect(terminal).toMatchObject({
       action: "complete",
       met: true,
       unresolved: [],
       result: {
-        external_actions_performed: false,
-        filesystem_writes_performed: false,
-        tests_executed: false,
+        effect_assurance: "unknown",
+        effect_limitation: UNKNOWN_EFFECT_LIMITATION,
+        effect_evidence: { assurance: "unknown" },
       },
     });
     expect(service.checkpointer.completionAdmission(terminal.identity.run_id)).toBeDefined();
@@ -461,8 +515,8 @@ describe("orchestrated produce workflow", () => {
         originState: "admitting_artifact",
         latestProduct: {
           selector: "terminal_artifact",
-          schema_id: "penny.produced-artifact.v1",
-          product_schema_version: 1,
+          schema_id: "penny.produced-artifact.v2",
+          product_schema_version: 2,
           product_id: String(product.artifact_id),
           sha256: String(product.content_digest),
         },
@@ -470,6 +524,47 @@ describe("orchestrated produce workflow", () => {
         projectRoot: PROJECT_ROOT,
       })
     ).toEqual({ passed: false, evidence_refs: [] });
+  });
+
+  it("blocks positive completion when a synthetic trace contains an observed policy violation", async () => {
+    const requests: EffectEvidenceRequestV1[] = [];
+    const client = new ScriptedProduceClient([
+      persistedApproach(),
+      persistedApproachDecision(),
+      persistedDraft(draft()),
+      qualityApprove(),
+      veraPass(),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
+      effectEvidenceProvider: {
+        collect: (requestValue) => {
+          requests.push(requestValue);
+          return violatingEffects(requestValue);
+        },
+      },
+    });
+    sequence += 1;
+    const terminal = await service.execute(start(`run-produce-effect-violation-${sequence}`));
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ phases: PRODUCE_EFFECT_PHASES });
+    expect(terminal).toMatchObject({
+      action: "incomplete",
+      met: false,
+      result: {
+        incomplete_reason: "effect_policy_violation",
+        effect_assurance: "policy_violation",
+        effect_limitation: EFFECT_POLICY_VIOLATION_LIMITATION,
+      },
+    });
+    if (terminal.action !== "incomplete") throw new Error("effect violation did not block");
+    expect(
+      terminal.artifacts.some((artifact) => artifact.kind === "produce-product-integrity")
+    ).toBe(false);
+    expect(service.checkpointer.completionAdmission(terminal.identity.run_id)).toBeUndefined();
   });
 
   it("completes truthful not_applicable when required inline source material is absent", async () => {
@@ -499,7 +594,9 @@ describe("orchestrated produce workflow", () => {
       )
     );
     const product = productRef(terminal);
-    expect(validateProducedArtifact(readJson(service, String(product.artifact_id)))).toMatchObject({
+    expect(
+      validateProducedArtifactV2(readJson(service, String(product.artifact_id)))
+    ).toMatchObject({
       disposition: "not_applicable",
       content: "",
       content_sha256: sha256(""),
@@ -526,9 +623,9 @@ describe("orchestrated produce workflow", () => {
       unresolved: ["artifact approach decision is unresolved"],
       result: {
         incomplete_reason: "unresolved_approach_decision",
-        external_actions_performed: false,
-        filesystem_writes_performed: false,
-        tests_executed: false,
+        effect_assurance: "unknown",
+        effect_limitation: UNKNOWN_EFFECT_LIMITATION,
+        effect_evidence: { assurance: "unknown" },
       },
     });
   });
@@ -687,11 +784,9 @@ describe("orchestrated produce workflow", () => {
       "verifying_artifact",
     ]);
     expect(
-      validateProducedArtifact(readJson(service, String(productRef(terminal).artifact_id)))
+      validateProducedArtifactV2(readJson(service, String(productRef(terminal).artifact_id)))
     ).toMatchObject({
-      tests_executed: false,
-      filesystem_writes_performed: false,
-      external_actions_performed: false,
+      effect_evidence: { assurance: "unknown" },
     });
   });
 
@@ -809,6 +904,15 @@ describe("orchestrated produce workflow", () => {
     expect(
       terminal.artifacts.filter((artifact) => artifact.kind === "produce-product-envelope")
     ).toHaveLength(1);
+    const validity = terminal.artifacts.find(
+      (artifact) => artifact.kind === "produce-validity-receipt"
+    );
+    if (validity === undefined) throw new Error("recovered validity receipt is absent");
+    const recoveredEffects = validateProduceValidityReceiptV2(
+      readJson(recovered, validity.artifact_id)
+    ).effect_evidence;
+    expect(terminal.result.effect_evidence).toEqual(recoveredEffects);
+    expect(terminal.result.effect_limitation).toBe(UNKNOWN_EFFECT_LIMITATION);
   });
 
   it("terminates repeated artifact product gaps as bounded non-positive incomplete", async () => {
@@ -836,9 +940,9 @@ describe("orchestrated produce workflow", () => {
         incomplete_reason: "repair_budget_exhausted",
         exhausted: true,
         exhaustion_reason: "verifying_artifact:product_gap",
-        external_actions_performed: false,
-        filesystem_writes_performed: false,
-        tests_executed: false,
+        effect_assurance: "unknown",
+        effect_limitation: UNKNOWN_EFFECT_LIMITATION,
+        effect_evidence: { assurance: "unknown" },
       },
     });
     expect(client.invocations.filter((invocation) => invocation.agent === "skribble")).toHaveLength(

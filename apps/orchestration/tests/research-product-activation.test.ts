@@ -10,8 +10,8 @@ import type { Directive, JsonValue, RunIdentity } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
 import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
 import {
-  ResearchContextOwnerV1,
-  type ResearchContextProviderHandlersV1,
+  ResearchContextOwnerV2,
+  type ResearchContextProviderHandlersV2,
 } from "../src/research-context.js";
 import {
   ResearchHostInterruptionError,
@@ -193,14 +193,14 @@ function runtime(
   root: string,
   options: ProductClientOptions = {},
   researchHostFault?: (point: string) => void,
-  contextProviders?: ResearchContextProviderHandlersV1
+  contextProviders?: ResearchContextProviderHandlersV2
 ) {
   const artifacts = new ArtifactStore(path.join(root, "artifacts"));
   const checkpointer = new Checkpointer(path.join(root, "orchestration.db"));
   const researchContext =
     contextProviders === undefined
       ? undefined
-      : new ResearchContextOwnerV1(artifacts, contextProviders);
+      : new ResearchContextOwnerV2(artifacts, contextProviders);
   const engine = new OrchestrationEngine(checkpointer, {
     projectRoot: root,
     maxSteps: 96,
@@ -393,43 +393,85 @@ describe("P3 semantic product activation", () => {
       result_id: "p4-approved-result",
       expected_sha256: sha256(kbContent),
     } as const;
-    const providers: ResearchContextProviderHandlersV1 = {
-      versionedDocument: () => ({
-        content: documentContent,
-        media_type: "text/markdown",
-        role: "normative",
-        scope_id: "p4-context-scope",
-        freshness: { status: "not_time_sensitive" },
-        upstream_locators: [
-          { source_id: "p4-document-source", locator: "https://example.invalid/p4-document" },
-        ],
-        provider: {
-          provider_id: "p4-document-provider",
-          configuration_sha256: "a".repeat(64),
-          eligibility_record_id: "p4-document-eligibility",
-          eligibility_sha256: "b".repeat(64),
-        },
-        verification_disposition: "accepted_for_scope",
-        conflict: { status: "none" },
-      }),
-      approvedKbResult: () => ({
-        content: kbContent,
-        media_type: "text/markdown",
-        role: "advisory",
-        scope_id: "p4-context-scope",
-        freshness: { status: "not_time_sensitive" },
-        upstream_locators: [{ source_id: "p4-kb-source", locator: "kb-result:p4-approved-result" }],
-        provider: {
-          provider_id: "p4-kb-provider",
-          configuration_sha256: "c".repeat(64),
-          eligibility_record_id: "p4-kb-eligibility",
-          eligibility_sha256: "d".repeat(64),
-        },
-        verification_disposition: "advisory_only",
-        conflict: { status: "none" },
+    const documentResolution: ResearchContextProviderHandlersV2["admission_resolutions"][number] = {
+      schema_id: "penny.research-context-resolution.v2",
+      schema_version: 2,
+      source_kind: "versioned_document",
+      source_id: "p4-document-source",
+      content: documentContent,
+      media_type: "text/markdown",
+      role: "normative",
+      scope_id: "p4-context-scope",
+      revision: {
+        kind: "document",
+        document_id: "p4-document",
+        revision_id: "p4-document-revision",
+      },
+      freshness: { status: "not_time_sensitive" },
+      upstream_locators: [
+        { source_id: "p4-document-source", locator: "https://example.invalid/p4-document" },
+      ],
+      provider: {
+        provider_id: "p4-document-provider",
+        configuration_sha256: "a".repeat(64),
+        eligibility_record_id: "p4-document-eligibility",
+        eligibility_sha256: "b".repeat(64),
+      },
+      verification_disposition: "accepted_for_scope",
+      conflict: { status: "none" },
+      eligibility: {
+        status: "eligible",
+        checked_at: "2026-09-01T00:00:00Z",
+        valid_from: "2026-01-01T00:00:00Z",
+        valid_through: "9999-12-31T23:59:59Z",
+      },
+      approval: { status: "not_required" },
+    };
+    const kbResolution: ResearchContextProviderHandlersV2["admission_resolutions"][number] = {
+      schema_id: "penny.research-context-resolution.v2",
+      schema_version: 2,
+      source_kind: "approved_kb_result",
+      source_id: "p4-kb-source",
+      content: kbContent,
+      media_type: "text/markdown",
+      role: "advisory",
+      scope_id: "p4-context-scope",
+      revision: {
+        kind: "approved_kb",
+        kb_profile_id: "p4-kb-profile",
+        result_id: "p4-approved-result",
         approval_id: "p4-kb-approval",
         approval_sha256: "e".repeat(64),
-      }),
+      },
+      freshness: { status: "not_time_sensitive" },
+      upstream_locators: [{ source_id: "p4-kb-source", locator: "kb-result:p4-approved-result" }],
+      provider: {
+        provider_id: "p4-kb-provider",
+        configuration_sha256: "c".repeat(64),
+        eligibility_record_id: "p4-kb-eligibility",
+        eligibility_sha256: "d".repeat(64),
+      },
+      verification_disposition: "advisory_only",
+      conflict: { status: "none" },
+      eligibility: {
+        status: "eligible",
+        checked_at: "2026-09-01T00:00:00Z",
+        valid_from: "2026-01-01T00:00:00Z",
+        valid_through: "9999-12-31T23:59:59Z",
+      },
+      approval: {
+        status: "approved",
+        checked_at: "2026-09-01T00:00:00Z",
+        valid_from: "2026-01-01T00:00:00Z",
+        valid_through: "9999-12-31T23:59:59Z",
+      },
+    };
+    const providers: ResearchContextProviderHandlersV2 = {
+      resolver_contract_version: 2,
+      provider_execution: "trusted_in_process",
+      admission_resolutions: [documentResolution, kbResolution],
+      versionedDocument: async () => documentResolution,
+      approvedKbResult: async () => kbResolution,
     };
     const modes = [
       { label: "none", bindings: [], providers: undefined },

@@ -53,13 +53,15 @@ import type {
   ArtifactReader,
   ArtifactRevisionLookup,
 } from "../artifact-store.js";
-import type { ResearchContextOwnerV1 } from "../research-context.js";
+import type { ResearchContextOwnerV2 } from "../research-context.js";
 import {
   canonicalizeResearchRequest,
   researchRuntimeConstraints,
   validateResearchRequest,
 } from "../skill-contracts/research.js";
 import { researchBootstrapLivenessPolicy, researchLivenessPolicy } from "../liveness.js";
+import { validateRegisteredBrowserNetworkAllowlist } from "../browser-policy-carrier.js";
+import type { EffectEvidenceProviderV1 } from "../skill-contracts/effects.js";
 import type { CompletionReceiptPredicateV1, PlaybookV1 } from "./playbook.js";
 import {
   AGENT_BY_STATE,
@@ -87,9 +89,11 @@ export interface PlaybookConstructionOptionsV1 {
   readonly artifactRevisions?: ArtifactRevisionLookup;
   readonly artifactReader?: ArtifactReader;
   readonly artifactStore?: ArtifactHostStore;
-  readonly researchContext?: ResearchContextOwnerV1;
+  readonly researchContext?: ResearchContextOwnerV2;
   readonly checkpointer?: Checkpointer;
   readonly researchHostFault?: (point: string) => void;
+  /** Optional trusted, immutable effect-trace snapshot provider for scoped admission. */
+  readonly effectEvidenceProvider?: EffectEvidenceProviderV1;
   /**
    * Optional custody seam for private start inputs (§5.6): playbooks whose start
    * actions carry private request bodies in host-allocated files read them back
@@ -120,10 +124,15 @@ export type WorkerRegistrationV1 =
           readonly result_schema_version: 1;
           readonly schema: TSchema;
           /**
-           * Sole catalog narrowing declaration: one fixed strict YAML subset for this phase.
+           * Sole catalog tool narrowing declaration: one fixed strict YAML subset for this phase.
            * Absence preserves YAML equality. The canonical registration digest includes it.
            */
           readonly allowed_tools?: readonly string[];
+          /**
+           * Optional immutable, canonical browser destination policy owned only by this phase.
+           * Absence preserves ordinary browser behavior; an explicitly empty list denies all.
+           */
+          readonly browser_network_allowlist?: readonly string[];
         }
       >;
     }
@@ -160,7 +169,7 @@ export interface PreparedStartV1 {
 
 export interface StartAdmissionReadOnlyHostV1 {
   readonly artifactReader?: ArtifactReader;
-  readonly researchContext?: ResearchContextOwnerV1;
+  readonly researchContext?: ResearchContextOwnerV2;
 }
 
 export interface StartAdmissionArtifactHostV1 extends StartAdmissionReadOnlyHostV1 {
@@ -492,7 +501,8 @@ export function skillContractSha256(contractValue: SkillContract): string {
 
 /**
  * Canonical runtime registration digest. Catalog phase `allowed_tools` is serialized as either
- * its exact list or null, so subset drift cannot preserve a candidate checkpoint binding.
+ * its exact list or null. The optional browser policy is serialized only when registered, so
+ * ordinary pre-policy registration digests remain stable while policy drift changes the binding.
  */
 export function runtimeRegistrationSha256(registration: PlaybookRegistrationV1): string {
   const worker =
@@ -514,6 +524,9 @@ export function runtimeRegistrationSha256(registration: PlaybookRegistrationV1):
               result_schema_version: phase.result_schema_version,
               schema: phase.schema,
               allowed_tools: phase.allowed_tools ?? null,
+              ...(phase.browser_network_allowlist === undefined
+                ? {}
+                : { browser_network_allowlist: phase.browser_network_allowlist }),
             })),
         }
       : {
@@ -724,6 +737,12 @@ export function validateRegistrationContract(registration: PlaybookRegistrationV
             `catalog worker phase '${registration.name}:${state}' has an invalid exact tool subset`
           );
         }
+      }
+      if (phase.browser_network_allowlist !== undefined) {
+        validateRegisteredBrowserNetworkAllowlist(
+          phase.browser_network_allowlist,
+          `catalog worker phase '${registration.name}:${state}' browser network allowlist`
+        );
       }
     }
   } else {

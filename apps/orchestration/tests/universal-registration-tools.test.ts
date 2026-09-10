@@ -69,13 +69,14 @@ function replaceFirstPhaseTools(
 }
 
 describe("universal registration tool authority", () => {
-  it("omits allowed_tools from every ordinary workflow phase so exact agent YAML applies", () => {
+  it("omits tool and browser policy narrowing from every ordinary workflow phase", () => {
     for (const registration of UNIVERSAL_REGISTRATIONS) {
       expect(registration.worker.kind).toBe("catalog-agent");
       if (registration.worker.kind !== "catalog-agent") continue;
       expect(registration.worker.phases.size).toBeGreaterThan(0);
       for (const phase of registration.worker.phases.values()) {
         expect(phase).not.toHaveProperty("allowed_tools");
+        expect(phase).not.toHaveProperty("browser_network_allowlist");
         const yamlTools = declaredTools(phase.agent);
         expect(yamlTools.length).toBeGreaterThan(1);
         expect(yamlTools).toContain("artifact_read");

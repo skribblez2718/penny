@@ -173,7 +173,7 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
           content: [
             {
               type: "text",
-              text: `Highlight failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Highlight failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,

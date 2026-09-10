@@ -22,7 +22,7 @@ host intake → Annie analysis → Carren assessment draft → host seal
 
 ## Frozen boundaries
 
-- Closed inline request only; V1 accepts no caller artifacts.
+- Closed inline request only; no caller artifacts.
 - Supplied evidence is caller-provided task material, not independently verified evidence.
 - Categorical truth only: no numeric score, weighted total, ranking, or invented precision.
 - Ordinary workflow phases omit `allowed_tools`; runtime therefore activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for exact predecessors, and no other channel may replace a missing predecessor ref.

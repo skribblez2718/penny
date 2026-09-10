@@ -6,14 +6,22 @@ Pi compaction produces model-owned prose plus code-owned exact recovery referenc
 
 Artifact IDs enter `[RESUME-REFS v2]` only from:
 
-1. completed `subagent` result metadata in this session;
-2. completed `skill` result metadata in this session;
+1. exactly correlated `subagent` result metadata in this session;
+2. exactly correlated, schema-validated `skill` result metadata in this session;
 3. exact IDs explicitly passed later through `input_artifacts`;
 4. a prior valid current-session resume block/handoff index; or
 5. selected refs from an exact orchestration run ID already proven by those skill results.
 
 Compaction never scans global/historical artifact manifests, old sessions, memory, task-text
 names, agent-name heuristics, or recency. Exact input IDs use indexed manifest lookup only.
+
+## Skill-result compatibility
+
+The only historical result admitted is the exact pre-engine `SkillResult` declared at commit
+`12e8c32922bae2db0da7cc706322d10b2eccb81d`. Its required boolean
+`requires_approval`, required and optional fields, nested result/question shapes, and mode enum are
+validated strictly. A current-era marker selects only the current parser; malformed current-like
+data is never retried as historical data.
 
 ## Output
 
@@ -54,7 +62,7 @@ payloads.
 
 | Contract                       | Version |
 | ------------------------------ | ------: |
-| Compact artifact               | `3.0.0` |
+| Compact artifact               | `3.1.0` |
 | Resume appendix                |    `v2` |
 | Current immutable artifact ref |     `2` |
 | Legacy readable artifact ref   |     `1` |
@@ -68,6 +76,8 @@ bun run --cwd .pi/extensions/compaction lint
 bun run --cwd .pi/extensions/compaction format:check
 ```
 
-Tests cover current-session selection, explicit reused IDs, prior exact refs, no global
-leakage, legacy normalization, read-only checkpoint access, repeated compaction, and
-readable handoff-index materialization.
+Tests cover authentic current/pre-engine skill-result fixtures, mandatory historical
+`requires_approval`, malformed historical/current fail-closed behavior, honest terminal statuses,
+exact unique-ID call/result correlation (including out-of-order results), short goal pivots,
+current-session selection, prior exact refs, no global leakage, read-only checkpoint access,
+repeated compaction, and handoff-index materialization.

@@ -16,16 +16,20 @@ For every "do X before Y" rule in a skill, the designer writes down the concrete
 
 A few examples of what this looks like in practice:
 
-| Design choice                                                                                  | The failure it prevents                                     |
-| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| Make all global decisions (conventions, naming, registries) in one early phase, then lock them | Different output files quietly contradicting each other     |
-| Put the human approval gate right before the most expensive phase                              | Mass-producing work to a design the user never wanted       |
-| Route every fix back through verification                                                      | A fix to one file silently breaking the file paired with it |
-| End exhausted retry loops with an honest "not met" report                                      | The system declaring success it didn't achieve              |
+| Design choice                                                                                   | The failure it prevents                                       |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Make all global decisions (conventions, naming, registries) in one early phase, then lock them  | Different output files quietly contradicting each other       |
+| When consequences require human approval, put its gate immediately before the irreversible span | Performing expensive or external work without needed approval |
+| Route every fix back through verification                                                       | A fix to one file silently breaking the file paired with it   |
+| End exhausted retry loops with an honest "not met" report                                       | The system declaring success it didn't achieve                |
 
 ## Where the Human Fits
 
-Skills pause for the human at exactly one _planned_ point: just before the work becomes expensive or hard to reverse. At that gate the skill presents the plan compactly and the human can approve it, refine it with a note, or deny it outright. Everything else relies on the _unplanned_ escape hatch — any agent that becomes genuinely uncertain pauses the whole run and asks, rather than guessing.
+Human gates are consequence-conditioned, not a universal phase count. When a planned gate is required, place it immediately before expensive, external, or hard-to-reverse work and offer approve / refine / deny. The six generic skill-ingress playbooks currently add no planned approval gate; knowledge-base publication paths use host-mediated review and approval where their operation requires it. Blocking ambiguity still uses the unplanned escalation seam rather than guessing.
+
+## How Review Order Is Chosen
+
+Separate evidence verification from subjective critique when both are needed, but order authorship and review by the failure each phase prevents. The current catalog deliberately varies: `assess` moves from Annie analysis to Carren authoring to Vera verification; `decide` verifies the produced decision with Vera before Carren critiques it; `diagnose` uses Vera as its sole review stage after diagnosis production; `plan` verifies the produced strategy with Vera before Carren critiques it; `produce` sends the produced artifact to Carren before Vera; `research` validates Synthia's synthesis with Vera before optional Carren report critique (and may critique its plan earlier); and knowledge-base work moves from Synthia composition to Carren lint to Vera support verification and consequence-conditioned human review. There is no universal “verifier before critic” sequence.
 
 ## Where the Knowledge Lives
 
@@ -39,11 +43,11 @@ This separation keeps workflow handoff exact. If a lesson is stable and reusable
 
 ## The Shape of a Good Design
 
-1. Confirm the job is really multi-agent and repeatable (otherwise use a single agent).
+1. Confirm the job needs durable workflow state, bounded repair, resume, or consequence-conditioned gates; otherwise use direct work or a single agent.
 2. Do the work manually; extract the phases; write the failure-mode table.
-3. Pull every global decision to the front and place the approval gate after it.
-4. Match agents to phases by their specialty, and draw the flow diagram before writing any code.
-5. Build and test every path—including exact handoff, memory-absent recovery, continuation, and unhappy outcomes—then curate only durable learnings that pass a value gate.
+3. Pull every global decision to the front and add only the approval gates its consequences justify.
+4. Match agents to phases by capability, choose review order by failure mode, and draw the flow diagram before writing code.
+5. Implement registered TypeScript states and repair routes with checkpointed `RunContext` state, then test every path—including exact handoff, continuation, exhaustion, and unhappy outcomes—and curate only durable learnings that pass a value gate.
 
 ## Learn More
 

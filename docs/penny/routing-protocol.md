@@ -29,15 +29,29 @@ nor a subagent.
 
 ## Engine-backed skills (orchestration)
 
-Skills whose `SKILL.md` sets `metadata.penny.engine: orchestration` run on the
-shared `orchestration` engine: each is a `BasePlaybook` subclass with its own
-domain-named states and a per-state SUMMARY contract. State lives in a durable
-checkpointer keyed by `run_id` (no `--state`, no `/tmp`), and interrupted runs
-resume from durable state. The current user-facing workflow catalog contains
-only `research`. Invoke it for structured, multi-source investigations when its
-evidence gathering, citation validation, retries, or resume behavior earn the
-overhead. The engine internals do not change how you choose: route by capability,
-then invoke by name with `skill({ skill_name: "research", goal })`.
+Playbooks are registered TypeScript `PlaybookCoreV1` implementations.
+`PLAYBOOK_REGISTRY` is the sole executable registry; the common engine owns
+validated phase results, deterministic repair routing, bounded attempts,
+checkpointing, and terminal admission.
+
+The generic `skill()` ingress exposes the six catalog skills `assess`, `decide`,
+`diagnose`, `plan`, `produce`, and `research`. `knowledge-base` is also a
+registered playbook, but it is classified `dedicated_tool` and is reached through
+the `knowledge_base` tool rather than generic skill ingress. Direct work remains
+a first-class routing path outside `PLAYBOOK_REGISTRY`; use ordinary tool-capable
+model behavior when orchestration state would add no value.
+
+Role/state prompt guidance is resolved from the active registry binding for each
+phase. Review and approval are task- and consequence-conditioned: the six generic
+skills declare no additional planned approval gate, while knowledge-base
+publication paths use their host-mediated review/approval states. Existing trust
+and action boundaries still govern every direct or orchestrated action.
+
+State lives in a durable checkpointer keyed by `run_id` (no `--state`, no `/tmp`),
+and interrupted runs resume from durable state. Route by capability, then invoke
+a matching generic skill with `skill({ skill_name, goal })`; use the dedicated
+knowledge-base tool for knowledge-base operations. Do not implement hidden
+skill-specific executable branches outside the registry.
 
 ## Context passing
 

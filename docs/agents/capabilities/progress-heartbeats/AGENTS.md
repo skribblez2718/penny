@@ -1,3 +1,3 @@
 # Progress Heartbeats Feature Index
 
-- [Progress Heartbeats](index.md): READ WHEN changing long-running agent liveness detection — staleness thresholds and monitoring behavior.
+- [Direct-Subagent Progress and Session Boundaries](index.md): READ WHEN changing worker process liveness, orchestration progress reporting, or fresh-session semantics.

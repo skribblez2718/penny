@@ -9,6 +9,7 @@ import {
   parsePersistedArtifactApproach,
   parsePersistedArtifactApproachDecision,
   parsePersistedProducedArtifactDraft,
+  readProducedArtifactProduct,
   sealProducedArtifact,
   sha256,
   validateArtifactApproach,
@@ -412,6 +413,22 @@ describe("canonical ProducedArtifactV1 sealing", () => {
     expect(validateCanonicalProducedArtifactBytes(Buffer.from(content), productRef)).toEqual(
       product
     );
+    expect(
+      readProducedArtifactProduct(product, {
+        runId: RUN_ID,
+        phases: [
+          "exploring_artifact_approaches",
+          "selecting_artifact_approach",
+          "materializing_artifact",
+          "critiquing_artifact",
+          "verifying_artifact",
+        ],
+      })
+    ).toMatchObject({
+      contract_version: 1,
+      interpretation: "legacy_unverified_assertion",
+      effect_evidence: { assurance: "unknown" },
+    });
     expect(product).toMatchObject({
       schema_id: "penny.produced-artifact.v1",
       content_sha256: sha256(draftValue.content),

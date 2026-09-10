@@ -61,7 +61,17 @@ describe("split-turn merged-window extraction", () => {
           role: "toolResult",
           toolName: "skill",
           toolCallId: "tc-1",
-          content: '{"success":false,"session_id":"code-9"}',
+          content: "Skill failed",
+          details: {
+            success: false,
+            session_id: "code-9",
+            skill_name: "code",
+            state: "error",
+            steps_total: 1,
+            agents_invoked: ["coder"],
+            errors: ["failed"],
+            result: { met: false },
+          },
         },
       ]
     );
@@ -70,6 +80,7 @@ describe("split-turn merged-window extraction", () => {
     expect(dominant).toMatchObject({
       skill_name: "code",
       session_id: "code-9",
+      result_status: "failure",
     });
   });
 

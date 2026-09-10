@@ -1,136 +1,162 @@
 #!/usr/bin/env python3
-"""Break-glass rebuild of a receipt-gated copied/offline vector index.
+"""Break-glass repair of a receipt-gated copied/offline palace.
 
-READ THIS BEFORE RUNNING IT
-    This is NOT the routine answer to a crashing palace, and it used to be sold
-    as exactly that. Running it in a loop is what kept the failure alive:
-    it rebuilt the collection with ChromaDB's STOCK defaults, which is the very
-    configuration that guarantees the crash comes back. It papered over the
-    symptom and re-armed the cause on the way out.
+Preview is inspection-only.  It may read receipt-authorized SQLite and use the
+separate private temporary-copy FTS5 probe, but it never opens ChromaDB, builds
+an index, allocates recovery staging, deletes, renames, swaps, or cleans up.
 
-    The actual defect and its fix are documented at HNSW_TUNING in
-    scripts/system/memory/hnsw.py. In short: ChromaDB documents its
-    SQLite embeddings queue as suitable only when producer and consumer share
-    one process (notification is in-process), while the bridge starts a fresh
-    short-lived process per call. With stock `sync_threshold=1000`, metadata-only
-    recall UPDATEs and ADDs accumulate while HNSW persistence lags. Historical
-    byte-identical production corpora prove that sufficiently large UPDATE+ADD
-    replay backlogs — with ZERO pending deletes and byte-exact index files — can
-    trip a NULL-deref inside chromadb_rust_bindings (upstream bug, unfixed as of
-    1.5.9 — the latest release). The process SIGSEGVs on reads and writes, and
-    the palace wedges because the replay that would advance HNSW itself crashes.
+``--apply`` allocates one private unique preserved attempt.  The default full
+repair re-embeds documents and therefore additionally requires the explicit
+``--allow-reembedding`` decision; it is not an exact-vector substitute.  Use
+``rebuild_from_disk`` with its separate legacy-metadata trust contract when
+exact vectors are required.  FTS5-only apply rebuilds only the classified
+derived index in staging.
 
-WHEN TO RUN IT
-    1. ONE-TIME MIGRATION. ChromaDB honors HNSW settings only at collection
-       CREATION — `collection.modify()` is accepted, is persisted to
-       `collection_metadata`, and is then ignored by the Rust core (verified).
-       So an existing collection created without bounded-WAL settings can only be
-       fixed by rebuilding it, which is what this does.
-    2. BREAK-GLASS. A genuinely damaged segment (truncated flush, unreadable
-       index files) still needs a rebuild from sqlite.
-
-    Run the receipt-gated ``scripts.system.bridge.palace_doctor`` first. It reports the
-    real state (WAL backlog, segment drift, whether bounded-WAL config is
-    active) and is safe to run while the palace is wedged. If it says the
-    palace is healthy, this script is not your answer — find the real fault.
-
-WHAT THIS DOES
-    Before either repair path, runs SQLite/FTS5 integrity checks only against a
-    temporary copy. Unclassified corruption blocks repair. With `--fts5-only`,
-    rebuilds only classified FTS5 derived indexes on the receipt-authorized
-    copied database and verifies them through a fresh temporary-copy probe.
-
-    The default full rebuild reads intact documents + metadata straight from
-    `chroma.sqlite3` via
-    plain sqlite (no rust core, so it can't crash), re-adds them to a FRESH
-    collection created WITH the bounded-WAL settings (ChromaDB's default
-    embedding fn → deterministic identical vectors), verifies the rebuilt
-    collection survives the ops that crashed, then atomically swaps it into
-    place. Drawer content is preserved; only the vector index is rebuilt.
-    Non-ChromaDB palace entries (e.g. `archive/`) are kept, and the
-    Knowledge-Graph store (a separate sqlite) is never touched.
-
-USAGE
-    python -m scripts.system.bridge.repair_palace \\
-      --offline-target /absolute/copied-palace \\
-      --receipt /absolute/offline-receipt.json             # rebuild + verify only
-    python -m scripts.system.bridge.repair_palace ... --apply  # swap inside the copy
-    python -m scripts.system.bridge.repair_palace ... --fts5-only          # inspect
-    python -m scripts.system.bridge.repair_palace ... --fts5-only --apply  # rebuild FTS5
-
-Exit codes: 0 = verified/rebuilt copy; 2 = no copied database; 1 = error.
+Both apply paths verify staging before swap, verify again after swap, and restore
+the exact parked source on failure.  Attempts and rollback evidence are never
+automatically cleaned up.  A reported backup path is advisory and is paired
+with exact parent/original/parked identities for fail-closed reacquisition.
+``open_authorized_recovery`` retains the validated filesystem descriptors after
+delegating receipt semantics to ``authorize_offline_target``.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
+import math
 import re
-import shutil
 import sqlite3
 import sys
-import tarfile
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence, cast
 
 from scripts.system.bridge.fts5_integrity import (
     IntegrityReport,
     _quote_identifier,
+    materialize_sqlite_family,
     probe_authorized_database,
+    probe_database_directory,
+    sqlite_budget_guard,
 )
+from scripts.system.bridge.recovery_safety import (
+    BackupEvidence,
+    HeldDirectory,
+    RecoveryBudget,
+    RecoverySource,
+    RecoveryRefusal,
+    RecoverySwapError,
+    SourceSnapshot,
+    VerificationResult,
+    account_staging_tree,
+    allocate_recovery_attempt,
+    assert_source_unchanged,
+    copy_preserved_entries,
+    hold_private_regular_file,
+    open_authorized_recovery,
+    recovery_attempt_binding,
+    revalidate_source_binding,
+    snapshot_source_tree,
+    swap_staged_palace,
+)
+from scripts.system.memory.common import ValidationError
 from scripts.system.memory.hnsw import HNSW_TUNING
-from scripts.system.memory.offline_access import OfflineAuthorization, authorize_offline_target
 
+COLLECTION = "mempalace_drawers"
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
-
-def _chroma_entries(palace: Path) -> list[Path]:
-    """ChromaDB artifacts to replace: the sqlite (+ wal/shm) and UUID segment dirs."""
-    out: list[Path] = []
-    for p in palace.iterdir():
-        if p.name.startswith("chroma.sqlite3") or (p.is_dir() and _UUID_RE.match(p.name)):
-            out.append(p)
-    return out
+MetadataValue = str | int | float | bool
 
 
-def _extract_records(sqlite_path: Path) -> tuple[list[str], list[str], list[dict | None]]:
-    con = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
-    cur = con.cursor()
-    cols = [r[1] for r in cur.execute("PRAGMA table_info(embedding_metadata)")]
-    val_cols = [c for c in ("string_value", "int_value", "float_value", "bool_value") if c in cols]
-    idmap = {r[0]: r[1] for r in cur.execute("SELECT id, embedding_id FROM embeddings")}
-    meta: dict[int, dict] = defaultdict(dict)
-    docs: dict[int, str] = {}
-    sel = "SELECT id, key, " + ", ".join(val_cols) + " FROM embedding_metadata"
-    for row in cur.execute(sel):
-        eid, key, vals = row[0], row[1], row[2:]
-        val = next((v for v in vals if v is not None), None)
-        if key == "chroma:document" and isinstance(val, str):
-            docs[eid] = val
-        elif val is not None:
-            meta[eid][key] = val
-    con.close()
+def _chroma_entry_names(snapshot: SourceSnapshot) -> frozenset[str]:
+    """Return top-level Chroma artifact names from the exact source snapshot."""
+
+    names: set[str] = set()
+    for member in snapshot.members:
+        name = member.relative_path
+        if name == "." or "/" in name:
+            continue
+        if name.startswith("chroma.sqlite3") or (
+            member.kind == "directory" and _UUID_RE.fullmatch(name)
+        ):
+            names.add(name)
+    return frozenset(names)
+
+
+def _metadata_value(values: Sequence[object]) -> MetadataValue | None:
+    value = next((candidate for candidate in values if candidate is not None), None)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (str, int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValidationError("copied palace metadata contains a non-finite float")
+        return value
+    if value is not None:
+        raise ValidationError("copied palace metadata contains an unsupported value")
+    return None
+
+
+def _read_record_rows(
+    connection: sqlite3.Connection,
+) -> tuple[dict[int, str], dict[int, str], dict[int, dict[str, MetadataValue]]]:
+    columns = [str(row[1]) for row in connection.execute("PRAGMA table_info(embedding_metadata)")]
+    value_columns = [
+        column
+        for column in ("string_value", "int_value", "float_value", "bool_value")
+        if column in columns
+    ]
+    id_map: dict[int, str] = {}
+    for raw_id, raw_embedding_id in connection.execute("SELECT id, embedding_id FROM embeddings"):
+        if not isinstance(raw_id, int) or not isinstance(raw_embedding_id, str):
+            raise ValidationError("copied palace contains an invalid embedding identity")
+        id_map[raw_id] = raw_embedding_id
+
+    documents: dict[int, str] = {}
+    metadata: dict[int, dict[str, MetadataValue]] = defaultdict(dict)
+    selection = "SELECT id, key, " + ", ".join(value_columns) + " FROM embedding_metadata"
+    for row in connection.execute(selection):
+        raw_id, raw_key = row[0], row[1]
+        if not isinstance(raw_id, int) or not isinstance(raw_key, str):
+            raise ValidationError("copied palace contains invalid metadata identity")
+        value = _metadata_value(row[2:])
+        if raw_key == "chroma:document":
+            if not isinstance(value, str):
+                raise ValidationError("copied palace contains a non-string document")
+            documents[raw_id] = value
+        elif value is not None:
+            metadata[raw_id][raw_key] = value
+    return id_map, documents, metadata
+
+
+def _extract_records(
+    sqlite_path: Path,
+    budget: RecoveryBudget | None = None,
+) -> tuple[list[str], list[str], list[dict[str, MetadataValue] | None]]:
+    """Read records from an already private descriptor-rooted SQLite copy."""
+
+    operation_budget = budget if budget is not None else RecoveryBudget()
+    with sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True) as connection:
+        with sqlite_budget_guard(connection, operation_budget):
+            id_map, documents_by_row, metadata_by_row = _read_record_rows(connection)
 
     ids: list[str] = []
     documents: list[str] = []
-    metadatas: list[dict | None] = []
+    metadata: list[dict[str, MetadataValue] | None] = []
     seen: set[str] = set()
-    for eid, chroma_id in idmap.items():
-        doc = docs.get(eid)
-        if not doc or chroma_id in seen:
+    for row_id, chroma_id in id_map.items():
+        document = documents_by_row.get(row_id)
+        if document is None or chroma_id in seen:
             continue
         seen.add(chroma_id)
-        md = {k: v for k, v in meta.get(eid, {}).items() if isinstance(v, (str, int, float, bool))}
+        record_metadata = dict(metadata_by_row.get(row_id, {}))
         ids.append(chroma_id)
-        documents.append(doc)
-        metadatas.append(md or None)
-    return ids, documents, metadatas
+        documents.append(document)
+        metadata.append(record_metadata or None)
+    return ids, documents, metadata
 
 
 def _hnsw_tuning() -> dict[str, int]:
@@ -139,20 +165,20 @@ def _hnsw_tuning() -> dict[str, int]:
     return dict(HNSW_TUNING)
 
 
-def _verify_tuning(dest: Path, tuning: dict[str, int]) -> dict[str, int]:
-    """Confirm the bounded-WAL settings actually landed in the rebuilt palace.
-
-    A rebuild that silently drops them reproduces the exact fault the rebuild was
-    run to clear, so this fails loudly rather than shipping a time bomb.
-    """
-    with sqlite3.connect(f"file:{dest / 'chroma.sqlite3'}?mode=ro", uri=True) as conn:
-        stored: dict[str, int] = {
-            str(key): int(value)
-            for key, value in conn.execute(
-                "SELECT key, int_value FROM collection_metadata WHERE key LIKE 'hnsw:%'"
-            )
-        }
-    missing = {k: v for k, v in tuning.items() if stored.get(k) != v}
+def _verify_tuning_database(
+    database: Path,
+    tuning: dict[str, int],
+    budget: RecoveryBudget,
+) -> dict[str, int]:
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        with sqlite_budget_guard(connection, budget):
+            stored: dict[str, int] = {
+                str(key): int(value)
+                for key, value in connection.execute(
+                    "SELECT key, int_value FROM collection_metadata WHERE key LIKE 'hnsw:%'"
+                )
+            }
+    missing = {key: value for key, value in tuning.items() if stored.get(key) != value}
     if missing:
         raise RuntimeError(
             f"rebuilt collection did not persist HNSW tuning {missing} (stored: {stored}); "
@@ -162,41 +188,142 @@ def _verify_tuning(dest: Path, tuning: dict[str, int]) -> dict[str, int]:
     return stored
 
 
-def _build(
+def _verify_tuning(
     dest: Path,
+    tuning: dict[str, int],
+    budget: RecoveryBudget | None = None,
+) -> dict[str, int]:
+    """Compatibility helper for a caller-owned private rebuild directory."""
+
+    operation_budget = budget if budget is not None else RecoveryBudget()
+    return _verify_tuning_database(dest / "chroma.sqlite3", tuning, operation_budget)
+
+
+def _build(
+    dest: HeldDirectory | Path,
     collection: str,
     ids: list[str],
     documents: list[str],
-    metadatas: list[dict | None],
+    metadatas: list[dict[str, MetadataValue] | None],
+    *,
+    embedding_function: object | None = None,
 ) -> None:
-    import chromadb  # imported late so a broken install fails with a clear message
+    """Build a re-embedded collection in held private staging."""
+
+    destination = dest.access_path if isinstance(dest, HeldDirectory) else dest
+    budget = dest.budget if isinstance(dest, HeldDirectory) else RecoveryBudget()
+    budget.checkpoint()
+    if not isinstance(dest, HeldDirectory) and destination.is_symlink():
+        raise ValidationError("repair staging must not be a symlink")
+    if not destination.exists():
+        destination.mkdir(mode=0o700)
+    if not destination.is_dir() or any(
+        path.name.startswith("chroma.sqlite3") for path in destination.iterdir()
+    ):
+        raise ValidationError("repair staging already contains Chroma state")
+
+    import chromadb  # imported only after apply authorization
 
     tuning = _hnsw_tuning()
-    shutil.rmtree(dest, ignore_errors=True)
-    dest.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(dest))
-    # metadata= is load-bearing and must be set HERE, at creation: ChromaDB
-    # ignores these keys when applied later via collection.modify().
-    col = client.get_or_create_collection(collection, metadata=tuning)
-    B = 128
-    for i in range(0, len(ids), B):
-        col.add(
-            ids=ids[i : i + B],
-            documents=documents[i : i + B],
-            metadatas=cast(Any, metadatas[i : i + B]),
+    client = chromadb.PersistentClient(path=str(destination))
+    if isinstance(dest, HeldDirectory):
+        account_staging_tree(dest)
+    if embedding_function is None:
+        rebuilt = client.get_or_create_collection(collection, metadata=tuning)
+    else:
+        # Narrow test/operations adapter: the runtime protocol is validated by Chroma.
+        rebuilt = client.get_or_create_collection(
+            collection,
+            metadata=tuning,
+            embedding_function=cast(Any, embedding_function),
         )
-    # The exact ops that segfaulted on the corrupt collection must now succeed.
-    n = col.count()
-    col.get(limit=2)
-    col.query(query_texts=["repair verification probe"], n_results=1)
-    if n != len(ids):
-        raise RuntimeError(f"rebuilt count {n} != expected {len(ids)}")
-    _verify_tuning(dest, tuning)
+    batch_size = 128
+    for index in range(0, len(ids), batch_size):
+        budget.checkpoint()
+        rebuilt.add(
+            ids=ids[index : index + batch_size],
+            documents=documents[index : index + batch_size],
+            # Narrow third-party adapter: Chroma accepts optional metadata entries,
+            # while its installed annotations do not expose that exact legacy shape.
+            metadatas=cast(Any, metadatas[index : index + batch_size]),
+        )
+        if isinstance(dest, HeldDirectory):
+            account_staging_tree(dest)
+    count: object = rebuilt.count()
+    if count != len(ids):
+        raise RuntimeError(f"rebuilt count {count} != expected {len(ids)}")
+    rebuilt.get(limit=2)
+    rebuilt.query(query_texts=["repair verification probe"], n_results=1)
+    if isinstance(dest, HeldDirectory):
+        with materialize_sqlite_family(dest, account_as_input=False) as copied_database:
+            _verify_tuning_database(copied_database, tuning, budget)
+    else:
+        _verify_tuning(destination, tuning, budget)
+
+
+def _content_signature(
+    ids: Sequence[str],
+    documents: Sequence[str],
+    metadatas: Sequence[dict[str, MetadataValue] | None],
+) -> tuple[tuple[str, str, tuple[tuple[str, MetadataValue], ...]], ...]:
+    rows = [
+        (record_id, document, tuple(sorted((metadata or {}).items())))
+        for record_id, document, metadata in zip(ids, documents, metadatas)
+    ]
+    return tuple(sorted(rows, key=lambda row: row[0]))
+
+
+def _verify_full_rebuild(
+    palace: HeldDirectory | Path,
+    ids: Sequence[str],
+    documents: Sequence[str],
+    metadatas: Sequence[dict[str, MetadataValue] | None],
+) -> VerificationResult:
+    path = palace.access_path if isinstance(palace, HeldDirectory) else palace
+    budget = palace.budget if isinstance(palace, HeldDirectory) else RecoveryBudget()
+    try:
+        if isinstance(palace, HeldDirectory):
+            with materialize_sqlite_family(
+                palace,
+                account_as_input=False,
+            ) as copied_database:
+                actual_ids, actual_documents, actual_metadata = _extract_records(
+                    copied_database,
+                    budget,
+                )
+                _verify_tuning_database(copied_database, _hnsw_tuning(), budget)
+        else:
+            actual_ids, actual_documents, actual_metadata = _extract_records(
+                path / "chroma.sqlite3",
+                budget,
+            )
+        if _content_signature(actual_ids, actual_documents, actual_metadata) != _content_signature(
+            ids, documents, metadatas
+        ):
+            return VerificationResult(False, "record IDs/documents/metadata differ after rebuild")
+        if isinstance(palace, HeldDirectory) and not probe_database_directory(palace).ok:
+            return VerificationResult(False, "rebuilt SQLite/FTS5 integrity failed")
+        if not isinstance(palace, HeldDirectory):
+            _verify_tuning(path, _hnsw_tuning(), budget)
+        import chromadb
+
+        budget.checkpoint()
+        collection = chromadb.PersistentClient(path=str(path)).get_collection(COLLECTION)
+        if collection.count() != len(ids):
+            return VerificationResult(False, "rebuilt Chroma count differs")
+        collection.get(limit=min(2, len(ids)))
+        collection.query(query_texts=["repair verification probe"], n_results=1)
+        budget.checkpoint()
+    except RecoveryRefusal:
+        raise
+    except Exception as exc:  # third-party/native verification boundary
+        return VerificationResult(False, f"Chroma verification failed: {type(exc).__name__}")
+    return VerificationResult(True, f"record content/count/query verified ({len(ids)})")
 
 
 @dataclass(frozen=True)
 class Fts5RepairResult:
-    """Content-free outcome of the isolated FTS5 offline repair path."""
+    """Content-free outcome of the staged FTS5 offline repair path."""
 
     outcome: str
     applied: bool
@@ -204,6 +331,7 @@ class Fts5RepairResult:
     preflight: IntegrityReport
     postflight: IntegrityReport | None = None
     backup_name: str | None = None
+    backup_evidence: BackupEvidence | None = None
 
     @property
     def passed(self) -> bool:
@@ -217,75 +345,122 @@ class Fts5RepairResult:
             "applied": self.applied,
             "tables": list(self.tables),
             "backup_name": self.backup_name,
+            "backup_name_is_advisory": self.backup_name is not None,
+            "backup_evidence": (
+                self.backup_evidence.to_dict() if self.backup_evidence is not None else None
+            ),
             "preflight": self.preflight.to_dict(),
             "postflight": self.postflight.to_dict() if self.postflight else None,
             "content_included": False,
+            "cleanup_automatic": False,
         }
 
 
-def _backup_sqlite(database: Path) -> Path:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    backup = database.with_name(f"{database.name}.pre-fts5-repair-{timestamp}")
-    if backup.exists() or backup.is_symlink():
-        raise RuntimeError(f"refusing to overwrite SQLite backup: {backup.name}")
-    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as source:
-        with sqlite3.connect(backup) as destination:
-            source.backup(destination)
-    backup.chmod(0o600)
-    return backup
-
-
-def _rebuild_fts5_tables(database: Path, tables: tuple[str, ...]) -> None:
+def _rebuild_fts5_tables(
+    database: Path,
+    tables: tuple[str, ...],
+    budget: RecoveryBudget,
+) -> None:
+    budget.checkpoint()
     with sqlite3.connect(database, isolation_level=None) as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            for table in tables:
-                identifier = _quote_identifier(table)
-                statement = f"INSERT INTO {identifier} ({identifier}) VALUES (?)"
-                connection.execute(statement, ("rebuild",))
-            connection.execute("COMMIT")
-        except Exception:
-            connection.execute("ROLLBACK")
-            raise
+        with sqlite_budget_guard(connection, budget):
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                for table in tables:
+                    budget.checkpoint()
+                    identifier = _quote_identifier(table)
+                    statement = f"INSERT INTO {identifier} ({identifier}) VALUES (?)"
+                    connection.execute(statement, ("rebuild",))
+                connection.execute("COMMIT")
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
 
 
 def _repair_fts5_authorized(
-    authorization: OfflineAuthorization,
+    source: RecoverySource,
+    source_snapshot: SourceSnapshot,
     *,
     apply: bool,
 ) -> Fts5RepairResult:
-    preflight = probe_authorized_database(authorization)
+    preflight = probe_authorized_database(source, source_snapshot)
     tables = preflight.corrupt_fts5_tables
     if not preflight.repair_safe:
         return Fts5RepairResult("blocked-unclassified-corruption", False, tables, preflight)
     if not tables:
         return Fts5RepairResult("clean", False, (), preflight)
     if not apply:
+        assert_source_unchanged(source, source_snapshot)
         return Fts5RepairResult("dry-run", False, tables, preflight)
 
-    database = authorization.target / "chroma.sqlite3"
-    backup: Path | None = None
+    revalidate_source_binding(source, source_snapshot)
+    attempt = allocate_recovery_attempt(
+        source,
+        "fts5-repair",
+        source_snapshot,
+        recovery_attempt_binding(source, source_snapshot),
+    )
     try:
-        backup = _backup_sqlite(database)
-        _rebuild_fts5_tables(database, tables)
-    except (OSError, RuntimeError, sqlite3.Error):
+        copy_preserved_entries(
+            source,
+            attempt,
+            source_snapshot,
+            excluded_names=frozenset(),
+        )
+        with hold_private_regular_file(
+            attempt.staging_handle,
+            "chroma.sqlite3",
+        ) as database_descriptor:
+            _rebuild_fts5_tables(
+                Path("/proc/self/fd") / str(database_descriptor),
+                tables,
+                source.budget,
+            )
+        account_staging_tree(attempt.staging_handle)
+        staged_report = probe_database_directory(attempt.staging_handle)
+        if not staged_report.ok:
+            return Fts5RepairResult(
+                "verification-failed",
+                False,
+                tables,
+                preflight,
+                staged_report,
+                str(attempt.root),
+            )
+        revalidate_source_binding(source, source_snapshot)
+        postflight: list[IntegrityReport] = []
+
+        def verify_swapped(swapped: HeldDirectory) -> VerificationResult:
+            report = probe_database_directory(swapped)
+            postflight.append(report)
+            return VerificationResult(report.ok, "FTS5/SQLite integrity verified")
+
+        swap_result = swap_staged_palace(
+            source,
+            attempt,
+            source_snapshot,
+            verify_swapped,
+        )
+    except RecoveryRefusal:
+        raise
+    except (OSError, RuntimeError, ValidationError, RecoverySwapError):
         return Fts5RepairResult(
             "repair-failed",
-            True,
+            False,
             tables,
             preflight,
-            backup_name=backup.name if backup else None,
+            backup_name=str(attempt.root),
         )
-
-    postflight = probe_authorized_database(authorization)
-    outcome = "repaired" if postflight.ok else "verification-failed"
+    finally:
+        attempt.close()
     return Fts5RepairResult(
-        outcome,
+        "repaired",
         True,
         tables,
         preflight,
-        postflight,
-        backup.name if backup else None,
+        postflight[-1] if postflight else None,
+        str(swap_result.backup.advisory_path),
+        swap_result.backup,
     )
 
 
@@ -295,10 +470,11 @@ def repair_fts5_indexes(
     *,
     apply: bool = False,
 ) -> Fts5RepairResult:
-    """Repair only classified FTS5 corruption in a receipt-authorized copy."""
+    """Inspect or repair classified FTS5 corruption in a receipt-authorized copy."""
 
-    authorization = authorize_offline_target(offline_target, receipt)
-    return _repair_fts5_authorized(authorization, apply=apply)
+    with open_authorized_recovery(offline_target, receipt) as source:
+        snapshot = snapshot_source_tree(source)
+        return _repair_fts5_authorized(source, snapshot, apply=apply)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -306,86 +482,142 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--offline-target", required=True, type=Path)
     parser.add_argument("--receipt", required=True, type=Path)
     parser.add_argument(
-        "--apply", action="store_true", help="apply the selected repair inside the copy"
+        "--apply", action="store_true", help="allocate, verify, and swap one preserved attempt"
     )
     parser.add_argument(
         "--fts5-only",
         action="store_true",
-        help="rebuild only classified corrupt FTS5 indexes in the copied database",
+        help="inspect or rebuild only classified corrupt FTS5 indexes",
+    )
+    parser.add_argument(
+        "--allow-reembedding",
+        action="store_true",
+        help="separately authorize full repair to generate new embeddings (not exact-vector recovery)",
     )
     return parser
 
 
+def _apply_full_repair(
+    source: RecoverySource,
+    source_snapshot: SourceSnapshot,
+    ids: list[str],
+    documents: list[str],
+    metadatas: list[dict[str, MetadataValue] | None],
+) -> int:
+    revalidate_source_binding(source, source_snapshot)
+    attempt = allocate_recovery_attempt(
+        source,
+        "reembedding-repair",
+        source_snapshot,
+        recovery_attempt_binding(source, source_snapshot),
+    )
+    try:
+        copy_preserved_entries(
+            source,
+            attempt,
+            source_snapshot,
+            excluded_names=_chroma_entry_names(source_snapshot),
+        )
+        print(f"[repair] re-embedding into preserved attempt {attempt.root}")
+        _build(attempt.staging_handle, COLLECTION, ids, documents, metadatas)
+        account_staging_tree(attempt.staging_handle)
+        staged_verification = _verify_full_rebuild(
+            attempt.staging_handle,
+            ids,
+            documents,
+            metadatas,
+        )
+        if not staged_verification.ok:
+            print(
+                f"[repair] ABORT: {staged_verification.detail}; "
+                f"attempt preserved at {attempt.root}"
+            )
+            return 1
+        revalidate_source_binding(source, source_snapshot)
+        swap_result = swap_staged_palace(
+            source,
+            attempt,
+            source_snapshot,
+            lambda swapped: _verify_full_rebuild(swapped, ids, documents, metadatas),
+        )
+    except RecoveryRefusal:
+        raise
+    except RecoverySwapError as exc:
+        print(f"[repair] ABORT: {exc}; attempt preserved at {attempt.root}")
+        return 1
+    except (OSError, RuntimeError, ValidationError) as exc:
+        print(
+            f"[repair] ABORT: {type(exc).__name__}; " f"source/attempt preserved at {attempt.root}"
+        )
+        return 1
+    finally:
+        attempt.close()
+
+    backup = swap_result.backup
+    print(
+        "[repair] swapped and verified. Previous source backup advisory path: "
+        f"{backup.advisory_path}"
+    )
+    print(
+        "[repair] exact backup identity evidence: " + json.dumps(backup.to_dict(), sort_keys=True)
+    )
+    print("[repair] cleanup is separate and is never performed automatically.")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    authorization = authorize_offline_target(args.offline_target, args.receipt)
-    palace = authorization.target
-    collection = "mempalace_drawers"
-    sqlite_path = palace / "chroma.sqlite3"
-
-    if not sqlite_path.exists():
-        print(f"[repair] no chroma.sqlite3 at {palace} — nothing to repair.")
-        return 2
-
-    if args.fts5_only:
-        fts5_result = _repair_fts5_authorized(authorization, apply=args.apply)
-        print(json.dumps(fts5_result.to_dict(), indent=2))
-        return 0 if fts5_result.passed else 1
-
-    integrity = probe_authorized_database(authorization)
-    if not integrity.repair_safe:
-        print("[repair] blocked: temporary-copy integrity probe found unclassified corruption.")
-        print(json.dumps(integrity.to_dict(), indent=2))
-        return 1
-    if integrity.corrupt_fts5_tables:
-        print(
-            "[repair] classified FTS5 index corruption detected on the temporary probe copy; "
-            "full copied-palace rebuild may proceed."
+    with open_authorized_recovery(args.offline_target, args.receipt) as source:
+        palace = source.target
+        source_snapshot = snapshot_source_tree(source)
+        has_database = any(
+            member.relative_path == "chroma.sqlite3" and member.kind == "file"
+            for member in source_snapshot.members
         )
+        if not has_database:
+            print(f"[repair] no regular chroma.sqlite3 at {palace} — nothing to repair.")
+            return 2
 
-    print(f"[repair] palace={palace}  collection={collection}")
-    ids, documents, metadatas = _extract_records(sqlite_path)
-    print(f"[repair] extracted {len(ids)} drawer records from chroma.sqlite3")
-    if not ids:
-        print("[repair] no records extracted — aborting (won't replace with an empty index).")
-        return 1
+        if args.fts5_only:
+            fts5_result = _repair_fts5_authorized(
+                source,
+                source_snapshot,
+                apply=args.apply,
+            )
+            print(json.dumps(fts5_result.to_dict(), indent=2))
+            return 0 if fts5_result.passed else 1
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    staging = palace.parent / f"{palace.name}.rebuild_tmp"
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True)
-    # Preserve every non-ChromaDB entry (e.g. archive/) in the staging palace.
-    chroma_names = {p.name for p in _chroma_entries(palace)}
-    for p in palace.iterdir():
-        if p.name in chroma_names:
-            continue
-        (shutil.copytree if p.is_dir() else shutil.copy2)(p, staging / p.name)
+        integrity = probe_authorized_database(source, source_snapshot)
+        if not integrity.repair_safe:
+            print("[repair] blocked: temporary-copy integrity found unclassified corruption.")
+            print(json.dumps(integrity.to_dict(), indent=2))
+            return 1
+        if integrity.corrupt_fts5_tables:
+            print("[repair] classified FTS5 corruption detected; use --fts5-only first.")
 
-    print(f"[repair] rebuilding fresh index into {staging} …")
-    _build(staging, collection, ids, documents, metadatas)
-    print(f"[repair] rebuilt + verified OK ({len(ids)} drawers, count/get/query all pass).")
-
-    if not args.apply:
-        print(f"[repair] dry run: staging left at {staging}; copied target untouched.")
-        return 0
-
-    backup = palace.parent / f"{palace.name}.backup-{ts}.tgz"
-    with tarfile.open(backup, "w:gz") as tf:
-        tf.add(palace, arcname=palace.name)
-    print(f"[repair] backed up live palace -> {backup}")
-
-    corrupt_bak = palace.parent / f"{palace.name}.corrupt_bak-{ts}"
-    os.replace(palace, corrupt_bak)  # atomic rename (same filesystem)
-    os.replace(staging, palace)  # atomic rename
-    print(f"[repair] swapped. old palace kept at {corrupt_bak}")
-
-    # Final verification against the swapped copied/offline target.
-    import chromadb
-
-    col = chromadb.PersistentClient(path=str(palace)).get_collection(collection)
-    print(f"[repair] copied-target verify: count={col.count()} — OK, no segfault.")
-    print("[repair] DONE. Remove the .corrupt_bak-* / .backup-*.tgz once you're satisfied.")
-    return 0
+        with materialize_sqlite_family(
+            source.root,
+            expected_snapshot=source_snapshot,
+            account_as_input=True,
+        ) as copied_database:
+            ids, documents, metadatas = _extract_records(copied_database, source.budget)
+        assert_source_unchanged(source, source_snapshot)
+        print(f"[repair] palace={palace} collection={COLLECTION}")
+        print(f"[repair] SQLite inspection found {len(ids)} drawer records")
+        print("[repair] preview: no Chroma/build/staging/rename/swap/cleanup was performed")
+        if not ids:
+            print("[repair] no records extracted — refusing an empty replacement.")
+            return 1
+        if not args.apply:
+            print("[repair] PREVIEW only. Exact-vector recoverability was not established.")
+            return 0
+        if not args.allow_reembedding:
+            print(
+                "[repair] ABORT: --apply alone does not authorize re-embedding. Add "
+                "--allow-reembedding, or use rebuild_from_disk for exact-vector recovery."
+            )
+            return 1
+        return _apply_full_repair(source, source_snapshot, ids, documents, metadatas)
 
 
 if __name__ == "__main__":

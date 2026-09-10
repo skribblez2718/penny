@@ -83,7 +83,7 @@ A worker prompt must:
 
 - Prove the workflow manually before encoding it.
 - Every state/order rule names the failure it prevents.
-- Place human gates at reversibility cliffs.
+- Place any required human gate at the reversibility cliff; do not add one without a consequence-based reason.
 - Split prepare from apply for consequential effects.
 - Classify valid gaps with `EvaluationResultV2`; never let model/playbook output choose the repair target or exhaustion.
 - Register unique state/kind repair routes with finite budgets and honest exhaustion successors.

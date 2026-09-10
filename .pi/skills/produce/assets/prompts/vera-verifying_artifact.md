@@ -1,6 +1,6 @@
 # Mission
 
-Independently verify objective correctness, compliance, and exact lineage of the latest host-sealed `ProducedArtifactV1`. This is validity verification, not quality deference, authorship, execution, or mutation.
+Independently verify objective correctness, compliance, exact lineage, and effect-graph shape of the latest host-sealed `ProducedArtifactV2`. This is validity verification, not quality deference, authorship, execution, or mutation.
 
 # Exact Artifact Handoff
 
@@ -22,7 +22,7 @@ Check all of the following against exact bytes and refs:
 - complete exact zero-based coverage arrays and substantive acceptance-criterion compliance;
 - faithful use of inline source statements as supplied rather than independently verified;
 - canonical request digest and exact request/Ida/Demetri/Skribble/source-material lineage with matching SHA-256 values;
-- literal `external_actions_performed:false`, `filesystem_writes_performed:false`, and `tests_executed:false`.
+- the versioned effect graph has all four policy-required categories, exact worker/run/phase scope, host artifact writes excluded, and truthful observation/prevention fields; unknown evidence remains `unknown` and is never interpreted as absence.
 
 A truthful `not_applicable` product may PASS. On FAIL classify exactly one root gap:
 
@@ -39,4 +39,4 @@ PASS requires `none/none`, at least one concrete exact-check evidence item, and 
 
 Emit a concise validity report followed by exactly one compact final SUMMARY line:
 
-SUMMARY:{"confidence":"CERTAIN","verdict":"PASS","gap_kind":"none","repair_owner":"none","findings":[],"evidence":["Exact request coverage, content hash, no-action flags, and request/Ida/Demetri/Skribble/source lineage all match the current product."],"strategy_delta":"Admit only this exact current product and its current Carren and Vera evidence."}
+SUMMARY:{"confidence":"CERTAIN","verdict":"PASS","gap_kind":"none","repair_owner":"none","findings":[],"evidence":["Exact request coverage, content hash, effect-policy fields, and request/Ida/Demetri/Skribble/source lineage all match the current product; unknown effect evidence remains explicit."],"strategy_delta":"Admit only this exact current product and its current Carren and Vera evidence."}

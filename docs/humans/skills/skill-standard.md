@@ -40,8 +40,10 @@ state. New skills require no memory room and no entry in the historical
 ## Why this matters
 
 The separation makes handoff deterministic, recovery exact, and context bounded.
-It also keeps durable memory high-signal: only the primary runtime performs
-value-triggered recall, curated writes, diary, or governed KG operations.
+It also keeps durable memory high-signal: the primary runtime owns curated
+writes, diary retention, and governed KG lifecycle operations. Catalog workers
+may receive an owner-granted, YAML-declared bounded read-only recall/KG bundle,
+but memory never carries workflow handoff.
 
 ## Learn more
 

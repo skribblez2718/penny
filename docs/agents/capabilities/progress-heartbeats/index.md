@@ -1,42 +1,56 @@
-# Progress Heartbeats — Staleness-based agent timeout
+# Direct-Subagent Progress and Session Boundaries
 
 ## What
 
-Agent processes are monitored via stdout progress events instead of a single hard timeout. The timer resets on each `tool_result`, `message_end`, or `agent_start` event. Only true stalls trigger termination.
+Direct subagent execution currently has **no general progress-heartbeat timeout**.
+The runner exports an optional `ProgressEmitter` seam and can translate Pi stdout
+records (`agent_start`, assistant `message_end`, and tool results) when a caller
+supplies one, but no production caller constructs or passes that emitter. The
+runner therefore applies no general worker timeout; cancellation uses its own
+bounded graceful/forced termination lifecycle.
 
-## Why
+Do not confuse this with skill-run progress. The orchestration engine emits typed
+`phase_started`, `worker_completed`, and `boundary_reached` events, and the skill
+extension maps those to user-interface progress. Those events are observational;
+they do not reset a direct-subagent timer, autonomously schedule work, or carry
+artifact handoff.
 
-A single hard timeout kills agents that are making progress but running slowly. Staleness-based monitoring distinguishes "slow but working" from "stalled."
+## Session reset semantics
+
+The pinned Pi command is `/new` (the historical `/clear` name is retired). It
+starts a fresh conversation/session. Starting a fresh session does **not** delete
+Penny's separately persisted immutable artifacts, orchestration checkpoints, or
+retained worker-session records. Those stores remain available through their
+normal exact IDs and resume operations; their contents are not automatically
+injected into the new conversation.
+
+Never document `/new` or the retired `/clear` name as a purge of durable artifacts
+or workflow state. Deletion/retention follows each store's own policy.
 
 ## Rules
 
-1. **Progress resets the timer.** Any stdout event from the agent process counts as progress.
-2. **Three-tier thresholds.** Warn at timeout, kill at 2× timeout, hard cap at 3× timeout.
-3. **Transparent to agents.** No agent code changes required — events come from Pi's existing stdout.
-
-## Thresholds
-
-| Tier            | Condition                       | Action                         |
-| --------------- | ------------------------------- | ------------------------------ |
-| Progress window | No progress for `timeoutMs`     | Log WARN                       |
-| Staleness kill  | No progress for `timeoutMs × 2` | Resolve with fallback          |
-| Hard cap        | Total elapsed > `timeoutMs × 3` | Resolve regardless of progress |
-
-## Constraints
-
-- **Fallback result must be safe.** The orchestrator must be able to continue from a timeout result.
-- **Backward compatible.** If `progressEmitter` is undefined, falls back to single-`setTimeout`.
+1. Do not claim heartbeat-based staleness protection for direct `subagent()` runs.
+2. Treat orchestration progress events as UI/observability output only.
+3. Cancellation must wait for the bounded process-termination lifecycle to settle.
+4. Resume orchestration by its public run/session identity and hand off exact work
+   by artifact ID; do not reconstruct either from conversation history.
+5. A fresh chat session changes conversational context, not durable-store custody.
 
 ## Verification
 
-- [ ] Progress events reset the staleness timer
-- [ ] Stalled agents resolve with fallback, not indefinite hang
-- [ ] Backward-compatible path works without emitter
+- [ ] Repository search finds no production construction or pass-through of
+      `ProgressEmitter`.
+- [ ] `runSingleAgent` still states that there is no general worker timeout.
+- [ ] Skill progress mapping remains typed and observational.
+- [ ] Pi's command reference names `/new`, not `/clear`, for a fresh session.
+- [ ] Documentation does not imply that session reset deletes artifacts or
+      checkpoints.
 
 ## Files
 
-| File                                                | Purpose                               |
-| --------------------------------------------------- | ------------------------------------- |
-| `.pi/extensions/subagent/agent-runner.ts`           | `ProgressEmitter` + progress emission |
-| `.pi/extensions/skill/index.ts`                     | `withAgentTimeout` staleness logic    |
-| `.pi/extensions/skill/tests/unit/heartbeat.test.ts` | Unit tests (15)                       |
+| File                                                    | Purpose                                                    |
+| ------------------------------------------------------- | ---------------------------------------------------------- |
+| `.pi/extensions/subagent/agent-runner.ts`               | Direct worker process lifecycle and optional progress seam |
+| `.pi/extensions/skill/index.ts`                         | Orchestration progress-to-UI mapping                       |
+| `apps/orchestration/src/worker.ts`                      | Typed orchestration progress events                        |
+| `docs/humans/capabilities/progress-heartbeats/index.md` | Human explanation                                          |

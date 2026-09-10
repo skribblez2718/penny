@@ -1,0 +1,123 @@
+{
+  "recovery_fail_closed": {
+    "unavailable_playbook": {
+      "directive": {
+        "schema_version": 2,
+        "action": "error",
+        "identity": {
+          "schema_version": 2,
+          "run_id": "run_ts200_unknown_playbook",
+          "session_id": "session_ts200",
+          "playbook": "unregistered-playbook",
+          "engine_owner": "typescript"
+        },
+        "status": "error",
+        "met": false,
+        "result": {
+          "code": "PLAYBOOK_UNAVAILABLE",
+          "playbook": "unregistered-playbook",
+          "checkpoint_unchanged": true
+        },
+        "artifacts": [],
+        "unresolved": [
+          "Playbook 'unregistered-playbook' is unavailable in the TypeScript engine."
+        ]
+      },
+      "checkpoint_unchanged": true
+    },
+    "invalid_dispatch_mode": {
+      "directive": {
+        "schema_version": 2,
+        "pause_schema_version": 1,
+        "action": "paused",
+        "identity": {
+          "schema_version": 2,
+          "run_id": "run_ts200_research_pending",
+          "session_id": "session_ts200",
+          "playbook": "research",
+          "engine_owner": "typescript"
+        },
+        "status": "running",
+        "state_id": "planning",
+        "code": "DISPATCH_MODE_INVALID",
+        "reason": "PENNY_ARTIFACT_DISPATCH_MODE must be unset or exactly 'active' or 'paused'; invalid configuration fails closed",
+        "retryable": false,
+        "dispatch": {
+          "schema_version": 1,
+          "mode": "paused",
+          "configured_as": "invalid",
+          "code": "DISPATCH_MODE_INVALID",
+          "reason": "PENNY_ARTIFACT_DISPATCH_MODE must be unset or exactly 'active' or 'paused'; invalid configuration fails closed",
+          "dispatch_allowed": false
+        },
+        "recovery": {
+          "schema_version": 1,
+          "kind": "saved_but_ineligible",
+          "action": "status_or_cancel",
+          "ineligibility_code": "LEGACY_UNMETERED",
+          "identity": {
+            "schema_version": 2,
+            "run_id": "run_ts200_research_pending",
+            "session_id": "session_ts200",
+            "playbook": "research",
+            "engine_owner": "typescript"
+          },
+          "state_id": "planning",
+          "reason": "active legacy run has no durable liveness policy; recovery is paused",
+          "checkpoint_exists": true,
+          "checkpoint_preserved": true,
+          "resumable": false,
+          "requires_dispatch_mode": null
+        }
+      },
+      "checkpoint_unchanged": true
+    },
+    "missing_directive": {
+      "directive": {
+        "schema_version": 2,
+        "pause_schema_version": 1,
+        "action": "paused",
+        "identity": {
+          "schema_version": 2,
+          "run_id": "run_ts200_missing_directive",
+          "session_id": "session_ts200",
+          "playbook": "research",
+          "engine_owner": "typescript"
+        },
+        "status": "running",
+        "state_id": "intake",
+        "code": "LEGACY_UNMETERED",
+        "reason": "active legacy run has no durable liveness policy; recovery is paused",
+        "retryable": false,
+        "dispatch": {
+          "schema_version": 1,
+          "mode": "active",
+          "configured_as": "unset",
+          "code": "DISPATCH_ACTIVE",
+          "reason": "artifact dispatch is active because the setting is unset",
+          "dispatch_allowed": true
+        },
+        "recovery": {
+          "schema_version": 1,
+          "kind": "saved_but_ineligible",
+          "action": "status_or_cancel",
+          "ineligibility_code": "LEGACY_UNMETERED",
+          "identity": {
+            "schema_version": 2,
+            "run_id": "run_ts200_missing_directive",
+            "session_id": "session_ts200",
+            "playbook": "research",
+            "engine_owner": "typescript"
+          },
+          "state_id": "intake",
+          "reason": "active legacy run has no durable liveness policy; recovery is paused",
+          "checkpoint_exists": true,
+          "checkpoint_preserved": true,
+          "resumable": false,
+          "requires_dispatch_mode": null
+        }
+      },
+      "checkpoint_unchanged": true
+    }
+  }
+}

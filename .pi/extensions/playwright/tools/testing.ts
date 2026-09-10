@@ -65,7 +65,7 @@ export function registerTestingTools(pi: ExtensionAPI, _config: PlaywrightConfig
           content: [
             {
               type: "text",
-              text: `❌ Element NOT visible: ${selector} — ${err instanceof Error ? err.message : String(err)}`,
+              text: `❌ Element NOT visible: ${selector} — ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -193,7 +193,7 @@ export function registerTestingTools(pi: ExtensionAPI, _config: PlaywrightConfig
           content: [
             {
               type: "text",
-              text: `❌ Cannot verify value: ${err instanceof Error ? err.message : String(err)}`,
+              text: `❌ Cannot verify value: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,

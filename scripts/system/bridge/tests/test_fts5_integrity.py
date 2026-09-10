@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from scripts.system.bridge import fts5_integrity, repair_palace
+from scripts.system.bridge import fts5_integrity, recovery_safety, repair_palace
+from scripts.system.bridge.recovery_safety import open_authorized_recovery, snapshot_source_tree
 
 SELECTED_SQLITE_VERSION = "3.37.2"
 UPSTREAM_ROW_COUNT = 200
@@ -134,6 +136,50 @@ def test_upstream_zeroblob_is_detected_on_temp_copy_without_source_mutation(
     assert "alpha beta gamma" not in json.dumps(report.to_dict())
 
 
+def test_fts_source_file_race_never_reaches_sqlite_or_outside_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    palace, receipt = _fts5_palace(tmp_path, "fts-race", corrupt=False)
+    database = palace / "chroma.sqlite3"
+    outside = tmp_path / "outside.sqlite3"
+    with sqlite3.connect(outside) as connection:
+        connection.execute("CREATE TABLE outside_secret(value TEXT)")
+        connection.execute("INSERT INTO outside_secret VALUES ('must-not-be-read')")
+
+    with open_authorized_recovery(palace, receipt) as source:
+        snapshot = snapshot_source_tree(source)
+        real_open = recovery_safety._open_regular_file_at
+        sqlite_opens: list[object] = []
+        real_connect = sqlite3.connect
+
+        def racing_open(parent: int, name: str, expected, field: str, flags: int):
+            if name == "chroma.sqlite3" and not (palace / "chroma.sqlite3-held").exists():
+                os.rename(database, palace / "chroma.sqlite3-held")
+                os.symlink(outside, database)
+            return real_open(parent, name, expected, field, flags)
+
+        def tracking_connect(database_arg: object, *args: object, **kwargs: object):
+            sqlite_opens.append(database_arg)
+            return real_connect(database_arg, *args, **kwargs)
+
+        monkeypatch.setattr(recovery_safety, "_open_regular_file_at", racing_open)
+        monkeypatch.setattr(fts5_integrity.sqlite3, "connect", tracking_connect)
+        report = fts5_integrity.probe_authorized_database(source, snapshot)
+
+    assert report.ok is False
+    assert any(
+        finding.code
+        in {fts5_integrity.FindingCode.PROBE_UNAVAILABLE, fts5_integrity.FindingCode.SOURCE_CHANGED}
+        for finding in report.findings
+    )
+    assert sqlite_opens == []
+    with sqlite3.connect(outside) as connection:
+        assert connection.execute("SELECT value FROM outside_secret").fetchone() == (
+            "must-not-be-read",
+        )
+
+
 def test_clean_fts5_and_non_fts_tables_pass(tmp_path: Path) -> None:
     palace, receipt = _fts5_palace(tmp_path, "clean", corrupt=False)
     with sqlite3.connect(palace / "chroma.sqlite3") as connection:
@@ -213,7 +259,17 @@ def test_fts5_only_repair_is_dry_run_by_default_and_verified_on_apply(tmp_path: 
     assert applied.applied is True
     assert applied.postflight is not None and applied.postflight.ok
     assert applied.backup_name is not None
-    assert (palace / applied.backup_name).is_file()
+    assert applied.backup_evidence is not None
+    parked_source = Path(applied.backup_name)
+    evidence = applied.backup_evidence
+    assert evidence.advisory_path == parked_source
+    parked_stat = parked_source.stat()
+    assert (evidence.parked_identity.device, evidence.parked_identity.inode) == (
+        parked_stat.st_dev,
+        parked_stat.st_ino,
+    )
+    assert parked_source.is_dir()
+    assert (parked_source / "chroma.sqlite3").is_file()
     with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
         assert connection.execute(
             "SELECT count(*) FROM embedding_fulltext_search "

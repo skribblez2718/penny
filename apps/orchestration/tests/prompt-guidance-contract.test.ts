@@ -28,13 +28,13 @@ import { KB_FLOW, KNOWLEDGE_BASE_SKILL_CONTRACT } from "../src/playbooks/knowled
 import { PLAN_AGENT_BY_STATE, PLAN_SKILL_CONTRACT } from "../src/playbooks/plan.js";
 import { PRODUCE_AGENT_BY_STATE, PRODUCE_SKILL_CONTRACT } from "../src/playbooks/produce.js";
 import {
-  parsePersistedAssessmentDraft,
+  parsePersistedAssessmentDraftV2,
   type AssessmentRequestV1,
 } from "../src/skill-contracts/assess.js";
 import {
   parsePersistedArtifactApproach,
   parsePersistedArtifactApproachDecision,
-  parsePersistedProducedArtifactDraft,
+  parsePersistedProducedArtifactDraftV2,
   type ProduceRequestV1,
 } from "../src/skill-contracts/produce.js";
 import { RESEARCH_SKILL_CONTRACT, researchSummarySchema } from "../src/playbooks/research.js";
@@ -161,17 +161,18 @@ describe("closed prompt-guidance surfaces", () => {
       known_uncertainties: [],
     };
     expect(() =>
-      parsePersistedAssessmentDraft(
+      parsePersistedAssessmentDraftV2(
         Buffer.from(`${draftExample}\nSUMMARY:{"confidence":"PROBABLE","complete":true}`),
         { request: exampleRequest }
       )
     ).not.toThrow();
     expect(carren).toContain("MECHANICALLY_PROJECTED_ASSESSMENT_DRAFT_CONTRACT:");
     expect(carren).toContain("No numeric score");
-    expect(carren).toContain("external_actions_performed:false");
-    expect(carren).toContain("filesystem_writes_performed:false");
-    expect(carren).toContain("tests_executed:false");
-    expect(carren).toContain("changes_started:false");
+    expect(carren).toContain("effect claims");
+    expect(carren).not.toContain("external_actions_performed:false");
+    expect(carren).not.toContain("filesystem_writes_performed:false");
+    expect(carren).not.toContain("tests_executed:false");
+    expect(carren).not.toContain("changes_started:false");
     const vera = readFileSync(path.join(promptRoot, "vera-verifying_assessment.md"), "utf8");
     expect(vera).toContain("analysis_gap");
     expect(vera).toContain("evidence_gap");
@@ -345,14 +346,15 @@ describe("closed prompt-guidance surfaces", () => {
       known_uncertainties: [],
     };
     expect(() =>
-      parsePersistedProducedArtifactDraft(
+      parsePersistedProducedArtifactDraftV2(
         Buffer.from(`${draftExample}\nSUMMARY:{"confidence":"PROBABLE","complete":true}`),
         { request: exampleRequest }
       )
     ).not.toThrow();
     expect(skribble).toContain("MECHANICALLY_PROJECTED_PRODUCED_ARTIFACT_DRAFT_CONTRACT:");
-    expect(skribble).toContain("filesystem_writes_performed:false");
-    expect(skribble).toContain("tests_executed:false");
+    expect(skribble).toContain("effect claims");
+    expect(skribble).not.toContain("filesystem_writes_performed:false");
+    expect(skribble).not.toContain("tests_executed:false");
   });
 
   it("keeps knowledge-base guidance equal to every agent state in KB_FLOW", () => {

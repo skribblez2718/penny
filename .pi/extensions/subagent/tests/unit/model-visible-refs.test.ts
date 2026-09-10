@@ -57,7 +57,7 @@ describe("subagent model-visible artifact refs", () => {
       "artifactRunId = `subagent-parallel:",
       "if (params.agent && params.task)"
     );
-    expect(block).toContain("inlineArtifactMarker(r.outputArtifactRef)");
+    expect(block).toContain("inlineArtifactMarker(result.outputArtifactRef)");
     expect(block).toMatch(/content:\s*\[[\s\S]*anyParallelRef/);
   });
 
@@ -65,7 +65,7 @@ describe("subagent model-visible artifact refs", () => {
     const block = sliceBetween(
       indexSource,
       "const chainRefs = results.flatMap",
-      'details: makeDetails("chain")(results)'
+      "if (params.tasks && params.tasks.length > 0)"
     );
     expect(block).toContain("exactOutputListBlock(chainRefs)");
     expect(block).toMatch(/content:\s*\[[\s\S]*exactOutputListBlock/);

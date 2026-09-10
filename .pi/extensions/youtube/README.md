@@ -1,61 +1,61 @@
 # YouTube Extension
 
-Provides tools for extracting YouTube video transcripts and metadata.
+Provides a tool for retrieving available YouTube caption tracks and video metadata.
 
 ## Tools
 
 ### `youtube_transcript`
 
-Fetch the transcript/captions from a YouTube video along with metadata.
+Fetch an available caption track and return it as text, structured JSON, SRT, or WebVTT.
 
-**Parameters:**
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `url` | Yes | YouTube video URL or 11-character video ID |
-| `format` | No | Output format: `text` (default), `json`, `srt`, `webvtt` |
-| `languages` | No | Language codes for caption detection. `['auto']` picks best available |
+| Parameter   | Required | Description                                                                                                                                                   |
+| ----------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`       | Yes      | YouTube video URL or 11-character video ID                                                                                                                    |
+| `format`    | No       | `text` (default), `json`, `srt`, or `webvtt`                                                                                                                  |
+| `languages` | No       | Ordered caption-track preferences. Omitted or `[]` defaults to `["en"]`; `"auto"` selects the provider's first available track and does not generate captions |
 
-**Example:**
+Preferences are attempted from first to last only when a requested language track is unavailable. Invalid videos, disabled captions, rate limits, authentication failures, and other provider failures are terminal and are not retried as another language.
+
+JSON cue `start` and `duration` values are seconds. SRT and WebVTT cue ends are calculated from each cue's own start and duration, preserving gaps and overlaps.
 
 ```typescript
-// Get plain text transcript
+// Default English plain text
 youtube_transcript({ url: "https://youtube.com/watch?v=ogTLWGBc3cE" });
 
-// Get structured JSON with timing
+// Structured timing in seconds
 youtube_transcript({ url: "ogTLWGBc3cE", format: "json" });
 
-// Try French captions, fallback to English
+// Try French, then English
 youtube_transcript({ url: "https://youtu.be/ogTLWGBc3cE", languages: ["fr", "en"] });
+
+// Select the provider's first available caption track
+youtube_transcript({ url: "ogTLWGBc3cE", languages: ["auto"] });
 ```
 
-### `youtube_status` (Command)
+### `youtube-status` command
 
-Check extension health and dependency status.
+Runs an offline installation and URL-parser check. It does not contact YouTube or claim that provider access is healthy.
 
-## Dependencies
+## Dependency and connectivity
 
-- `youtube-transcript-ts` — Native TypeScript YouTube transcript API with proxy support
+The extension uses `youtube-transcript` 1.3.x, an unofficial YouTube transcript client. Provider behavior and caption availability can change independently of Penny.
 
-## Configuration
-
-No configuration required. The extension uses `youtube-transcript-ts` which handles all YouTube API connectivity internally.
-
-For restricted environments, configure proxy via `youtube-transcript-ts` options in `client.ts`.
+No extension configuration is required. Calls to `youtube_transcript` contact YouTube; tests keep live network coverage behind `PENNY_YOUTUBE_NETWORK_TESTS=1`.
 
 ## Testing
 
-```bash
-# Unit tests (no external dependencies required)
-npm run test:unit
+From this directory:
 
-# Integration tests (requires youtube-transcript-ts installed)
-npm run test:integration
+```bash
+bun run test:unit
+bun run test:integration # live cases remain skipped unless explicitly enabled
+bun run test:all
 ```
 
-## Supported URL Formats
+## Supported URL formats
 
 - `https://www.youtube.com/watch?v=VIDEO_ID`
 - `https://youtu.be/VIDEO_ID`
 - `https://www.youtube.com/embed/VIDEO_ID`
 - `https://www.youtube.com/shorts/VIDEO_ID`
-- Raw 11-character video ID (e.g., `ogTLWGBc3cE`)
+- Raw 11-character video ID (for example, `ogTLWGBc3cE`)

@@ -1,6 +1,6 @@
 # Mission
 
-Materialize one complete replacement `ProducedArtifactDraftV1` from the exact `ProduceRequestV1`, latest Ida alternatives, and latest Demetri selection. Own the final content draft; do not perform any side effect.
+Materialize one complete replacement `ProducedArtifactDraftV2` from the exact `ProduceRequestV1`, latest Ida alternatives, and latest Demetri selection. Own the final content draft; effect evidence is host-owned.
 
 # Exact Artifact Handoff
 
@@ -22,7 +22,7 @@ The invocation's `MECHANICALLY_PROJECTED_PRODUCED_ARTIFACT_DRAFT_CONTRACT:` cont
 - For `json`, emit parseable canonical JSON as the content string. For every other kind, do not claim compilation, execution, syntax checks, or tests.
 - Use `produced` only with nonempty content. Use `not_applicable` only when required supplied material is absent or hard constraints make production impossible; explain why and emit empty content.
 - State assumptions and unresolved uncertainties explicitly without weakening hard constraints or acceptance criteria.
-- Set `external_actions_performed:false`, `filesystem_writes_performed:false`, and `tests_executed:false`.
+- Do not emit effect claims. The host alone records policy, scoped observation evidence, and prevention controls; unavailable evidence remains `unknown`.
 - Repair every applicable Carren, Vera, or seal-feedback finding in one complete replacement.
 
 # Non-Negotiables
@@ -33,5 +33,5 @@ Do not execute, test, compile, write a file, mutate, browse, fetch, publish, dep
 
 Emit exactly two adjacent single lines and nothing else. The first JSON object must be canonical.
 
-PRODUCED_ARTIFACT_DRAFT:{"artifact_kind":"text","assumptions":[],"confidence":"PROBABLE","content":"Hello.","disposition":"produced","external_actions_performed":false,"filesystem_writes_performed":false,"media_type":"text/plain; charset=utf-8","output_name":"artifact.txt","rationale":"The direct text satisfies the exact brief.","request_coverage":{"acceptance_criterion_indexes":[0],"hard_constraint_indexes":[],"known_uncertainty_indexes":[],"non_goal_indexes":[],"purpose_statement_covered":true,"source_material_indexes":[0],"specification_indexes":[0]},"schema_version":1,"tests_executed":false,"uncertainties":[]}
+PRODUCED_ARTIFACT_DRAFT:{"artifact_kind":"text","assumptions":[],"confidence":"PROBABLE","content":"Hello.","disposition":"produced","media_type":"text/plain; charset=utf-8","output_name":"artifact.txt","rationale":"The direct text satisfies the exact brief.","request_coverage":{"acceptance_criterion_indexes":[0],"hard_constraint_indexes":[],"known_uncertainty_indexes":[],"non_goal_indexes":[],"purpose_statement_covered":true,"source_material_indexes":[0],"specification_indexes":[0]},"schema_version":2,"uncertainties":[]}
 SUMMARY:{"confidence":"PROBABLE","complete":true}

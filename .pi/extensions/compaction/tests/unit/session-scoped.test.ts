@@ -33,11 +33,22 @@ function skillCall(
 }
 
 function skillResult(sessionId: string, success = true, toolCallId?: string) {
+  const details = {
+    success,
+    session_id: sessionId,
+    skill_name: "plan",
+    state: success ? "complete" : "error",
+    steps_total: 1,
+    agents_invoked: ["piper"],
+    errors: success ? [] : ["skill failed"],
+    result: { met: success },
+  };
   return {
     role: "toolResult",
     toolName: "skill",
     toolCallId,
-    content: JSON.stringify({ success, session_id: sessionId }),
+    content: success ? "Skill completed successfully" : "Skill failed",
+    details,
   };
 }
 
@@ -52,15 +63,16 @@ describe("detectDominantSkill", () => {
       session_id: "plan-1751700000000",
       goal: "Design a scoring system",
       completed: true,
+      result_status: "success",
     });
   });
 
   it("NEVER fabricates a session_id when the result carries none", () => {
-    // Regression: fabricated `${skill}-${Date.now()}` ids created false
-    // addresses — empty string is the honest value.
+    // Regression: fabricated `${skill}-${Date.now()}` ids created false addresses.
     const dominant = detectDominantSkill([skillCall("Do the thing")]);
     expect(dominant).not.toBeNull();
-    expect(dominant).toMatchObject({ session_id: "" });
+    expect(dominant?.session_id).toBeUndefined();
+    expect(dominant?.result_status).toBe("unknown");
   });
 
   it("pairs a call with ITS result via toolCallId, not any skill result", () => {
@@ -112,10 +124,13 @@ describe("detectDominantSkill", () => {
 
 describe("extractSessionState", () => {
   it("prefers the dominant skill goal", () => {
-    const state = extractSessionState(
-      [{ role: "user", content: "please help with something else" }],
-      { skill_name: "plan", session_id: "s", goal: "Design a scoring system", completed: false }
-    );
+    const state = extractSessionState([], {
+      skill_name: "plan",
+      session_id: "s",
+      goal: "Design a scoring system",
+      completed: false,
+      result_status: "paused",
+    });
     expect(state.goal).toBe("Design a scoring system");
   });
 
@@ -129,13 +144,9 @@ describe("extractSessionState", () => {
     expect(state.goal).toBe("some general chatter here that is substantive");
   });
 
-  it("uses the exact engine-run goal when no substantive user message exists", () => {
-    const state = extractSessionState(
-      [{ role: "user", content: "ok" }],
-      null,
-      "Migrate onto engine"
-    );
-    expect(state.goal).toBe("Migrate onto engine");
+  it("preserves a short latest user instruction ahead of an older run goal", () => {
+    const state = extractSessionState([{ role: "user", content: "F04" }], null, "Older run goal");
+    expect(state.goal).toBe("F04");
   });
 
   it("does NOT keyword-scrape constraints from user messages", () => {
@@ -153,6 +164,7 @@ describe("extractSessionState", () => {
       session_id: "code-1",
       goal: "Build it",
       completed: false,
+      result_status: "paused",
       constraints: { language: "python", user_response: "yes" },
     });
     expect(state.constraints).toEqual(["language: python"]); // resume-plumbing key skipped
@@ -179,25 +191,31 @@ describe("extractSessionState", () => {
     expect(state.superseded).toBe(false);
   });
 
-  it("ignores trivial short messages and keeps the latest SUBSTANTIVE one", () => {
+  it("does not apply a length floor to the latest user turn", () => {
     const state = extractSessionState(
       [
         { role: "user", content: "Design a full observability pipeline for compaction" },
-        { role: "user", content: "ok" },
-        { role: "user", content: "go" },
+        { role: "user", content: "F04" },
       ],
       null
     );
-    expect(state.goal).toBe("Design a full observability pipeline for compaction");
+    expect(state.goal).toBe("F04");
   });
 
-  it("prefers an INCOMPLETE active skill over any user message (precedence #1)", () => {
-    const state = extractSessionState(
-      [{ role: "user", content: "some later ad-hoc chatter that is fairly substantive" }],
-      { skill_name: "code", session_id: "code-1", goal: "Ship the feature", completed: false }
-    );
-    expect(state.goal).toBe("Ship the feature");
-    expect(state.superseded).toBe(false);
+  it("lets a later user turn supersede an incomplete skill too", () => {
+    const messages = [
+      skillCall("Ship the feature", { id: "tc-1", skill: "code" }),
+      { role: "user", content: "F04" },
+    ];
+    const state = extractSessionState(messages, {
+      skill_name: "code",
+      session_id: "code-1",
+      goal: "Ship the feature",
+      completed: false,
+      result_status: "incomplete",
+    });
+    expect(state.goal).toBe("F04");
+    expect(state.superseded).toBe(true);
   });
 
   // ----------------------------------------------------------
@@ -260,7 +278,7 @@ describe("eviction", () => {
 
   it("scale tightens caps but floors at 1", () => {
     const artifact: PennyCompactArtifact = {
-      schema_version: "3.0.0",
+      schema_version: "3.1.0",
       session_id: "session-1",
       compaction_seq: 0,
       compaction_timestamp: "2026-08-23T00:00:00.000Z",

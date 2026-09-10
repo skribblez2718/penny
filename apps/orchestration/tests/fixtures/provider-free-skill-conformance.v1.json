@@ -57,7 +57,7 @@
           "category": "boundary",
           "tier": 2,
           "test_file": "tests/assess-playbook.test.ts",
-          "full_name": "orchestrated assess skill routes an assessment product gap directly to Carren and accepts inconclusive completion"
+          "full_name": "orchestrated assess workflow routes an assessment product gap directly to Carren and accepts inconclusive completion"
         },
         {
           "check_id": "assess-semantic-equivalence",
@@ -85,14 +85,14 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/assess-playbook.test.ts",
-          "full_name": "orchestrated assess skill completes host \u2192 Annie \u2192 Carren \u2192 seal \u2192 Vera \u2192 host admission with exact evidence"
+          "full_name": "orchestrated assess workflow completes host \u2192 Annie \u2192 Carren \u2192 seal \u2192 Vera \u2192 host admission with exact evidence"
         },
         {
           "check_id": "assess-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/assess-playbook.test.ts",
-          "full_name": "orchestrated assess skill terminates repeated product gaps as bounded non-positive incomplete"
+          "full_name": "orchestrated assess workflow terminates repeated product gaps as bounded non-positive incomplete"
         }
       ]
     },
@@ -146,14 +146,14 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/decide-playbook.test.ts",
-          "full_name": "orchestrated decide skill completes a reviewed canonical selected DecisionV2 and exact product envelope"
+          "full_name": "orchestrated decide workflow completes a reviewed canonical selected DecisionV2 and exact product envelope"
         },
         {
           "check_id": "decide-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/decide-playbook.test.ts",
-          "full_name": "orchestrated decide skill terminalizes repeated registered repair gaps honestly when the finite iteration budget is exhausted"
+          "full_name": "orchestrated decide workflow terminalizes repeated registered repair gaps honestly when the finite iteration budget is exhausted"
         }
       ]
     },
@@ -179,7 +179,7 @@
           "category": "boundary",
           "tier": 2,
           "test_file": "tests/diagnose-playbook.test.ts",
-          "full_name": "orchestrated diagnose skill routes a Vera product gap directly to Demetri and accepts a valid no-check inconclusive boundary"
+          "full_name": "orchestrated diagnose workflow routes a Vera product gap directly to Demetri and accepts a valid no-check inconclusive boundary"
         },
         {
           "check_id": "diagnose-semantic-equivalence",
@@ -207,14 +207,14 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/diagnose-playbook.test.ts",
-          "full_name": "orchestrated diagnose skill completes the exact Annie \u2192 Ida \u2192 Demetri \u2192 seal \u2192 Vera \u2192 host admission flow"
+          "full_name": "orchestrated diagnose workflow completes the exact Annie \u2192 Ida \u2192 Demetri \u2192 seal \u2192 Vera \u2192 host admission flow"
         },
         {
           "check_id": "diagnose-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/diagnose-playbook.test.ts",
-          "full_name": "orchestrated diagnose skill terminates repeated product gaps as bounded non-positive incomplete"
+          "full_name": "orchestrated diagnose workflow terminates repeated product gaps as bounded non-positive incomplete"
         }
       ]
     },
@@ -329,14 +329,14 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/plan-playbook.test.ts",
-          "full_name": "provider-free orchestrated plan skill completes a reviewed canonical ready StrategyV1 and exact product envelope"
+          "full_name": "provider-free orchestrated plan workflow completes a reviewed canonical ready StrategyV1 and exact product envelope"
         },
         {
           "check_id": "plan-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/plan-playbook.test.ts",
-          "full_name": "provider-free orchestrated plan skill terminalizes repeated product gaps when the finite repair budget is exhausted"
+          "full_name": "provider-free orchestrated plan workflow terminalizes repeated product gaps when the finite repair budget is exhausted"
         }
       ]
     },
@@ -348,21 +348,21 @@
           "category": "known_good",
           "tier": 1,
           "test_file": "tests/produce-contract-v1.test.ts",
-          "full_name": "ArtifactApproachV1 and ProducedArtifactDraftV1 accepts complete text and Markdown content without claiming syntax or execution checks"
+          "full_name": "ArtifactApproachV1, ArtifactApproachDecisionV1, and ProducedArtifactDraftV1 accepts complete text and Markdown content without claiming syntax or execution checks"
         },
         {
           "check_id": "produce-known-bad",
           "category": "known_bad",
           "tier": 1,
           "test_file": "tests/produce-contract-v1.test.ts",
-          "full_name": "ArtifactApproachV1 and ProducedArtifactDraftV1 requires produced JSON content to be parseable canonical JSON without delegating digest calculation"
+          "full_name": "ArtifactApproachV1, ArtifactApproachDecisionV1, and ProducedArtifactDraftV1 requires produced JSON content to be parseable canonical JSON without delegating digest calculation"
         },
         {
           "check_id": "produce-boundary",
           "category": "boundary",
           "tier": 1,
           "test_file": "tests/produce-contract-v1.test.ts",
-          "full_name": "ArtifactApproachV1 and ProducedArtifactDraftV1 accepts truthful empty not_applicable and rejects partial coverage or content"
+          "full_name": "ArtifactApproachV1, ArtifactApproachDecisionV1, and ProducedArtifactDraftV1 accepts truthful empty not_applicable and rejects partial coverage or content"
         },
         {
           "check_id": "produce-semantic-equivalence",
@@ -383,21 +383,21 @@
           "category": "product_integrity",
           "tier": 1,
           "test_file": "tests/produce-contract-v1.test.ts",
-          "full_name": "canonical ProducedArtifactV1 sealing binds exact request, Ida, Skribble, and inline-source lineage"
+          "full_name": "canonical ProducedArtifactV1 sealing binds exact request, Ida, Demetri, Skribble, and inline-source lineage"
         },
         {
           "check_id": "produce-real-entrypoint",
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/produce-playbook.test.ts",
-          "full_name": "orchestrated produce skill completes the exact Ida \u2192 Skribble \u2192 seal \u2192 Carren \u2192 Vera \u2192 host admission flow"
+          "full_name": "orchestrated produce workflow completes the exact Ida \u2192 Demetri \u2192 Skribble \u2192 seal \u2192 Carren \u2192 Vera \u2192 host admission flow"
         },
         {
           "check_id": "produce-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/produce-playbook.test.ts",
-          "full_name": "orchestrated produce skill terminates repeated artifact product gaps as bounded non-positive incomplete"
+          "full_name": "orchestrated produce workflow terminates repeated artifact product gaps as bounded non-positive incomplete"
         }
       ]
     },

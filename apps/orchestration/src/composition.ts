@@ -1,10 +1,16 @@
 import { canonicalJson } from "./checkpointer.js";
 import type { ArtifactReader } from "./artifact-store.js";
 import type { ArtifactRef, InputArtifacts, SkillContract } from "./contracts.js";
-import { validateCanonicalAssessmentBytes } from "./skill-contracts/assess.js";
+import {
+  validateCanonicalAssessmentBytes,
+  validateCanonicalAssessmentV2Bytes,
+} from "./skill-contracts/assess.js";
 import { validateCanonicalDecisionBytes } from "./skill-contracts/decide.js";
 import { validateCanonicalDiagnosisBytes } from "./skill-contracts/diagnose.js";
-import { validateCanonicalProducedArtifactBytes } from "./skill-contracts/produce.js";
+import {
+  validateCanonicalProducedArtifactBytes,
+  validateCanonicalProducedArtifactV2Bytes,
+} from "./skill-contracts/produce.js";
 import { validateCanonicalGroundedSynthesisBytes } from "./skill-contracts/research.js";
 
 export interface SemanticProductValidatorV1 {
@@ -23,6 +29,15 @@ export const SEMANTIC_PRODUCT_VALIDATORS: ReadonlyMap<string, SemanticProductVal
         schema_version: 1,
         artifact_kind: "semantic-core",
         validateCanonicalBytes: validateCanonicalAssessmentBytes,
+      },
+    ],
+    [
+      "penny.assessment.v2",
+      {
+        schema_id: "penny.assessment.v2",
+        schema_version: 2,
+        artifact_kind: "semantic-core",
+        validateCanonicalBytes: validateCanonicalAssessmentV2Bytes,
       },
     ],
     [
@@ -59,6 +74,15 @@ export const SEMANTIC_PRODUCT_VALIDATORS: ReadonlyMap<string, SemanticProductVal
         schema_version: 1,
         artifact_kind: "semantic-core",
         validateCanonicalBytes: validateCanonicalProducedArtifactBytes,
+      },
+    ],
+    [
+      "penny.produced-artifact.v2",
+      {
+        schema_id: "penny.produced-artifact.v2",
+        schema_version: 2,
+        artifact_kind: "semantic-core",
+        validateCanonicalBytes: validateCanonicalProducedArtifactV2Bytes,
       },
     ],
   ]

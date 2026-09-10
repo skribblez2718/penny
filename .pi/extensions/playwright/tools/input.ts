@@ -74,7 +74,7 @@ export function registerInputTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Type failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Type failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -123,7 +123,7 @@ export function registerInputTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Fill failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Fill failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -202,7 +202,7 @@ export function registerInputTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Select failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Select failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -251,7 +251,7 @@ export function registerInputTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Check failed: ${err instanceof Error ? err.message : String(err)}\nTry clicking the label element if the input is hidden.`,
+              text: `Check failed: ${browser.safeErrorMessage(err)}\nTry clicking the label element if the input is hidden.`,
             },
           ],
           isError: true,
@@ -300,7 +300,7 @@ export function registerInputTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Uncheck failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Uncheck failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -373,7 +373,7 @@ export function registerInputTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Press failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Press failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,

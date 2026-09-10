@@ -4,6 +4,8 @@ import {
   buildResumeRefs,
   createProseSummary,
   createResumeRefSet,
+  enforceSelectedGoal,
+  enforceSkillContinuity,
   withResumeRefs,
 } from "../../index.js";
 import type { ArtifactRef, PennyCompactArtifact } from "../../schema.js";
@@ -39,7 +41,7 @@ function baseArtifact(overrides: Partial<PennyCompactArtifact> = {}): PennyCompa
   const engineRuns = overrides.engine_runs ?? [];
   const artifacts = overrides.artifact_refs ?? [];
   return {
-    schema_version: "3.0.0",
+    schema_version: "3.1.0",
     session_id: "sess-1",
     compaction_seq: 0,
     compaction_timestamp: "2026-08-15T12:00:00.000Z",
@@ -108,14 +110,46 @@ describe("createProseSummary", () => {
           session_id: "research-1",
           goal: "Old research task",
           completed: true,
+          result_status: "success",
           superseded: true,
         },
       })
     );
     expect(summary).toContain("## Current Work");
     expect(summary).toContain("## Next Steps");
-    expect(summary).toContain("superseded by a newer request");
+    expect(summary).toContain("## Skill Continuity");
+    expect(summary).toContain("success, superseded by a newer request");
     expect(summary).not.toContain("No explicit constraints recorded");
+  });
+
+  it("keeps the code-selected latest goal authoritative over stale model prose", () => {
+    const prose = enforceSelectedGoal(
+      "## Goal\nOld completed skill\n\n## Current Work\nSomething else",
+      "F04"
+    );
+    expect(prose).toContain("## Goal\nF04");
+    expect(prose).not.toContain("Old completed skill");
+  });
+
+  it("replaces model-inferred skill state with the validated status", () => {
+    const artifact = baseArtifact({
+      goal: "F04",
+      dominant_skill: {
+        skill_name: "code",
+        session_id: "code-1",
+        goal: "Older implementation",
+        completed: false,
+        result_status: "cancelled",
+        superseded: true,
+      },
+    });
+    const prose = enforceSkillContinuity(
+      "## Goal\nF04\n\n## Active Skill\n- code is still running\n\n## Current Work\nContinue",
+      artifact
+    );
+    expect(prose).toContain("## Skill Continuity");
+    expect(prose).toContain("cancelled, superseded by a newer request");
+    expect(prose).not.toContain("still running");
   });
 
   it("lets model prose receive only the code-owned exact appendix", () => {

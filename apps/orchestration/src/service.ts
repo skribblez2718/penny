@@ -7,9 +7,10 @@ import { OrchestrationEngine } from "./engine.js";
 import { KbWorkerClient } from "./kb/kb-worker-client.js";
 import { PiAgentClient, type ModelClient, type InlineExtension } from "./model-client.js";
 import { ReceiptAuthority } from "./receipts.js";
+import type { EffectEvidenceProviderV1 } from "./skill-contracts/effects.js";
 import {
-  ResearchContextOwnerV1,
-  type ResearchContextProviderHandlersV1,
+  ResearchContextOwnerV2,
+  type ResearchContextProviderHandlers,
 } from "./research-context.js";
 import { ObservabilityClient } from "./observability.js";
 import { OrchestrationRunner, WorkerExecutor, type OrchestrationProgressSink } from "./worker.js";
@@ -37,7 +38,9 @@ export interface OrchestrationServiceOptions {
   /** Optional exact registration injection for tests and dedicated host entrypoints. */
   readonly playbookRegistration?: PlaybookRegistrationV1;
   /** Identifier-only document/approved-KB context resolvers owned by the host. */
-  readonly researchContextProviders?: ResearchContextProviderHandlersV1;
+  readonly researchContextProviders?: ResearchContextProviderHandlers;
+  /** Optional trusted immutable effect-trace snapshot provider. Absence means unknown. */
+  readonly effectEvidenceProvider?: EffectEvidenceProviderV1;
 }
 
 export class OrchestrationService implements Disposable {
@@ -46,7 +49,7 @@ export class OrchestrationService implements Disposable {
   readonly artifacts: ArtifactStore;
   readonly retention: ProjectRetentionOwner;
   readonly engine: OrchestrationEngine;
-  readonly researchContext: ResearchContextOwnerV1 | undefined;
+  readonly researchContext: ResearchContextOwnerV2 | undefined;
   readonly workers: WorkerExecutor;
   readonly runner: OrchestrationRunner;
   private activeExecutions = 0;
@@ -94,20 +97,39 @@ export class OrchestrationService implements Disposable {
               resolve: () => kbPolicy,
             },
           };
+    const configuredContextProviders = options.researchContextProviders;
+    let currentContextProviders: ResearchContextProviderHandlers;
+    if (
+      configuredContextProviders !== undefined &&
+      configuredContextProviders.resolver_contract_version !== 2
+    ) {
+      currentContextProviders = configuredContextProviders;
+    } else {
+      const callerInput =
+        configuredContextProviders?.callerInput ??
+        (async (_source, runId, control) => {
+          if (control.signal.aborted) {
+            throw new Error("caller context recovery was cancelled");
+          }
+          const run = this.checkpointer.loadRunById(runId);
+          if (run === undefined) {
+            throw new Error(`caller context run '${runId}' is unavailable`);
+          }
+          return run.research.report_format;
+        });
+      currentContextProviders =
+        configuredContextProviders === undefined
+          ? {
+              resolver_contract_version: 2,
+              provider_execution: "trusted_in_process",
+              admission_resolutions: [],
+              callerInput,
+            }
+          : { ...configuredContextProviders, callerInput };
+    }
     this.researchContext =
       selectedRegistration.ingress === "skill"
-        ? new ResearchContextOwnerV1(this.artifacts, {
-            ...options.researchContextProviders,
-            callerInput:
-              options.researchContextProviders?.callerInput ??
-              ((_source, runId) => {
-                const run = this.checkpointer.loadRunById(runId);
-                if (run === undefined) {
-                  throw new Error(`caller context run '${runId}' is unavailable`);
-                }
-                return run.research.report_format;
-              }),
-          })
+        ? new ResearchContextOwnerV2(this.artifacts, currentContextProviders)
         : undefined;
     this.engine = new OrchestrationEngine(this.checkpointer, {
       projectRoot: this.config.projectRoot,
@@ -118,6 +140,9 @@ export class OrchestrationService implements Disposable {
       artifactReader: this.artifacts,
       ...(this.researchContext === undefined ? {} : { researchContext: this.researchContext }),
       ...(options.dispatchMode ? { dispatchMode: options.dispatchMode } : {}),
+      ...(options.effectEvidenceProvider === undefined
+        ? {}
+        : { effectEvidenceProvider: options.effectEvidenceProvider }),
       playbookName: selectedName,
       playbookRegistration: activeRegistration,
     });

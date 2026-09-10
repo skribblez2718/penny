@@ -1,3 +1,5 @@
+import { TextDecoder } from "node:util";
+
 import { Type, type Static } from "typebox";
 
 import { canonicalJson, sha256 } from "../checkpointer.js";
@@ -688,6 +690,64 @@ const ConflictSchema = Type.Union([
   ),
 ]);
 
+export const ContextEligibilityV2Schema = Type.Union([
+  Type.Object(
+    {
+      status: Type.Literal("eligible"),
+      checked_at: Rfc3339UtcSchema,
+      valid_from: Rfc3339UtcSchema,
+      valid_through: Rfc3339UtcSchema,
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      status: Type.Literal("ineligible"),
+      checked_at: Rfc3339UtcSchema,
+      reason_code: OpaqueIdSchema,
+    },
+    { additionalProperties: false }
+  ),
+]);
+export type ContextEligibilityV2 = Static<typeof ContextEligibilityV2Schema>;
+
+export const ContextApprovalV2Schema = Type.Union([
+  Type.Object({ status: Type.Literal("not_required") }, { additionalProperties: false }),
+  Type.Object(
+    {
+      status: Type.Literal("approved"),
+      checked_at: Rfc3339UtcSchema,
+      valid_from: Rfc3339UtcSchema,
+      valid_through: Rfc3339UtcSchema,
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      status: Type.Literal("revoked"),
+      checked_at: Rfc3339UtcSchema,
+      reason_code: OpaqueIdSchema,
+    },
+    { additionalProperties: false }
+  ),
+]);
+export type ContextApprovalV2 = Static<typeof ContextApprovalV2Schema>;
+
+const ResolverV2AdmissionSchema = Type.Object(
+  {
+    authority_kind: Type.Literal("resolver_v2"),
+    resolver_schema_id: Type.Literal("penny.research-context-resolution.v2"),
+    resolver_schema_version: Type.Literal(2),
+    eligibility: ContextEligibilityV2Schema,
+    approval: ContextApprovalV2Schema,
+  },
+  { additionalProperties: false }
+);
+const CallerFixedAdmissionSchema = Type.Object(
+  { authority_kind: Type.Literal("caller_fixed") },
+  { additionalProperties: false }
+);
+
 export const ContextSourceRefV1Schema = Type.Object(
   {
     schema_id: Type.Literal("penny.context-source-ref.v1"),
@@ -755,6 +815,95 @@ export const ContextSourceRefV1Schema = Type.Object(
   { additionalProperties: false }
 );
 export type ContextSourceRefV1 = Static<typeof ContextSourceRefV1Schema>;
+
+export const ContextSourceRefV2Schema = Type.Object(
+  {
+    ...ContextSourceRefV1Schema.properties,
+    schema_id: Type.Literal("penny.context-source-ref.v2"),
+    schema_version: Type.Literal(2),
+    admission: Type.Union([ResolverV2AdmissionSchema, CallerFixedAdmissionSchema]),
+  },
+  { additionalProperties: false }
+);
+export type ContextSourceRefV2 = Static<typeof ContextSourceRefV2Schema>;
+export type ContextSourceRef = ContextSourceRefV1 | ContextSourceRefV2;
+
+const CurrentResolutionCommonProperties = {
+  schema_id: Type.Literal("penny.research-context-resolution.v2"),
+  schema_version: Type.Literal(2),
+  source_id: OpaqueIdSchema,
+  content: Type.Unknown(),
+  media_type: ContextSourceRefV1Schema.properties.content.properties.media_type,
+  role: ContextSourceRefV1Schema.properties.role,
+  scope_id: OpaqueIdSchema,
+  freshness: FreshnessSchema,
+  upstream_locators: ContextSourceRefV1Schema.properties.upstream_locators,
+  provider: ContextSourceRefV1Schema.properties.provider,
+  verification_disposition: ContextSourceRefV1Schema.properties.verification_disposition,
+  conflict: ConflictSchema,
+  eligibility: ContextEligibilityV2Schema,
+};
+
+export const ResolvedVersionedDocumentV2Schema = Type.Object(
+  {
+    ...CurrentResolutionCommonProperties,
+    source_kind: Type.Literal("versioned_document"),
+    revision: DocumentRevisionSchema,
+    approval: Type.Object(
+      { status: Type.Literal("not_required") },
+      { additionalProperties: false }
+    ),
+  },
+  { additionalProperties: false }
+);
+export const ResolvedApprovedKbResultV2Schema = Type.Object(
+  {
+    ...CurrentResolutionCommonProperties,
+    source_kind: Type.Literal("approved_kb_result"),
+    revision: ApprovedKbRevisionSchema,
+    approval: Type.Union([
+      Type.Object(
+        {
+          status: Type.Literal("approved"),
+          checked_at: Rfc3339UtcSchema,
+          valid_from: Rfc3339UtcSchema,
+          valid_through: Rfc3339UtcSchema,
+        },
+        { additionalProperties: false }
+      ),
+      Type.Object(
+        {
+          status: Type.Literal("revoked"),
+          checked_at: Rfc3339UtcSchema,
+          reason_code: OpaqueIdSchema,
+        },
+        { additionalProperties: false }
+      ),
+    ]),
+  },
+  { additionalProperties: false }
+);
+export const ResolvedContextV2Schema = Type.Union([
+  ResolvedVersionedDocumentV2Schema,
+  ResolvedApprovedKbResultV2Schema,
+]);
+type ResolvedVersionedDocumentV2Wire = Static<typeof ResolvedVersionedDocumentV2Schema>;
+type ResolvedApprovedKbResultV2Wire = Static<typeof ResolvedApprovedKbResultV2Schema>;
+export type ResolvedVersionedDocumentV2 = Omit<ResolvedVersionedDocumentV2Wire, "content"> & {
+  readonly content: string | Uint8Array;
+};
+export type ResolvedApprovedKbResultV2 = Omit<ResolvedApprovedKbResultV2Wire, "content"> & {
+  readonly content: string | Uint8Array;
+};
+export type ResolvedContextV2 = ResolvedVersionedDocumentV2 | ResolvedApprovedKbResultV2;
+type WithoutContent<T> = T extends { readonly content: unknown } ? Omit<T, "content"> : never;
+export type ResolvedContextMetadataV2 = WithoutContent<ResolvedContextV2>;
+
+export interface ValidatedContextUseV2 {
+  readonly content: string;
+  readonly current: ResolvedContextMetadataV2;
+  readonly validated_at: string;
+}
 
 export const CONTEXT_CONSUMER_STATES: Readonly<
   Record<ResearchContextSlotV1, readonly ResearchContextConsumerStateV1[]>
@@ -875,8 +1024,339 @@ export function validateContextSourceRef(
   return source;
 }
 
+function assertIntervalStructure(
+  value: {
+    readonly checked_at: string;
+    readonly valid_from: string;
+    readonly valid_through: string;
+  },
+  label: string
+): void {
+  assertRfc3339Utc(value.checked_at, `${label}.checked_at`);
+  assertRfc3339Utc(value.valid_from, `${label}.valid_from`);
+  assertRfc3339Utc(value.valid_through, `${label}.valid_through`);
+  const checkedAt = Date.parse(value.checked_at);
+  const validFrom = Date.parse(value.valid_from);
+  const validThrough = Date.parse(value.valid_through);
+  if (validThrough <= validFrom || checkedAt > validThrough) {
+    throw new SkillSchemaValidationError(label, [
+      "validity must be a non-empty [valid_from, valid_through) interval and checked_at may not follow it",
+    ]);
+  }
+}
+
+function assertEligibilityStructure(value: ContextEligibilityV2, label: string): void {
+  assertRfc3339Utc(value.checked_at, `${label}.checked_at`);
+  if (value.status === "eligible") {
+    assertIntervalStructure(value, label);
+  } else {
+    assertOpaqueId(value.reason_code, `${label}.reason_code`);
+  }
+}
+
+function assertApprovalStructure(value: ContextApprovalV2, label: string): void {
+  if (value.status === "not_required") return;
+  assertRfc3339Utc(value.checked_at, `${label}.checked_at`);
+  if (value.status === "approved") {
+    assertIntervalStructure(value, label);
+  } else {
+    assertOpaqueId(value.reason_code, `${label}.reason_code`);
+  }
+}
+
+export function validateContextSourceRefV2(
+  value: unknown,
+  boundSourceIds: readonly string[] = []
+): ContextSourceRefV2 {
+  const source = validateSkillSchema(ContextSourceRefV2Schema, value, "ContextSourceRefV2");
+  const { admission, ...shared } = source;
+  validateContextSourceRef(
+    {
+      ...shared,
+      schema_id: "penny.context-source-ref.v1",
+      schema_version: 1,
+    },
+    boundSourceIds
+  );
+  if (source.source_kind === "caller_input") {
+    if (admission.authority_kind !== "caller_fixed") {
+      throw new SkillSchemaValidationError("ContextSourceRefV2 admission", [
+        "caller input must remain fixed caller-owned context without external approval",
+      ]);
+    }
+    return source;
+  }
+  if (admission.authority_kind !== "resolver_v2") {
+    throw new SkillSchemaValidationError("ContextSourceRefV2 admission", [
+      "external context requires resolver-v2 admission metadata",
+    ]);
+  }
+  assertEligibilityStructure(admission.eligibility, "ContextSourceRefV2 admission eligibility");
+  assertApprovalStructure(admission.approval, "ContextSourceRefV2 admission approval");
+  if (admission.eligibility.status !== "eligible") {
+    throw new SkillSchemaValidationError("ContextSourceRefV2 admission", [
+      "provider marked the source ineligible",
+    ]);
+  }
+  if (
+    (source.source_kind === "approved_kb_result" && admission.approval.status !== "approved") ||
+    (source.source_kind === "versioned_document" && admission.approval.status !== "not_required")
+  ) {
+    throw new SkillSchemaValidationError("ContextSourceRefV2 admission", [
+      "approval state does not match the source kind",
+    ]);
+  }
+  return source;
+}
+
+export const ContextSourceRefSchema = Type.Union([
+  ContextSourceRefV1Schema,
+  ContextSourceRefV2Schema,
+]);
+
+export function validateVersionedContextSourceRef(
+  value: unknown,
+  boundSourceIds: readonly string[] = []
+): ContextSourceRef {
+  const source = validateSkillSchema(ContextSourceRefSchema, value, "ContextSourceRef");
+  return source.schema_version === 1
+    ? validateContextSourceRef(source, boundSourceIds)
+    : validateContextSourceRefV2(source, boundSourceIds);
+}
+
+function assertResolutionMetadata(resolution: ResolvedContextV2): void {
+  assertOpaqueId(resolution.source_id, "ResolvedContextV2.source_id");
+  assertOpaqueId(resolution.scope_id, "ResolvedContextV2.scope_id");
+  assertOpaqueId(resolution.provider.provider_id, "ResolvedContextV2.provider.provider_id");
+  assertOpaqueId(
+    resolution.provider.eligibility_record_id,
+    "ResolvedContextV2.provider.eligibility_record_id"
+  );
+  for (const [index, upstream] of resolution.upstream_locators.entries()) {
+    assertOpaqueId(upstream.source_id, `ResolvedContextV2.upstream_locators[${index}].source_id`);
+    assertText(upstream.locator, `ResolvedContextV2.upstream_locators[${index}].locator`, {
+      minBytes: 1,
+      maxBytes: 2_048,
+      multiline: false,
+      trimmedNonEmpty: true,
+    });
+  }
+  if (resolution.freshness.status === "current") {
+    assertRfc3339Utc(resolution.freshness.observed_at, "ResolvedContextV2 freshness observed_at");
+    assertRfc3339Utc(
+      resolution.freshness.valid_through,
+      "ResolvedContextV2 freshness valid_through"
+    );
+    if (
+      Date.parse(resolution.freshness.valid_through) <= Date.parse(resolution.freshness.observed_at)
+    ) {
+      throw new SkillSchemaValidationError("ResolvedContextV2 freshness", [
+        "valid_through must follow observed_at",
+      ]);
+    }
+  } else if (resolution.freshness.status === "stale") {
+    assertRfc3339Utc(resolution.freshness.observed_at, "ResolvedContextV2 freshness observed_at");
+    assertRfc3339Utc(resolution.freshness.stale_at, "ResolvedContextV2 freshness stale_at");
+    if (Date.parse(resolution.freshness.stale_at) < Date.parse(resolution.freshness.observed_at)) {
+      throw new SkillSchemaValidationError("ResolvedContextV2 freshness", [
+        "stale_at precedes observed_at",
+      ]);
+    }
+  }
+  assertEligibilityStructure(resolution.eligibility, "ResolvedContextV2 eligibility");
+  assertApprovalStructure(resolution.approval, "ResolvedContextV2 approval");
+  if (resolution.conflict.status !== "none") {
+    assertUnique(resolution.conflict.source_ids, "ResolvedContextV2 conflict sources");
+  }
+  if (resolution.source_kind === "versioned_document") {
+    if (
+      resolution.role === "caller_constraint" ||
+      resolution.verification_disposition === "caller_constraint" ||
+      resolution.approval.status !== "not_required"
+    ) {
+      throw new SkillSchemaValidationError("ResolvedContextV2 document source", [
+        "document role, disposition, or approval state disagrees",
+      ]);
+    }
+  } else if (
+    resolution.role !== "advisory" ||
+    resolution.upstream_locators.length === 0 ||
+    !["advisory_only", "requires_independent_verification"].includes(
+      resolution.verification_disposition
+    )
+  ) {
+    throw new SkillSchemaValidationError("ResolvedContextV2 approved KB source", [
+      "approved KB context must remain advisory, located, and carry current approval state",
+    ]);
+  }
+}
+
+export function validateResolvedContextV2(value: unknown): ResolvedContextV2 {
+  const resolution = validateSkillSchema(ResolvedContextV2Schema, value, "ResolvedContextV2");
+  const content = resolution.content;
+  if (typeof content !== "string" && !(content instanceof Uint8Array)) {
+    throw new SkillSchemaValidationError("ResolvedContextV2.content", [
+      "content must be a string or Uint8Array",
+    ]);
+  }
+  const validated = { ...resolution, content };
+  assertResolutionMetadata(validated);
+  return validated;
+}
+
+function assertActiveInterval(
+  value: {
+    readonly checked_at: string;
+    readonly valid_from: string;
+    readonly valid_through: string;
+  },
+  now: number,
+  label: string
+): void {
+  const checkedAt = Date.parse(value.checked_at);
+  const validFrom = Date.parse(value.valid_from);
+  const validThrough = Date.parse(value.valid_through);
+  if (checkedAt > now) {
+    throw new SkillSchemaValidationError(label, ["checked_at is in the future"]);
+  }
+  if (now < validFrom) {
+    throw new SkillSchemaValidationError(label, ["validity has not started"]);
+  }
+  if (now >= validThrough) {
+    throw new SkillSchemaValidationError(label, [
+      "validity expired at the exclusive valid_through boundary",
+    ]);
+  }
+}
+
+function assertFreshAtUse(freshness: ResolvedContextV2["freshness"], now: number): void {
+  if (freshness.status === "not_time_sensitive") return;
+  if (freshness.status === "stale") {
+    throw new SkillSchemaValidationError("resolved research context freshness", [
+      "source is currently stale",
+    ]);
+  }
+  const observedAt = Date.parse(freshness.observed_at);
+  const validThrough = Date.parse(freshness.valid_through);
+  if (observedAt > now) {
+    throw new SkillSchemaValidationError("resolved research context freshness", [
+      "observed_at is in the future",
+    ]);
+  }
+  if (now >= validThrough) {
+    throw new SkillSchemaValidationError("resolved research context freshness", [
+      "freshness expired at the exclusive valid_through boundary",
+    ]);
+  }
+}
+
+function assertConflictEligibleAtUse(
+  conflict: ResolvedContextV2["conflict"],
+  sourceId: string,
+  boundSourceIds: readonly string[]
+): void {
+  if (conflict.status === "none") return;
+  if (conflict.status === "unresolved") {
+    throw new SkillSchemaValidationError("resolved research context conflict", [
+      "source has a current unresolved conflict",
+    ]);
+  }
+  const allowed = new Set(boundSourceIds);
+  if (
+    !conflict.source_ids.every((candidate) => allowed.has(candidate)) ||
+    !conflict.source_ids.includes(conflict.winner_source_id) ||
+    conflict.winner_source_id !== sourceId
+  ) {
+    throw new SkillSchemaValidationError("resolved research context conflict", [
+      "current conflict does not select this source from the bound source set",
+    ]);
+  }
+}
+
+/**
+ * The single pure use-time check for externally revocable context. `now` is
+ * injected, valid_from is inclusive, and valid_through is exclusive.
+ */
+export function validateContextSourceUseV2(input: {
+  readonly source: ContextSourceRef;
+  readonly resolution: unknown;
+  readonly now: number;
+  readonly boundSourceIds: readonly string[];
+}): ValidatedContextUseV2 {
+  const source = validateVersionedContextSourceRef(input.source, input.boundSourceIds);
+  if (source.source_kind === "caller_input") {
+    throw new SkillSchemaValidationError("resolved research context", [
+      "fixed caller context does not use an external resolver approval",
+    ]);
+  }
+  if (!Number.isSafeInteger(input.now) || input.now < 0) {
+    throw new SkillSchemaValidationError("resolved research context clock", [
+      "now must be a non-negative integer Unix millisecond instant",
+    ]);
+  }
+  const resolution = validateResolvedContextV2(input.resolution);
+  const admittedIdentity = canonicalJson({
+    source_kind: source.source_kind,
+    source_id: source.source_id,
+    role: source.role,
+    scope_id: source.scope_id,
+    media_type: source.content.media_type,
+    revision: source.revision,
+    verification_disposition: source.verification_disposition,
+    provider_id: source.provider.provider_id,
+    provider_configuration_sha256: source.provider.configuration_sha256,
+  });
+  const currentIdentity = canonicalJson({
+    source_kind: resolution.source_kind,
+    source_id: resolution.source_id,
+    role: resolution.role,
+    scope_id: resolution.scope_id,
+    media_type: resolution.media_type,
+    revision: resolution.revision,
+    verification_disposition: resolution.verification_disposition,
+    provider_id: resolution.provider.provider_id,
+    provider_configuration_sha256: resolution.provider.configuration_sha256,
+  });
+  if (admittedIdentity !== currentIdentity) {
+    throw new SkillSchemaValidationError("resolved research context identity", [
+      "source, revision, approval, scope, role, media type, verification disposition, or provider identity drifted",
+    ]);
+  }
+  assertFreshAtUse(resolution.freshness, input.now);
+  if (resolution.eligibility.status !== "eligible") {
+    throw new SkillSchemaValidationError("resolved research context eligibility", [
+      `provider marked the source ineligible (${resolution.eligibility.reason_code})`,
+    ]);
+  }
+  assertActiveInterval(resolution.eligibility, input.now, "resolved research context eligibility");
+  if (resolution.source_kind === "approved_kb_result") {
+    if (resolution.approval.status !== "approved") {
+      throw new SkillSchemaValidationError("resolved research context approval", [
+        `approval is ${resolution.approval.status}`,
+      ]);
+    }
+    assertActiveInterval(resolution.approval, input.now, "resolved research context approval");
+  }
+  assertConflictEligibleAtUse(resolution.conflict, source.source_id, input.boundSourceIds);
+  const bytes = assertResolvedContextContent(source, resolution.content);
+  let content: string;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new SkillSchemaValidationError("resolved research context", [
+      `source '${source.source_id}' is not valid UTF-8`,
+    ]);
+  }
+  const { content: _content, ...current } = resolution;
+  return {
+    content,
+    current,
+    validated_at: new Date(input.now).toISOString(),
+  };
+}
+
 export function assertResolvedContextContent(
-  source: ContextSourceRefV1,
+  source: ContextSourceRef,
   content: string | Uint8Array
 ): Buffer {
   const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : Buffer.from(content);
@@ -892,7 +1372,7 @@ export function assertResolvedContextContent(
   return bytes;
 }
 
-export function assertContextOverlayBudget(sources: readonly ContextSourceRefV1[]): void {
+export function assertContextOverlayBudget(sources: readonly ContextSourceRef[]): void {
   const total = sources.reduce((sum, source) => sum + source.content.utf8_bytes, 0);
   if (total > CONTEXT_TOTAL_BYTES) {
     throw new SkillSchemaValidationError("research context overlay", [

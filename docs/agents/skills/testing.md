@@ -54,7 +54,7 @@ bun run --cwd .pi/extensions/compaction test:unit
 - [ ] Direct/default YAML equality plus registration-bound strict-subset authority
 - [ ] Happy paths and honest negative terminals
 - [ ] Bounded repair and stall/exhaustion behavior
-- [ ] Planned and unplanned human gates
+- [ ] Every declared planned gate and unplanned escalation route
 - [ ] Exact artifact revisions and signed receipts
 - [ ] Restart and compaction recovery
 - [ ] Parallel branch identity and concurrency bounds

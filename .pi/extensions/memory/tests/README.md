@@ -5,13 +5,14 @@ All memory-extension tests are hermetic. Ordinary memory tests exercise the impo
 ## Suites
 
 - `unit/mcp-client.test.ts`: JSON-RPC request IDs, bearer auth, timeout, cancellation, safe-read retry, write no-retry, malformed responses, and typed errors.
-- `unit/policy-config.test.ts`: deny-only role markers, primary bundles, hub-only mode, and owner-only token references.
+- `unit/policy-config.test.ts`: deny-only role markers, primary bundles, hub-only mode, default-off automatic-diary modes/deadlines, and owner-only token references.
 - `unit/logstream-policy.test.ts`: strict default-off advisory config, primary-only/read-only registration, and model-schema routing exclusions.
 - `unit/logstream-client-adapter.test.ts`: pinned HTTP MCP arguments, strict errors/success flags, retry bounds, model limits, and ack scope proof.
 - `unit/result-budget-continuation.test.ts`: giant/multibyte/exact and broad-result REQ-028 fixtures, complete-envelope measurement, cursor binding, expiry, staleness, and byte-exact reassembly.
 - `unit/kg-policy.test.ts`: versioned predicate allowlist and supersede mapping.
 - `integration/registered-tools-budget.test.ts`: actual registered Pi tool execution, budget enforcement, and exact continuation reassembly.
-- `integration/auto_diary.test.ts`: direct/parallel/chain/skill worker shutdown makes zero memory calls; primary diary remains duplicate-safe and bounded.
+- `unit/auto_diary.test.ts`: deterministic new-user-activity selection, bounded ID/digest and isolated-model-input grounding, provenance/privacy admission, adversarial retain coercion, stale sources, and processed-state replay refusal.
+- `integration/auto_diary.test.ts`: one-tool isolated evaluation, adversarial sentinel denial, exact primary active-tool preservation, schedule/cancellation/shutdown races, prose-only/no-call refusal, no-activity/no-recursion behavior, routine/material/sensitive/injected paths, duplicate suppression, stale/forged/unevaluated source refusal, verified processed state, timeout ambiguity, explicit write provenance, worker isolation, and exactly-once shutdown.
 - `integration/mempalace.test.ts`: real HTTP POST against an in-process fake `/mcp` server.
 - `integration/logstream-tools.test.ts`: registered advisory continuation, no ambiguous-write replay, and forbidden upstream surface guards.
 

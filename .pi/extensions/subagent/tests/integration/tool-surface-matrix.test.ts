@@ -86,43 +86,38 @@ function argValue(args: readonly string[], flag: string): string {
 }
 
 function fakeProcess(agent: string) {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
-  const processDouble = {
+  const stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+  const stderr = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+  const processDouble = Object.assign(new EventEmitter(), {
     stdout,
     stderr,
-    killed: false,
-    kill: vi.fn(),
-    on: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
-      if (event === "close") {
-        queueMicrotask(() => {
-          stdout.emit(
-            "data",
-            Buffer.from(
-              `${JSON.stringify({
-                type: "message_end",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: `deterministic ${agent} output` }],
-                  usage: {
-                    input: 0,
-                    output: 0,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    totalTokens: 0,
-                    cost: { total: 0 },
-                  },
-                  stopReason: "stop",
-                },
-              })}\n`
-            )
-          );
-          callback(0);
-        });
-      }
-      return processDouble;
-    }),
-  };
+    kill: vi.fn(() => true),
+  });
+  queueMicrotask(() => {
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `deterministic ${agent} output` }],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { total: 0 },
+            },
+            stopReason: "stop",
+          },
+        })}\n${JSON.stringify({ type: "agent_end" })}\n`
+      )
+    );
+    processDouble.emit("exit", 0, null);
+    processDouble.emit("close", 0, null);
+  });
   return processDouble;
 }
 

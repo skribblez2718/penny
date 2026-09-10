@@ -5,7 +5,11 @@ import {
   type TrustedQuestionnaireBinding,
   type TrustedQuestionnaireQuestion,
 } from "./execution-receipts.js";
-import type { ArtifactDispatchPause, ArtifactDispatchRecovery } from "./dispatch-control.js";
+import {
+  ARTIFACT_DISPATCH_MODE_ENV,
+  type ArtifactDispatchPause,
+  type ArtifactDispatchRecovery,
+} from "./dispatch-control.js";
 import type { ArtifactRef } from "./artifact-client.js";
 import type { SkillIngressRefusalCode } from "./skill-ingress.js";
 
@@ -41,7 +45,7 @@ export interface SkillResult {
   output_artifact_ref?: ArtifactRef;
   /** Path-free exact best partials for honest negative terminals. */
   best_partial_artifact_refs?: ArtifactRef[];
-  /** Owner dispatch pause is non-success and safe to retry from the same checkpoint. */
+  /** Owner pause retryability; false for saved checkpoints that are ineligible to resume. */
   retriable?: boolean;
   /** Closed TypeScript dispatch-pause contract retained for operator tooling. */
   dispatch_pause?: ArtifactDispatchPause;
@@ -490,6 +494,21 @@ function appendExactOutputLines(
   lines.push(theme("muted", `  Read it with artifact_read({"artifact":"${ref.artifact_id}"}).`));
 }
 
+function appendEffectStatus(
+  lines: string[],
+  result: SkillResult,
+  theme: (color: ThemeColor, text: string) => string
+): void {
+  const limitation = result.result?.["effect_limitation"];
+  const notice = result.result?.["effect_scope_notice"];
+  if (typeof limitation === "string" && limitation.length > 0) {
+    lines.push(theme("warning", `  Effect limitation: ${limitation}`));
+  }
+  if (typeof notice === "string" && notice.length > 0) {
+    lines.push(theme("muted", `  Effect scope: ${notice}`));
+  }
+}
+
 function appendAllExactOutputs(
   lines: string[],
   result: SkillResult,
@@ -542,6 +561,7 @@ export function formatResult(
     // The terminal artifact ID must appear HERE, in model-visible content.
     // `details` is not provider-visible, so print every terminal/branch/step ID.
     appendAllExactOutputs(lines, result, theme);
+    appendEffectStatus(lines, result, theme);
 
     if (result.requires_approval && result.plan_steps && result.plan_steps.length > 0) {
       lines.push("");
@@ -584,17 +604,63 @@ export function formatResult(
       }
     }
   } else if (result.dispatch_pause) {
+    const pause = result.dispatch_pause;
+    const recovery = pause.recovery;
     lines.push(theme("warning", `⏸️ ${result.skill_name} dispatch paused`));
-    lines.push(`  State: ${result.state}`);
-    lines.push(`  Session: ${result.session_id}`);
-    lines.push(`  Code: ${result.dispatch_pause.code}`);
-    lines.push(`  Reason: ${result.dispatch_pause.reason}`);
-    lines.push(
-      theme(
-        "muted",
-        `  Retriable: set PENNY_ARTIFACT_DISPATCH_MODE=active, then recover run ${result.dispatch_pause.run_id}.`
-      )
-    );
+    lines.push(`  Run: ${pause.identity.run_id}`);
+    lines.push(`  Session: ${pause.identity.session_id}`);
+    lines.push(`  State: ${pause.state_id}`);
+    lines.push(`  Code: ${pause.code}`);
+    lines.push(`  Reason: ${pause.reason}`);
+    if (recovery.checkpoint_exists === null) {
+      lines.push("  Checkpoint exists: unverified; resumable: false");
+      lines.push(
+        `  Historical checkpoint_preserved claim: ${String(recovery.legacy_checkpoint_preserved_claim)}`
+      );
+    } else {
+      lines.push(
+        `  Checkpoint exists: ${String(recovery.checkpoint_exists)}; resumable: ${String(recovery.resumable)}`
+      );
+    }
+    if (pause.dispatch.code === "DISPATCH_MODE_INVALID") {
+      lines.push(theme("warning", `  Dispatch setting: invalid (fails closed as paused)`));
+    }
+    if (recovery.kind === "recoverable_checkpoint") {
+      lines.push(
+        theme(
+          "muted",
+          `  Recovery: set ${ARTIFACT_DISPATCH_MODE_ENV}=${recovery.requires_dispatch_mode}, then recover run ${recovery.identity.run_id} in session ${recovery.identity.session_id} from state ${recovery.state_id}.`
+        )
+      );
+    } else if (recovery.kind === "start_retry") {
+      const checkpointFact = recovery.checkpoint_exists
+        ? "An admission checkpoint row exists, but it is not a resumable run checkpoint."
+        : "No engine checkpoint exists for this attempted start.";
+      const retryTarget = result.chain_session_id
+        ? `resume chain ${result.chain_session_id}`
+        : `retry the original ${result.skill_name} start for session ${recovery.identity.session_id}`;
+      lines.push(theme("muted", `  Recovery: ${checkpointFact}`));
+      lines.push(
+        theme(
+          "muted",
+          `  Set ${ARTIFACT_DISPATCH_MODE_ENV}=${recovery.requires_dispatch_mode}, then ${retryTarget}.`
+        )
+      );
+    } else if (recovery.checkpoint_exists === null) {
+      lines.push(
+        theme(
+          "warning",
+          `  Compatibility (${recovery.ineligibility_code}): ${recovery.reason} Do not recover; use status or cancel for run ${recovery.identity.run_id}.`
+        )
+      );
+    } else {
+      lines.push(
+        theme(
+          "warning",
+          `  Recovery (${recovery.ineligibility_code}): ${recovery.reason} Checkpoint exists but is not eligible to resume. Do not recover; use status or cancel for run ${recovery.identity.run_id}.`
+        )
+      );
+    }
   } else if (result.escalation) {
     const esc = result.escalation;
 
@@ -670,6 +736,7 @@ export function formatResult(
       lines.push(`  Error: ${error}`);
     }
     appendAllExactOutputs(lines, result, theme);
+    appendEffectStatus(lines, result, theme);
   }
 
   return lines.join("\n");

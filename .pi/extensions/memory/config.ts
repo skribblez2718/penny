@@ -10,9 +10,19 @@ import {
 } from "platform-memory";
 
 import { ToolResultBudgetConfigError, resolveToolResultBudget } from "../lib/tool-result-budget.js";
-import { MemoryError, type MemoryLogstreamConfig, type MemoryRuntimeConfig } from "./types.js";
+import {
+  AUTO_DIARY_MAX_SHUTDOWN_TIMEOUT_MS,
+  AUTO_DIARY_MIN_SHUTDOWN_TIMEOUT_MS,
+} from "./auto-diary.js";
+import {
+  MemoryError,
+  type MemoryAutoDiaryConfig,
+  type MemoryLogstreamConfig,
+  type MemoryRuntimeConfig,
+} from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_AUTO_DIARY_SHUTDOWN_TIMEOUT_MS = 2_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_SOURCE_CACHE_BYTES = 32 * 1024 * 1024;
 const DEFAULT_CURSOR_TTL_MS = 5 * 60 * 1_000;
@@ -132,6 +142,10 @@ export function loadWorkerReadConfig(
   return {
     mode: "hub",
     writeEnabled: false,
+    autoDiary: {
+      mode: "disabled",
+      shutdownTimeoutMs: DEFAULT_AUTO_DIARY_SHUTDOWN_TIMEOUT_MS,
+    },
     logstream: { mode: "disabled", stream: null, rooms: [] },
     platformConfig: validated,
     bearerToken,
@@ -274,6 +288,25 @@ function parseWriteEnabled(raw: string | undefined): boolean {
   configError("PENNY_MEMORY_WRITE_MODE must be disabled or enabled");
 }
 
+function parseAutoDiaryConfig(
+  env: Readonly<Record<string, string | undefined>>
+): MemoryAutoDiaryConfig {
+  const mode = env.PENNY_MEMORY_AUTO_DIARY_MODE?.trim() || "disabled";
+  if (mode !== "disabled" && mode !== "observe-only" && mode !== "retain") {
+    configError("PENNY_MEMORY_AUTO_DIARY_MODE must be disabled, observe-only, or retain");
+  }
+  return {
+    mode,
+    shutdownTimeoutMs: parseInteger(
+      env.PENNY_MEMORY_AUTO_DIARY_TIMEOUT_MS,
+      "PENNY_MEMORY_AUTO_DIARY_TIMEOUT_MS",
+      DEFAULT_AUTO_DIARY_SHUTDOWN_TIMEOUT_MS,
+      AUTO_DIARY_MIN_SHUTDOWN_TIMEOUT_MS,
+      AUTO_DIARY_MAX_SHUTDOWN_TIMEOUT_MS
+    ),
+  };
+}
+
 function parseLogstreamConfig(
   env: Readonly<Record<string, string | undefined>>,
   memoryMode: "hub" | "disabled"
@@ -331,6 +364,7 @@ export function loadMemoryRuntimeConfig(
   env: Readonly<Record<string, string | undefined>>
 ): MemoryRuntimeConfig {
   const mode = parseMode(env.PENNY_MEMORY_MODE);
+  const autoDiary = parseAutoDiaryConfig(env);
   const logstream = parseLogstreamConfig(env, mode);
   if (mode === "disabled") {
     let budget;
@@ -343,6 +377,7 @@ export function loadMemoryRuntimeConfig(
     return {
       mode,
       writeEnabled: false,
+      autoDiary,
       logstream,
       platformConfig: {
         contractVersion: 1,
@@ -420,6 +455,7 @@ export function loadMemoryRuntimeConfig(
   return {
     mode,
     writeEnabled: parseWriteEnabled(env.PENNY_MEMORY_WRITE_MODE),
+    autoDiary,
     logstream,
     platformConfig,
     bearerToken,

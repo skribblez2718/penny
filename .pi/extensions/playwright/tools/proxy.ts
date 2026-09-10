@@ -16,6 +16,8 @@ import type { PlaywrightConfig, ProxyConfig } from "../types.js";
 import { BrowserManager } from "../browser.js";
 
 export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
+  const browser = BrowserManager.getBrowser();
+
   // ==========================================================================
   // playwright_get_proxy_info
   // ==========================================================================
@@ -77,10 +79,18 @@ export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
     name: "playwright_check_proxy_reachable",
     label: "Check Proxy Reachability",
     description:
-      "Check whether the configured proxy is currently reachable before relying on proxied browser traffic. Returns latency and reachability, or an explanation when no proxy is configured.",
+      "Check whether the configured proxy is currently reachable. Refused in restricted network-policy scopes because it opens a raw TCP connection outside browser interception.",
     promptSnippet: "Check if proxy is reachable",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params) {
+      const denial = browser.restrictedOperationDenial("proxy-reachability-check");
+      if (denial !== null) {
+        return {
+          content: [{ type: "text" as const, text: `${denial.code}: ${denial.message}` }],
+          details: { reasonCode: denial.code, operation: "proxy-reachability-check" },
+          isError: true,
+        };
+      }
       const proxy = BrowserManager.getEffectiveProxy(config);
       if (!proxy) {
         return {
@@ -158,7 +168,7 @@ export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
                 {
                   reachable: false,
                   latencyMs: Date.now() - start,
-                  error: err instanceof Error ? err.message : String(err),
+                  error: browser.safeErrorMessage(err),
                 },
                 null,
                 2
@@ -178,7 +188,7 @@ export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
     name: "playwright_set_proxy",
     label: "Set Browser Proxy",
     description:
-      "Route Playwright browser traffic through an explicit custom proxy, or turn the proxy off for direct traffic. The current browser, pages, and tabs are closed; navigate again and use playwright_check_proxy_reachable before relying on the new proxy.",
+      "Route unrestricted Playwright browser traffic through a custom proxy, or turn the proxy off. Refused in restricted network-policy scopes because proxy transport is outside request interception.",
     promptSnippet: "Toggle the browser proxy: off | custom",
     parameters: Type.Union([
       Type.Object({
@@ -198,6 +208,14 @@ export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
       }),
     ]),
     async execute(_toolCallId, params) {
+      const denial = browser.restrictedOperationDenial("proxy-mutation");
+      if (denial !== null) {
+        return {
+          content: [{ type: "text" as const, text: `${denial.code}: ${denial.message}` }],
+          details: { reasonCode: denial.code, operation: "proxy-mutation" },
+          isError: true,
+        };
+      }
       let proxy: ProxyConfig | null;
       let summary: string;
 
@@ -231,12 +249,9 @@ export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
       BrowserManager.setProxyOverride(proxy);
 
       // Close the running browser so the next navigation relaunches with the new proxy.
-      let browserRelaunched = false;
       const manager = BrowserManager.getBrowser();
-      if (manager.isConnected()) {
-        await manager.cleanup();
-        browserRelaunched = true;
-      }
+      const browserRelaunched = manager.isAnyScopeConnected();
+      await manager.cleanupOrdinaryScopes();
 
       return {
         content: [

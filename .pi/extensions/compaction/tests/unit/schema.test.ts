@@ -81,9 +81,9 @@ const validArtifact = {
   },
 };
 
-describe("PennyCompactArtifactSchema v3", () => {
+describe("PennyCompactArtifactSchema v3.1", () => {
   it("accepts the strict current schema", () => {
-    expect(SCHEMA_VERSION).toBe("3.0.0");
+    expect(SCHEMA_VERSION).toBe("3.1.0");
     expect(PennyCompactArtifactSchema.safeParse(validArtifact).success).toBe(true);
   });
 
@@ -97,7 +97,7 @@ describe("PennyCompactArtifactSchema v3", () => {
 
   it("rejects unsupported versions and legacy memory fields", () => {
     expect(
-      PennyCompactArtifactSchema.safeParse({ ...validArtifact, schema_version: "2.3.0" }).success
+      PennyCompactArtifactSchema.safeParse({ ...validArtifact, schema_version: "3.0.0" }).success
     ).toBe(false);
     expect(
       PennyCompactArtifactSchema.safeParse({ ...validArtifact, mempalace_rooms: [] }).success
@@ -115,6 +115,20 @@ describe("PennyCompactArtifactSchema v3", () => {
           eviction_log: [],
           compaction_correlation: validArtifact.metadata.compaction_correlation,
           surprise: true,
+        },
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects contradictory normalized skill completion state", () => {
+    expect(
+      PennyCompactArtifactSchema.safeParse({
+        ...validArtifact,
+        dominant_skill: {
+          skill_name: "code",
+          goal: "Implement the boundary",
+          completed: true,
+          result_status: "failure",
         },
       }).success
     ).toBe(false);
@@ -143,6 +157,10 @@ describe("strict resume and selected-ref schemas", () => {
 
   it("validates full selected artifact shape and digest/store consistency", () => {
     expect(ArtifactRefSchema.safeParse(artifactRef()).success).toBe(true);
+    const current = { ...artifactRef(), schema_version: 2 } as Record<string, unknown>;
+    delete current.consumer_scope;
+    current.content_schema = { schema_id: "penny.code-result.v1", schema_version: 1 };
+    expect(ArtifactRefSchema.safeParse(current).success).toBe(true);
     expect(
       ArtifactRefSchema.safeParse({
         ...artifactRef(),

@@ -88,7 +88,7 @@ export function registerPdfTools(pi: ExtensionAPI, config: PlaywrightConfig) {
       "⚠️ UNSAFE: Execute arbitrary Playwright Node.js code with full system access. " +
       "The code can access page, browser, context objects and any Node.js API. " +
       "Use ONLY as a last resort when standard tools are insufficient. " +
-      "Requires PLAYWRIGHT_ALLOW_UNSAFE=true.",
+      "Requires PLAYWRIGHT_ALLOW_UNSAFE=true and is always refused in restricted network-policy scopes.",
     promptSnippet: "⚠️ Run arbitrary Playwright code (unsafe)",
     parameters: Type.Object({
       code: Type.String({
@@ -97,6 +97,14 @@ export function registerPdfTools(pi: ExtensionAPI, config: PlaywrightConfig) {
       }),
     }),
     async execute(_toolCallId, params) {
+      const policyDenial = browser.restrictedOperationDenial("unsafe-code");
+      if (policyDenial !== null) {
+        return {
+          content: [{ type: "text", text: `${policyDenial.code}: ${policyDenial.message}` }],
+          details: { reasonCode: policyDenial.code, operation: "unsafe-code" },
+          isError: true,
+        };
+      }
       if (!config.allowUnsafe) {
         return {
           content: [
@@ -134,7 +142,7 @@ export function registerPdfTools(pi: ExtensionAPI, config: PlaywrightConfig) {
           content: [
             {
               type: "text",
-              text: `Unsafe code error: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Unsafe code error: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,

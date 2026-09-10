@@ -23,27 +23,38 @@ import {
 import { RunContext } from "../context.js";
 import {
   AssessmentDraftValidationError,
-  assertAssessmentLineage,
-  assessmentDraftPromptContract,
-  assessmentProductEnvelopeId,
-  assessmentProductIntegrityId,
+  assertAssessmentLineageV2,
+  assessmentDraftPromptContractV2,
+  assessmentProductEnvelopeIdV2,
+  assessmentProductIntegrityIdV2,
   assessmentRequestConstraints,
-  assessmentValidityReceiptId,
+  assessmentValidityReceiptIdV2,
   canonicalizeAssessmentRequest,
-  parsePersistedAssessmentDraft,
-  sealAssessmentDraft,
-  validateAssessmentProductEnvelope,
-  validateAssessmentProductIntegrity,
+  parsePersistedAssessmentDraftV2,
+  sealAssessmentDraftV2,
+  validateAssessmentProductEnvelopeV2,
+  validateAssessmentProductIntegrityV2,
   validateAssessmentRequest,
   validateAssessmentSealFeedback,
-  validateAssessmentValidityReceipt,
-  validateCanonicalAssessmentBytes,
-  type AssessmentDraftV1,
-  type AssessmentProductEnvelopeV1,
-  type AssessmentProductIntegrityV1,
+  validateAssessmentValidityReceiptV2,
+  validateCanonicalAssessmentV2Bytes,
+  type AssessmentDraftV2,
+  type AssessmentProductEnvelopeV2,
+  type AssessmentProductIntegrityV2,
   type AssessmentRequestV1,
-  type AssessmentValidityReceiptV1,
+  type AssessmentValidityReceiptV2,
 } from "../skill-contracts/assess.js";
+import {
+  ASSESS_EFFECT_PHASES,
+  collectEffectEvidence,
+  effectEvidenceSha256,
+  unknownEffectEvidenceGraph,
+  BOUNDED_EFFECT_NOTICE,
+  UNKNOWN_EFFECT_LIMITATION,
+  EFFECT_POLICY_VIOLATION_LIMITATION,
+  type EffectEvidenceGraphV1,
+  type EffectEvidenceProviderV1,
+} from "../skill-contracts/effects.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
 import {
   hostContinuation,
@@ -214,8 +225,8 @@ export const ASSESS_SKILL_CONTRACT: SkillContract = {
         name: "assessment",
         direction: "output",
         transport: "artifact",
-        schema_id: "penny.assessment.v1",
-        schema_version_required: 1,
+        schema_id: "penny.assessment.v2",
+        schema_version_required: 2,
         artifact_kind: "semantic-core",
         source: "skill",
         min_items: 1,
@@ -272,8 +283,8 @@ export const ASSESS_SKILL_CONTRACT: SkillContract = {
     required_receipt_predicates: ["assess_latest_verified_assessment_dod.v1"],
     latest_product: {
       selector: "terminal_artifact",
-      schema_id: "penny.assessment.v1",
-      product_schema_version: 1,
+      schema_id: "penny.assessment.v2",
+      product_schema_version: 2,
       artifact_kind: "semantic-core",
       producing_state: "sealing_assessment",
     },
@@ -344,8 +355,8 @@ function latestAssessmentArtifact(context: RunContext): ArtifactRef | undefined 
     (artifact) =>
       artifact.kind === "semantic-core" &&
       artifact.phase === "sealing_assessment" &&
-      artifact.content_schema?.schema_id === "penny.assessment.v1" &&
-      artifact.content_schema.schema_version === 1
+      artifact.content_schema?.schema_id === "penny.assessment.v2" &&
+      artifact.content_schema.schema_version === 2
   );
 }
 
@@ -380,6 +391,20 @@ function latestIntegrityArtifact(context: RunContext): ArtifactRef | undefined {
 
 function latestEnvelopeArtifact(context: RunContext): ArtifactRef | undefined {
   return selectedLatest(context, (artifact) => artifact.kind === "assessment-product-envelope");
+}
+
+const LEGACY_ASSESS_EFFECT_SCHEMAS = new Set([
+  "penny.assessment-draft.v1",
+  "penny.assessment.v1",
+  "penny.assessment-validity-receipt.v1",
+  "penny.assessment-product-integrity.v1",
+  "penny.assessment-product-envelope.v1",
+]);
+
+function legacyAssessmentEffectArtifact(context: RunContext): ArtifactRef | undefined {
+  return context.selectedArtifacts.find((artifact) =>
+    LEGACY_ASSESS_EFFECT_SCHEMAS.has(artifact.content_schema?.schema_id ?? "")
+  );
 }
 
 function canonicalAssessmentRequest(
@@ -483,7 +508,7 @@ function outputMetadata(
       ? {
           artifactKind: "assessment-draft",
           mediaType: "text/plain; charset=utf-8",
-          contentSchema: { schema_id: "penny.assessment-draft.v1", schema_version: 1 },
+          contentSchema: { schema_id: "penny.assessment-draft.v2", schema_version: 2 },
         }
       : {};
   return buildOutputArtifactMetadata({
@@ -514,7 +539,7 @@ function refsForState(context: RunContext, state: AssessWorkerState): readonly A
     return uniqueRefs([request, analysis, draft, assessment, vera, sealFeedback]);
   }
   if (draft === undefined || assessment === undefined) {
-    throw new Error("Vera requires the exact latest Carren draft and sealed AssessmentV1");
+    throw new Error("Vera requires the exact latest Carren draft and sealed AssessmentV2");
   }
   return [request, analysis, draft, assessment];
 }
@@ -523,7 +548,7 @@ function slotForRef(ref: ArtifactRef): string {
   if (ref.kind === "assessment-request") return "assessment-request";
   if (ref.phase === "analyzing_assessment") return "latest-annie-analysis";
   if (ref.kind === "assessment-draft") return "latest-carren-assessment-draft";
-  if (ref.content_schema?.schema_id === "penny.assessment.v1") return "latest-assessment";
+  if (ref.content_schema?.schema_id === "penny.assessment.v2") return "latest-assessment";
   if (ref.phase === "verifying_assessment") return "latest-vera-report";
   if (ref.kind === "assessment-seal-feedback") return "assessment-seal-feedback";
   return `input-${ref.artifact_id.slice(-12)}`;
@@ -541,13 +566,13 @@ function taskForState(state: AssessWorkerState): string {
     case "authoring_assessment":
       return [
         boundary,
-        `MECHANICALLY_PROJECTED_ASSESSMENT_DRAFT_CONTRACT:${assessmentDraftPromptContract()}`,
-        "As the subjective quality judge, author one complete replacement AssessmentDraftV1 from the exact request and current Annie analysis. Include one outcome per exact criterion, evidence-linked strengths and gaps, bounded advice-only improvements, assumptions, uncertainties, complete request coverage, and the truthful categorical disposition. Use no numeric score. Repair all applicable Vera or seal-feedback findings in one replacement draft.",
+        `MECHANICALLY_PROJECTED_ASSESSMENT_DRAFT_CONTRACT:${assessmentDraftPromptContractV2()}`,
+        "As the subjective quality judge, author one complete replacement AssessmentDraftV2 from the exact request and current Annie analysis. Include one outcome per exact criterion, evidence-linked strengths and gaps, bounded advice-only improvements, assumptions, uncertainties, complete request coverage, and the truthful categorical disposition. Use no numeric score. Repair all applicable Vera or seal-feedback findings in one replacement draft.",
       ].join("\n\n");
     case "verifying_assessment":
       return [
         boundary,
-        "Independently verify the exact latest host-sealed AssessmentV1 against the exact request, Annie analysis, and Carren draft. Check every criterion index exactly once, supplied-evidence index fidelity, supporting/contradicting separation, disposition invariants, strengths/gaps/improvement linkage, complete request coverage, exact request/analysis/draft/source lineage, canonical no-score product shape, and all false consequence flags. Do not replace Carren's subjective judgment with your own quality judgment and do not repair the product.",
+        "Independently verify the exact latest host-sealed AssessmentV2 against the exact request, Annie analysis, and Carren draft. Check every criterion index exactly once, supplied-evidence index fidelity, supporting/contradicting separation, disposition invariants, strengths/gaps/improvement linkage, complete request coverage, exact request/analysis/draft/source lineage, canonical no-score product shape, and the host-authored versioned effect graph. Treat unknown effect observations or controls as unknown, not as proof of absence. Do not replace Carren's subjective judgment with your own quality judgment and do not repair the product.",
         "PASS only when every objective check holds. FAIL uses analysis_gap/annie for target or criterion decomposition defects, evidence_gap/annie for supplied-evidence mapping defects, or assessment_product_gap/carren for product/schema/disposition/coverage defects. Never emit a target state.",
       ].join("\n\n");
   }
@@ -695,14 +720,18 @@ function persistSealedAssessment(input: {
   readonly request: ArtifactRef;
   readonly analysis: ArtifactRef;
   readonly draft: ArtifactRef;
-  readonly draftValue: AssessmentDraftV1;
+  readonly draftValue: AssessmentDraftV2;
 }): { readonly artifact: ArtifactRef; readonly added: boolean } {
-  const assessment = sealAssessmentDraft({
+  const assessment = sealAssessmentDraftV2({
     request: canonicalAssessmentRequest(input.store, input.context),
     draft: input.draftValue,
     requestRef: input.request,
     analysisRef: input.analysis,
     draftRef: input.draft,
+    effectEvidence: unknownEffectEvidenceGraph({
+      runId: input.context.identity.run_id,
+      phases: ASSESS_EFFECT_PHASES,
+    }),
   });
   const content = canonicalJson(assessment);
   const upstreamRefs = [input.request, input.analysis, input.draft];
@@ -732,7 +761,7 @@ function persistSealedAssessment(input: {
     canonicalJson(input.store.metadata(interrupted).upstream_refs) === canonicalJson(upstreamRefs)
   ) {
     input.store.select(interrupted);
-    validateCanonicalAssessmentBytes(input.store.readById(interrupted.artifact_id), interrupted);
+    validateCanonicalAssessmentV2Bytes(input.store.readById(interrupted.artifact_id), interrupted);
     return { artifact: interrupted, added: addSelectedArtifact(input.context, interrupted) };
   }
   const version = Math.max(parent?.version ?? 0, storedVersion) + 1;
@@ -748,7 +777,7 @@ function persistSealedAssessment(input: {
           version - 1
         );
   if (version > 1 && parentRef === null) {
-    throw new Error("AssessmentV1 revision chain is missing its preceding product");
+    throw new Error("AssessmentV2 revision chain is missing its preceding product");
   }
   const metadata: OutputArtifactMetadata = {
     schema_version: 2,
@@ -760,7 +789,7 @@ function persistSealedAssessment(input: {
     version,
     producer: "host:assessment-sealer",
     media_type: "application/json",
-    content_schema: { schema_id: "penny.assessment.v1", schema_version: 1 },
+    content_schema: { schema_id: "penny.assessment.v2", schema_version: 2 },
     parent_ref: parentRef,
     upstream_refs: upstreamRefs,
   };
@@ -777,12 +806,12 @@ function persistSealedAssessment(input: {
     canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
     input.store.readById(artifact.artifact_id).toString("utf8") !== content
   ) {
-    throw new Error("AssessmentV1 diverged from deterministic host sealing");
+    throw new Error("AssessmentV2 diverged from deterministic host sealing");
   }
   const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("AssessmentV1 failed manifest re-read");
+  if (reread === undefined) throw new Error("AssessmentV2 failed manifest re-read");
   input.store.select(reread);
-  validateCanonicalAssessmentBytes(input.store.readById(reread.artifact_id), reread);
+  validateCanonicalAssessmentV2Bytes(input.store.readById(reread.artifact_id), reread);
   return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
 }
 
@@ -960,10 +989,10 @@ function matchingValidityReceipt(input: {
     readonly report: ArtifactRef;
     readonly result: PhaseResult;
   };
-}): { readonly artifact: ArtifactRef; readonly value: AssessmentValidityReceiptV1 } | undefined {
+}): { readonly artifact: ArtifactRef; readonly value: AssessmentValidityReceiptV2 } | undefined {
   const artifact = latestValidityReceiptArtifact(input.context);
   if (artifact === undefined) return undefined;
-  const value = readCanonicalJson(input.store, artifact, validateAssessmentValidityReceipt);
+  const value = readCanonicalJson(input.store, artifact, validateAssessmentValidityReceiptV2);
   return canonicalJson(value.request_ref) === canonicalJson(input.subject.request) &&
     canonicalJson(value.analysis_ref) === canonicalJson(input.subject.analysis) &&
     canonicalJson(value.draft_ref) === canonicalJson(input.subject.draft) &&
@@ -980,9 +1009,10 @@ function ensureValidityReceipt(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
   readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
+  readonly effectEvidenceProvider?: EffectEvidenceProviderV1;
 }): {
   readonly artifact: ArtifactRef;
-  readonly value: AssessmentValidityReceiptV1;
+  readonly value: AssessmentValidityReceiptV2;
   readonly added: boolean;
 } {
   const subject = currentAssessmentSubject(input.context);
@@ -990,9 +1020,9 @@ function ensureValidityReceipt(input: {
   if (evidence === undefined) throw new Error("latest-product Vera PASS is absent");
   const existing = matchingValidityReceipt({ ...input, subject, evidence });
   if (existing !== undefined) return { ...existing, added: false };
-  const body: Omit<AssessmentValidityReceiptV1, "receipt_id"> = {
-    schema_id: "penny.assessment-validity-receipt.v1",
-    schema_version: 1,
+  const body: Omit<AssessmentValidityReceiptV2, "receipt_id"> = {
+    schema_id: "penny.assessment-validity-receipt.v2",
+    schema_version: 2,
     run_id: input.context.identity.run_id,
     verdict: "PASS",
     reviewer: "vera",
@@ -1004,15 +1034,18 @@ function ensureValidityReceipt(input: {
     execution_receipt_id: evidence.result.worker_receipt.receipt_id,
     execution_result_sha256: sha256(canonicalJson(evidence.result)),
     created_at: evidence.result.worker_receipt.ended_at,
-    external_actions_performed: false,
-    filesystem_writes_performed: false,
-    tests_executed: false,
-    changes_started: false,
+    effect_evidence: collectEffectEvidence({
+      runId: input.context.identity.run_id,
+      phases: ASSESS_EFFECT_PHASES,
+      ...(input.effectEvidenceProvider === undefined
+        ? {}
+        : { provider: input.effectEvidenceProvider }),
+    }),
     minted_by: "host:assessment-validity-authority",
   };
-  const value = validateAssessmentValidityReceipt({
+  const value = validateAssessmentValidityReceiptV2({
     ...body,
-    receipt_id: assessmentValidityReceiptId(body),
+    receipt_id: assessmentValidityReceiptIdV2(body),
   });
   const persisted = persistVersionedHostArtifact({
     context: input.context,
@@ -1022,7 +1055,7 @@ function ensureValidityReceipt(input: {
     kind: "assessment-validity-receipt",
     operationLabel: "validity-receipt",
     producer: "host:assessment-validity-authority",
-    contentSchema: { schema_id: "penny.assessment-validity-receipt.v1", schema_version: 1 },
+    contentSchema: { schema_id: "penny.assessment-validity-receipt.v2", schema_version: 2 },
     upstreamRefs: [...subjectRefs(subject), evidence.report],
     content: canonicalJson(value),
   });
@@ -1053,38 +1086,39 @@ function ensureProductIntegrity(input: {
   readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
   readonly validity: {
     readonly artifact: ArtifactRef;
-    readonly value: AssessmentValidityReceiptV1;
+    readonly value: AssessmentValidityReceiptV2;
   };
 }): {
   readonly artifact: ArtifactRef;
-  readonly value: AssessmentProductIntegrityV1;
+  readonly value: AssessmentProductIntegrityV2;
   readonly added: boolean;
 } {
   const subject = currentAssessmentSubject(input.context);
   const request = canonicalAssessmentRequest(input.store, input.context);
-  const draft = parsePersistedAssessmentDraft(input.store.readById(subject.draft.artifact_id), {
+  const draft = parsePersistedAssessmentDraftV2(input.store.readById(subject.draft.artifact_id), {
     request,
   }).draft;
-  const assessment = validateCanonicalAssessmentBytes(
+  const assessment = validateCanonicalAssessmentV2Bytes(
     input.store.readById(subject.assessment.artifact_id),
     subject.assessment
   );
-  assertAssessmentLineage({
+  assertAssessmentLineageV2({
     assessment,
     request,
     draft,
     requestRef: subject.request,
     analysisRef: subject.analysis,
     draftRef: subject.draft,
+    effectEvidence: assessment.effect_evidence,
   });
   const executionReceiptIds = exactExecutionReceiptIds({
     context: input.context,
     checkpointer: input.checkpointer,
     artifacts: [subject.analysis, subject.draft, input.validity.value.vera_report_ref],
   });
-  const body: Omit<AssessmentProductIntegrityV1, "integrity_id"> = {
-    schema_id: "penny.assessment-product-integrity.v1",
-    schema_version: 1,
+  const body: Omit<AssessmentProductIntegrityV2, "integrity_id"> = {
+    schema_id: "penny.assessment-product-integrity.v2",
+    schema_version: 2,
     status: "PASS",
     request_ref: subject.request,
     analysis_ref: subject.analysis,
@@ -1102,16 +1136,14 @@ function ensureProductIntegrity(input: {
       "latest_vera_pass",
       "signed_worker_evidence",
       "current_product_receipt",
-      "no_actions_writes_tests_or_changes",
+      "effect_evidence_consistency",
     ],
-    external_actions_performed: false,
-    filesystem_writes_performed: false,
-    tests_executed: false,
-    changes_started: false,
+    product_effect_evidence_sha256: effectEvidenceSha256(assessment.effect_evidence),
+    effect_evidence: input.validity.value.effect_evidence,
   };
-  const value = validateAssessmentProductIntegrity({
+  const value = validateAssessmentProductIntegrityV2({
     ...body,
-    integrity_id: assessmentProductIntegrityId(body),
+    integrity_id: assessmentProductIntegrityIdV2(body),
   });
   const persisted = persistVersionedHostArtifact({
     context: input.context,
@@ -1121,7 +1153,7 @@ function ensureProductIntegrity(input: {
     kind: "assessment-product-integrity",
     operationLabel: "product-integrity",
     producer: "host:assessment-product-validator",
-    contentSchema: { schema_id: "penny.assessment-product-integrity.v1", schema_version: 1 },
+    contentSchema: { schema_id: "penny.assessment-product-integrity.v2", schema_version: 2 },
     upstreamRefs: [
       ...subjectRefs(subject),
       input.validity.value.vera_report_ref,
@@ -1137,18 +1169,18 @@ function ensureProductEnvelope(input: {
   readonly store: ArtifactHostStore;
   readonly validity: {
     readonly artifact: ArtifactRef;
-    readonly value: AssessmentValidityReceiptV1;
+    readonly value: AssessmentValidityReceiptV2;
   };
   readonly integrity: ArtifactRef;
 }): {
   readonly artifact: ArtifactRef;
-  readonly value: AssessmentProductEnvelopeV1;
+  readonly value: AssessmentProductEnvelopeV2;
   readonly added: boolean;
 } {
   const subject = currentAssessmentSubject(input.context);
-  const body: Omit<AssessmentProductEnvelopeV1, "envelope_id"> = {
-    schema_id: "penny.assessment-product-envelope.v1",
-    schema_version: 1,
+  const body: Omit<AssessmentProductEnvelopeV2, "envelope_id"> = {
+    schema_id: "penny.assessment-product-envelope.v2",
+    schema_version: 2,
     run_id: input.context.identity.run_id,
     status: "complete",
     request_ref: subject.request,
@@ -1158,10 +1190,11 @@ function ensureProductEnvelope(input: {
     vera_report_ref: input.validity.value.vera_report_ref,
     validity_receipt_ref: input.validity.artifact,
     integrity_ref: input.integrity,
+    effect_evidence: input.validity.value.effect_evidence,
   };
-  const value = validateAssessmentProductEnvelope({
+  const value = validateAssessmentProductEnvelopeV2({
     ...body,
-    envelope_id: assessmentProductEnvelopeId(body),
+    envelope_id: assessmentProductEnvelopeIdV2(body),
   });
   const persisted = persistVersionedHostArtifact({
     context: input.context,
@@ -1171,7 +1204,7 @@ function ensureProductEnvelope(input: {
     kind: "assessment-product-envelope",
     operationLabel: "product-envelope",
     producer: "host:assessment-product-validator",
-    contentSchema: { schema_id: "penny.assessment-product-envelope.v1", schema_version: 1 },
+    contentSchema: { schema_id: "penny.assessment-product-envelope.v2", schema_version: 2 },
     upstreamRefs: [
       ...subjectRefs(subject),
       input.validity.value.vera_report_ref,
@@ -1234,7 +1267,8 @@ export class AssessPlaybook
     private readonly revisions?: ArtifactRevisionLookup,
     private readonly artifactStore?: ArtifactHostStore,
     private readonly checkpointer?: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"],
-    private readonly hostFault?: (point: string) => void
+    private readonly hostFault?: (point: string) => void,
+    private readonly effectEvidenceProvider?: EffectEvidenceProviderV1
   ) {}
 
   initialize(context: RunContext): Directive {
@@ -1431,13 +1465,34 @@ export class AssessPlaybook
   needsHostContinuation(context: RunContext): boolean {
     return (
       context.terminalDirective === null &&
-      (context.stateId === "sealing_assessment" || context.stateId === "admitting_assessment")
+      (legacyAssessmentEffectArtifact(context) !== undefined ||
+        context.stateId === "sealing_assessment" ||
+        context.stateId === "admitting_assessment")
     );
   }
 
   continueHost(context: RunContext): HostContinuationStepV1 {
     if (!this.needsHostContinuation(context)) {
       throw new Error(`assess state '${context.stateId}' has no deterministic host continuation`);
+    }
+    const legacy = legacyAssessmentEffectArtifact(context);
+    if (legacy !== undefined) {
+      return {
+        event_type: "assessment_legacy_effect_checkpoint_refused",
+        payload: {
+          run_id: context.identity.run_id,
+          legacy_artifact_id: legacy.artifact_id,
+          legacy_schema_id: legacy.content_schema?.schema_id ?? "unknown",
+        },
+        directive: this.terminal(
+          context,
+          "incomplete",
+          false,
+          ["active V1 checkpoint carries only legacy unverified effect assertions"],
+          undefined,
+          { incomplete_reason: "legacy_effect_evidence_unverified" }
+        ),
+      };
     }
     const store = this.artifactStore;
     const checkpointer = this.checkpointer;
@@ -1446,7 +1501,14 @@ export class AssessPlaybook
     }
     if (context.stateId === "sealing_assessment") return this.continueSealing(context, store);
     const subject = currentAssessmentSubject(context);
-    const validity = ensureValidityReceipt({ context, store, checkpointer });
+    const validity = ensureValidityReceipt({
+      context,
+      store,
+      checkpointer,
+      ...(this.effectEvidenceProvider === undefined
+        ? {}
+        : { effectEvidenceProvider: this.effectEvidenceProvider }),
+    });
     if (validity.added) {
       this.hostFault?.("admitting_assessment:validity-receipt-persistence");
       return {
@@ -1456,6 +1518,25 @@ export class AssessPlaybook
           assessment_artifact_id: subject.assessment.artifact_id,
           receipt_artifact_id: validity.artifact.artifact_id,
         },
+      };
+    }
+    if (validity.value.effect_evidence.assurance === "policy_violation") {
+      return {
+        event_type: "assessment_effect_policy_violation",
+        payload: {
+          run_id: context.identity.run_id,
+          assessment_artifact_id: subject.assessment.artifact_id,
+          effect_evidence_sha256: effectEvidenceSha256(validity.value.effect_evidence),
+        },
+        directive: this.terminal(
+          context,
+          "incomplete",
+          false,
+          [EFFECT_POLICY_VIOLATION_LIMITATION],
+          undefined,
+          { incomplete_reason: "effect_policy_violation" },
+          validity.value.effect_evidence
+        ),
       };
     }
     const integrity = ensureProductIntegrity({
@@ -1530,9 +1611,9 @@ export class AssessPlaybook
         ),
       };
     }
-    let draftValue: AssessmentDraftV1;
+    let draftValue: AssessmentDraftV2;
     try {
-      draftValue = parsePersistedAssessmentDraft(store.readById(draft.artifact_id), {
+      draftValue = parsePersistedAssessmentDraftV2(store.readById(draft.artifact_id), {
         request: canonicalAssessmentRequest(store, context),
       }).draft;
     } catch (error) {
@@ -1594,16 +1675,34 @@ export class AssessPlaybook
     };
   }
 
+  private terminalEffectEvidence(
+    context: RunContext,
+    supplied?: EffectEvidenceGraphV1
+  ): EffectEvidenceGraphV1 {
+    if (supplied !== undefined) return supplied;
+    const receiptRef = latestValidityReceiptArtifact(context);
+    if (receiptRef !== undefined && this.artifactStore !== undefined) {
+      return readCanonicalJson(this.artifactStore, receiptRef, validateAssessmentValidityReceiptV2)
+        .effect_evidence;
+    }
+    return unknownEffectEvidenceGraph({
+      runId: context.identity.run_id,
+      phases: ASSESS_EFFECT_PHASES,
+    });
+  }
+
   private terminal(
     context: RunContext,
     action: "complete" | "incomplete" | "cancelled",
     met: boolean,
     unresolved: readonly string[],
     liveness?: LivenessSnapshotV1,
-    extraResult: Readonly<Record<string, JsonValue>> = {}
+    extraResult: Readonly<Record<string, JsonValue>> = {},
+    effectEvidence?: EffectEvidenceGraphV1
   ): Directive {
     const origin = context.stateId;
     const output = met ? latestAssessmentArtifact(context) : bestPartial(context);
+    const effects = this.terminalEffectEvidence(context, effectEvidence);
     if (met && output === undefined) throw new Error("positive assess terminal has no product");
     const graph = met
       ? this.positiveTerminalArtifacts(context)
@@ -1625,11 +1724,12 @@ export class AssessPlaybook
         met,
         output_artifact_ref: output ?? null,
         best_partial_artifact_refs: met || output === undefined ? [] : [output],
-        external_actions_performed: false,
-        filesystem_writes_performed: false,
-        tests_executed: false,
-        changes_started: false,
         ...extraResult,
+        effect_assurance: effects.assurance,
+        effect_limitation: effects.limitations[0] ?? null,
+        effect_scope_notice: BOUNDED_EFFECT_NOTICE,
+        effect_evidence_sha256: effectEvidenceSha256(effects),
+        effect_evidence: effects,
         ...(liveness === undefined ? {} : { liveness }),
       },
       artifacts: graph,
@@ -1660,7 +1760,7 @@ export class AssessPlaybook
 
 function expectedValidityExecution(
   input: Parameters<CompletionReceiptPredicateV1>[0],
-  receipt: AssessmentValidityReceiptV1
+  receipt: AssessmentValidityReceiptV2
 ): PhaseResult | undefined {
   const result = input.checkpointer.receiptResultById(receipt.execution_receipt_id);
   if (
@@ -1705,20 +1805,21 @@ export function evaluateAssessLatestVerifiedAssessmentDod(
       return { passed: false, evidence_refs: [] };
     }
     const request = canonicalAssessmentRequest(reader, input.context);
-    const draft = parsePersistedAssessmentDraft(reader.readById(subject.draft.artifact_id), {
+    const draft = parsePersistedAssessmentDraftV2(reader.readById(subject.draft.artifact_id), {
       request,
     }).draft;
-    const assessment = validateCanonicalAssessmentBytes(
+    const assessment = validateCanonicalAssessmentV2Bytes(
       reader.readById(subject.assessment.artifact_id),
       subject.assessment
     );
-    assertAssessmentLineage({
+    assertAssessmentLineageV2({
       assessment,
       request,
       draft,
       requestRef: subject.request,
       analysisRef: subject.analysis,
       draftRef: subject.draft,
+      effectEvidence: assessment.effect_evidence,
     });
     const veraReportRef = latestVeraReportArtifact(input.context);
     const validityRef = latestValidityReceiptArtifact(input.context);
@@ -1732,9 +1833,9 @@ export function evaluateAssessLatestVerifiedAssessmentDod(
     ) {
       return { passed: false, evidence_refs: [] };
     }
-    const validity = readCanonicalJson(reader, validityRef, validateAssessmentValidityReceipt);
-    const integrity = readCanonicalJson(reader, integrityRef, validateAssessmentProductIntegrity);
-    const envelope = readCanonicalJson(reader, envelopeRef, validateAssessmentProductEnvelope);
+    const validity = readCanonicalJson(reader, validityRef, validateAssessmentValidityReceiptV2);
+    const integrity = readCanonicalJson(reader, integrityRef, validateAssessmentProductIntegrityV2);
+    const envelope = readCanonicalJson(reader, envelopeRef, validateAssessmentProductEnvelopeV2);
     const expectedExecutionReceiptIds = exactExecutionReceiptIds({
       context: input.context,
       checkpointer: input.checkpointer,
@@ -1765,14 +1866,22 @@ export function evaluateAssessLatestVerifiedAssessmentDod(
       canonicalJson(envelope.integrity_ref) !== canonicalJson(integrityRef) ||
       validityExecution === undefined ||
       validityExecution.worker_receipt.ended_at !== validity.created_at ||
-      assessment.external_actions_performed !== false ||
-      assessment.filesystem_writes_performed !== false ||
-      assessment.tests_executed !== false ||
-      assessment.changes_started !== false ||
-      input.terminal.result.external_actions_performed !== false ||
-      input.terminal.result.filesystem_writes_performed !== false ||
-      input.terminal.result.tests_executed !== false ||
-      input.terminal.result.changes_started !== false ||
+      assessment.effect_evidence.assurance === "policy_violation" ||
+      validity.effect_evidence.assurance === "policy_violation" ||
+      canonicalJson(integrity.effect_evidence) !== canonicalJson(validity.effect_evidence) ||
+      canonicalJson(envelope.effect_evidence) !== canonicalJson(validity.effect_evidence) ||
+      integrity.product_effect_evidence_sha256 !==
+        effectEvidenceSha256(assessment.effect_evidence) ||
+      input.terminal.result.effect_assurance !== validity.effect_evidence.assurance ||
+      input.terminal.result.effect_evidence_sha256 !==
+        effectEvidenceSha256(validity.effect_evidence) ||
+      canonicalJson(input.terminal.result.effect_evidence) !==
+        canonicalJson(validity.effect_evidence) ||
+      input.terminal.result.effect_limitation !==
+        (validity.effect_evidence.limitations[0] ?? null) ||
+      input.terminal.result.effect_scope_notice !== BOUNDED_EFFECT_NOTICE ||
+      (validity.effect_evidence.assurance === "unknown" &&
+        input.terminal.result.effect_limitation !== UNKNOWN_EFFECT_LIMITATION) ||
       canonicalJson(input.terminal.result.output_artifact_ref) !==
         canonicalJson(subject.assessment) ||
       input.terminal.unresolved.length !== 0
@@ -1871,5 +1980,11 @@ export const ASSESS_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
   },
   completionReceiptPredicates: ASSESS_COMPLETION_RECEIPT_PREDICATES,
   construct: (options) =>
-    new AssessPlaybook(options.artifactRevisions, options.artifactStore, options.checkpointer),
+    new AssessPlaybook(
+      options.artifactRevisions,
+      options.artifactStore,
+      options.checkpointer,
+      undefined,
+      options.effectEvidenceProvider
+    ),
 };

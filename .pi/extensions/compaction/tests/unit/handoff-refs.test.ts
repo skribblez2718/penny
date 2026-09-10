@@ -70,8 +70,20 @@ describe("current-session handoff refs", () => {
     persistFixture(store, "old-global-run", "operation-unreferenced", "must not appear");
     const messages: SessionMessage[] = [
       {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "subagent-produced",
+            name: "subagent",
+            arguments: { agent: "annie", task: "produce" },
+          },
+        ],
+      },
+      {
         role: "toolResult",
         toolName: "subagent",
+        toolCallId: "subagent-produced",
         details: {
           mode: "single",
           outputArtifactRefs: [produced],
@@ -84,6 +96,7 @@ describe("current-session handoff refs", () => {
         content: [
           {
             type: "toolCall",
+            id: "subagent-explicit",
             name: "subagent",
             arguments: {
               agent: "synthia",

@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { createLogger } from "../../lib/logger/logger.js";
+import { parseConfiguredNetworkPolicy } from "./network-policy.js";
 
 const logger = createLogger("playwright:config");
 import type { PlaywrightConfig, ProxyConfig } from "./types.js";
@@ -94,11 +95,21 @@ export function loadConfig(cwd?: string): PlaywrightConfig {
   const dir = cwd ?? process.cwd();
   const dotEnv = readDotEnv(dir);
 
+  const configuredNetworkPolicy = parseConfiguredNetworkPolicy(
+    parseCommaList(getEnvVar("PLAYWRIGHT_NETWORK_ALLOWLIST", dotEnv, "")),
+    "PLAYWRIGHT_NETWORK_ALLOWLIST"
+  );
+  const networkAllowlist = Object.freeze(
+    configuredNetworkPolicy.mode === "allow"
+      ? configuredNetworkPolicy.patterns.map((pattern) => pattern.canonical)
+      : []
+  );
+
   const config: PlaywrightConfig = Object.freeze({
     headless: getEnvBool("PLAYWRIGHT_HEADLESS", dotEnv, false),
     timeout: parseInt(getEnvVar("PLAYWRIGHT_TIMEOUT", dotEnv, "30000"), 10),
     browserPath: getEnvVar("PLAYWRIGHT_BROWSER_PATH", dotEnv, "") || undefined,
-    networkAllowlist: parseCommaList(getEnvVar("PLAYWRIGHT_NETWORK_ALLOWLIST", dotEnv, "")),
+    networkAllowlist,
     downloadDir: resolve(getEnvVar("PLAYWRIGHT_DOWNLOAD_DIR", dotEnv, "/tmp/playwright-downloads")),
     outputDir: resolve(getEnvVar("PLAYWRIGHT_OUTPUT_DIR", dotEnv, "/tmp/playwright-output")),
     enableVision: getEnvBool("PLAYWRIGHT_ENABLE_VISION", dotEnv, false),

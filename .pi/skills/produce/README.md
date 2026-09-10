@@ -25,7 +25,7 @@ The Carren-before-Vera order is an explicit product requirement for this candida
 
 ## Boundaries
 
-- V1 accepts one inline closed brief and no caller artifact inputs.
+- Accepts one inline closed brief and no caller artifact inputs.
 - Supported kinds are exactly `text`, `markdown`, `json`, `yaml`, `typescript`, `javascript`, `python`, and `shell`.
 - Supplied source statements are task material, not independently verified facts.
 - Ordinary workflow phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for exact predecessors and no other channel may replace a missing ref. Other YAML tools are usable only when materially relevant and allowed by caller/task and phase boundaries; Skribble's write-capable YAML surface does not authorize filesystem mutation in Produce.

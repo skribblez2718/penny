@@ -8,5 +8,5 @@ This section explains how Penny is designed. It focuses on what each part of the
 | [Project Standards](project-standards.md)           | Why Penny has canonical implementations and how the ten-check task completion protocol works                                         |
 | [Bitter-Lesson Doctrine](bitter-lesson.md)          | Why Penny protects capabilities and prunes hand-coded scaffolding as models improve — "ratchet on capabilities, not implementations" |
 | [Atomic Loop Components](atomic-loop-components.md) | Why Penny builds loops from reusable parts instead of one universal loop, and how that keeps them working as models improve          |
-| [Tiered Memory](tiered-memory.md)                   | Primary-only durable recall/curation, supervised hub, legacy retention, and data preservation                                        |
+| [Tiered Memory](tiered-memory.md)                   | Primary-owned durable writes with bounded owner-granted worker read, supervised hub, legacy retention, and data preservation         |
 | [Skill Tool Modes](skill-tool-modes.md)             | Single, parallel, chain, and resume with verified artifact-ref handoff and durable checkpoints                                       |

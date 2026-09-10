@@ -531,16 +531,136 @@ export const TerminalDirectiveSchema = Type.Object(
   { additionalProperties: false }
 );
 
-export const PausedDirectiveSchema = Type.Object(
+export const ArtifactDispatchPauseCodeSchema = Type.Union([
+  Type.Literal("DISPATCH_PAUSED"),
+  Type.Literal("DISPATCH_MODE_INVALID"),
+  Type.Literal("LEGACY_UNMETERED"),
+]);
+export type ArtifactDispatchPauseCode = Static<typeof ArtifactDispatchPauseCodeSchema>;
+
+const ObservedArtifactDispatchIneligibilityCodeSchema = Type.Union([
+  Type.Literal("LEGACY_UNMETERED"),
+  Type.Literal("CHECKPOINT_NOT_RESUMABLE"),
+]);
+export const ArtifactDispatchIneligibilityCodeSchema = Type.Union([
+  ObservedArtifactDispatchIneligibilityCodeSchema,
+  Type.Literal("LEGACY_CHECKPOINT_UNVERIFIED"),
+]);
+export type ArtifactDispatchIneligibilityCode = Static<
+  typeof ArtifactDispatchIneligibilityCodeSchema
+>;
+
+export const ArtifactDispatchStateV1Schema = Type.Union([
+  Type.Object(
+    {
+      schema_version: Type.Literal(1),
+      mode: Type.Literal("active"),
+      configured_as: Type.Union([Type.Literal("unset"), Type.Literal("active")]),
+      code: Type.Literal("DISPATCH_ACTIVE"),
+      reason: Type.String({ minLength: 1, maxLength: ERROR_MAX_LENGTH }),
+      dispatch_allowed: Type.Literal(true),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      schema_version: Type.Literal(1),
+      mode: Type.Literal("paused"),
+      configured_as: Type.Literal("paused"),
+      code: Type.Literal("DISPATCH_PAUSED"),
+      reason: Type.String({ minLength: 1, maxLength: ERROR_MAX_LENGTH }),
+      dispatch_allowed: Type.Literal(false),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      schema_version: Type.Literal(1),
+      mode: Type.Literal("paused"),
+      configured_as: Type.Literal("invalid"),
+      code: Type.Literal("DISPATCH_MODE_INVALID"),
+      reason: Type.String({ minLength: 1, maxLength: ERROR_MAX_LENGTH }),
+      dispatch_allowed: Type.Literal(false),
+    },
+    { additionalProperties: false }
+  ),
+]);
+export type ArtifactDispatchStateV1 = Static<typeof ArtifactDispatchStateV1Schema>;
+
+const ArtifactDispatchRecoveryCommonV1 = {
+  schema_version: Type.Literal(1),
+  identity: RunIdentitySchema,
+  state_id: Id,
+  reason: Type.String({ minLength: 1, maxLength: ERROR_MAX_LENGTH }),
+};
+
+export const ArtifactDispatchRecoveryV1Schema = Type.Union([
+  Type.Object(
+    {
+      ...ArtifactDispatchRecoveryCommonV1,
+      kind: Type.Literal("recoverable_checkpoint"),
+      action: Type.Literal("recover"),
+      checkpoint_exists: Type.Literal(true),
+      checkpoint_preserved: Type.Literal(true),
+      resumable: Type.Literal(true),
+      requires_dispatch_mode: Type.Literal("active"),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...ArtifactDispatchRecoveryCommonV1,
+      kind: Type.Literal("start_retry"),
+      action: Type.Literal("retry_start"),
+      checkpoint_exists: Type.Boolean(),
+      checkpoint_preserved: Type.Boolean(),
+      resumable: Type.Literal(false),
+      requires_dispatch_mode: Type.Literal("active"),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...ArtifactDispatchRecoveryCommonV1,
+      kind: Type.Literal("saved_but_ineligible"),
+      action: Type.Literal("status_or_cancel"),
+      ineligibility_code: ObservedArtifactDispatchIneligibilityCodeSchema,
+      checkpoint_exists: Type.Literal(true),
+      checkpoint_preserved: Type.Literal(true),
+      resumable: Type.Literal(false),
+      requires_dispatch_mode: Type.Null(),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...ArtifactDispatchRecoveryCommonV1,
+      kind: Type.Literal("saved_but_ineligible"),
+      action: Type.Literal("status_or_cancel"),
+      ineligibility_code: Type.Union([
+        Type.Literal("LEGACY_UNMETERED"),
+        Type.Literal("LEGACY_CHECKPOINT_UNVERIFIED"),
+      ]),
+      checkpoint_exists: Type.Null(),
+      checkpoint_preserved: Type.Null(),
+      legacy_checkpoint_preserved_claim: Type.Boolean(),
+      resumable: Type.Literal(false),
+      requires_dispatch_mode: Type.Null(),
+    },
+    { additionalProperties: false }
+  ),
+]);
+export type ArtifactDispatchRecoveryV1 = Static<typeof ArtifactDispatchRecoveryV1Schema>;
+
+/** Historical v2 paused wire shape. Readers accept and project it; writers emit v1 facts. */
+export const LegacyPausedDirectiveV2Schema = Type.Object(
   {
     schema_version: Type.Literal(2),
     action: Type.Literal("paused"),
     identity: RunIdentitySchema,
     status: Type.Literal("running"),
     state_id: Id,
-    code: Type.String({
-      pattern: "^(DISPATCH_PAUSED|DISPATCH_MODE_INVALID|LEGACY_UNMETERED)$",
-    }),
+    code: ArtifactDispatchPauseCodeSchema,
     reason: Type.String({ minLength: 1, maxLength: ERROR_MAX_LENGTH }),
     retryable: Type.Literal(true),
     recovery: Type.Object(
@@ -554,6 +674,30 @@ export const PausedDirectiveSchema = Type.Object(
   },
   { additionalProperties: false }
 );
+export type LegacyPausedDirectiveV2 = Static<typeof LegacyPausedDirectiveV2Schema>;
+
+export const ArtifactDispatchPauseV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(2),
+    pause_schema_version: Type.Literal(1),
+    action: Type.Literal("paused"),
+    identity: RunIdentitySchema,
+    status: RunStatusSchema,
+    state_id: Id,
+    code: ArtifactDispatchPauseCodeSchema,
+    reason: Type.String({ minLength: 1, maxLength: ERROR_MAX_LENGTH }),
+    retryable: Type.Boolean(),
+    dispatch: ArtifactDispatchStateV1Schema,
+    recovery: ArtifactDispatchRecoveryV1Schema,
+  },
+  { additionalProperties: false }
+);
+export type ArtifactDispatchPauseV1 = Static<typeof ArtifactDispatchPauseV1Schema>;
+
+export const PausedDirectiveSchema = Type.Union([
+  ArtifactDispatchPauseV1Schema,
+  LegacyPausedDirectiveV2Schema,
+]);
 
 export const StatusDirectiveSchema = Type.Object(
   {
@@ -975,8 +1119,236 @@ export const OrchestrationRequestSchema = Type.Union([
 ]);
 export type OrchestrationRequest = Static<typeof OrchestrationRequestSchema>;
 
+function sameRunIdentity(left: RunIdentity, right: RunIdentity): boolean {
+  return (
+    left.schema_version === right.schema_version &&
+    left.run_id === right.run_id &&
+    left.session_id === right.session_id &&
+    left.playbook === right.playbook &&
+    left.engine_owner === right.engine_owner
+  );
+}
+
+function assertArtifactDispatchPauseV1(pause: ArtifactDispatchPauseV1): void {
+  const issues: string[] = [];
+  const legacyCompatibility =
+    pause.recovery.kind === "saved_but_ineligible" &&
+    "legacy_checkpoint_preserved_claim" in pause.recovery;
+  if (!sameRunIdentity(pause.identity, pause.recovery.identity)) {
+    issues.push("recovery identity must exactly match the paused run identity");
+  }
+  if (pause.state_id !== pause.recovery.state_id) {
+    issues.push("recovery state_id must exactly match the paused state_id");
+  }
+  if (pause.recovery.kind !== "saved_but_ineligible" && pause.reason !== pause.recovery.reason) {
+    issues.push("retryable recovery reason must exactly match the pause reason");
+  }
+  if (
+    !legacyCompatibility &&
+    pause.recovery.checkpoint_exists !== pause.recovery.checkpoint_preserved
+  ) {
+    issues.push("checkpoint_preserved must exactly equal observed checkpoint_exists");
+  }
+  if (pause.retryable !== (pause.recovery.kind !== "saved_but_ineligible")) {
+    issues.push("pause retryable must exactly match recovery eligibility");
+  }
+  if (pause.code === "LEGACY_UNMETERED") {
+    if (
+      pause.recovery.kind !== "saved_but_ineligible" ||
+      pause.recovery.ineligibility_code !== "LEGACY_UNMETERED"
+    ) {
+      issues.push("LEGACY_UNMETERED must carry its typed saved-but-ineligible recovery facts");
+    }
+  } else if ("legacy_checkpoint_preserved_claim" in pause.recovery) {
+    if (pause.recovery.ineligibility_code !== "LEGACY_CHECKPOINT_UNVERIFIED") {
+      issues.push("historical dispatch pauses must remain typed as checkpoint-unverified");
+    }
+    if (pause.dispatch.code !== pause.code || pause.dispatch.dispatch_allowed) {
+      issues.push("historical dispatch state must retain its fail-closed pause code");
+    }
+  } else if (pause.dispatch.code !== pause.code || pause.dispatch.dispatch_allowed) {
+    issues.push("dispatch pause code must match a fail-closed engine dispatch state");
+  }
+  if (issues.length > 0) {
+    throw new ContractValidationError("artifact dispatch pause", issues);
+  }
+}
+
+type ArtifactDispatchRecoveryInputV1 = {
+  readonly identity: RunIdentity;
+  readonly stateId: string;
+  readonly reason: string;
+  readonly checkpointExists: boolean;
+} & (
+  | {
+      readonly kind: "recoverable_checkpoint" | "start_retry";
+      readonly ineligibilityCode?: never;
+    }
+  | {
+      readonly kind: "saved_but_ineligible";
+      readonly ineligibilityCode: ArtifactDispatchIneligibilityCode;
+    }
+);
+
+export function artifactDispatchRecoveryV1(
+  input: ArtifactDispatchRecoveryInputV1
+): ArtifactDispatchRecoveryV1 {
+  if (input.kind === "recoverable_checkpoint") {
+    if (!input.checkpointExists) {
+      throw new ContractValidationError("artifact dispatch recovery", [
+        "recoverable_checkpoint requires an observed checkpoint",
+      ]);
+    }
+    return validateContract(
+      ArtifactDispatchRecoveryV1Schema,
+      {
+        schema_version: 1,
+        kind: input.kind,
+        action: "recover",
+        identity: input.identity,
+        state_id: input.stateId,
+        reason: input.reason,
+        checkpoint_exists: true,
+        checkpoint_preserved: true,
+        resumable: true,
+        requires_dispatch_mode: "active",
+      },
+      "artifact dispatch recovery"
+    );
+  }
+  if (input.kind === "saved_but_ineligible") {
+    if (!input.checkpointExists) {
+      throw new ContractValidationError("artifact dispatch recovery", [
+        "saved_but_ineligible requires an observed checkpoint",
+      ]);
+    }
+    if (input.ineligibilityCode === "LEGACY_CHECKPOINT_UNVERIFIED") {
+      throw new ContractValidationError("artifact dispatch recovery", [
+        "legacy checkpoint compatibility cannot be emitted as current observed storage facts",
+      ]);
+    }
+    return validateContract(
+      ArtifactDispatchRecoveryV1Schema,
+      {
+        schema_version: 1,
+        kind: input.kind,
+        action: "status_or_cancel",
+        ineligibility_code: input.ineligibilityCode,
+        identity: input.identity,
+        state_id: input.stateId,
+        reason: input.reason,
+        checkpoint_exists: true,
+        checkpoint_preserved: true,
+        resumable: false,
+        requires_dispatch_mode: null,
+      },
+      "artifact dispatch recovery"
+    );
+  }
+  return validateContract(
+    ArtifactDispatchRecoveryV1Schema,
+    {
+      schema_version: 1,
+      kind: input.kind,
+      action: "retry_start",
+      identity: input.identity,
+      state_id: input.stateId,
+      reason: input.reason,
+      checkpoint_exists: input.checkpointExists,
+      checkpoint_preserved: input.checkpointExists,
+      resumable: false,
+      requires_dispatch_mode: "active",
+    },
+    "artifact dispatch recovery"
+  );
+}
+
+function dispatchStateFromLegacyPause(pause: LegacyPausedDirectiveV2): ArtifactDispatchStateV1 {
+  if (pause.code === "DISPATCH_PAUSED") {
+    return {
+      schema_version: 1,
+      mode: "paused",
+      configured_as: "paused",
+      code: "DISPATCH_PAUSED",
+      reason: pause.reason,
+      dispatch_allowed: false,
+    };
+  }
+  if (pause.code === "DISPATCH_MODE_INVALID") {
+    return {
+      schema_version: 1,
+      mode: "paused",
+      configured_as: "invalid",
+      code: "DISPATCH_MODE_INVALID",
+      reason: pause.reason,
+      dispatch_allowed: false,
+    };
+  }
+  // The historical engine emitted LEGACY_UNMETERED only after its active-mode gate.
+  return {
+    schema_version: 1,
+    mode: "active",
+    configured_as: "active",
+    code: "DISPATCH_ACTIVE",
+    reason: "artifact dispatch is active",
+    dispatch_allowed: true,
+  };
+}
+
+/** Parse current pause facts or project the immutable historical v2 pause shape. */
+export function parseArtifactDispatchPause(value: unknown): ArtifactDispatchPauseV1 {
+  const parsed = validateContract(PausedDirectiveSchema, value, "artifact dispatch pause");
+  if ("pause_schema_version" in parsed) {
+    assertArtifactDispatchPauseV1(parsed);
+    return parsed;
+  }
+  if (parsed.recovery.run_id !== parsed.identity.run_id) {
+    throw new ContractValidationError("legacy artifact dispatch pause", [
+      "recovery run_id must exactly match the paused run identity",
+    ]);
+  }
+  const recovery = validateContract(
+    ArtifactDispatchRecoveryV1Schema,
+    {
+      schema_version: 1,
+      kind: "saved_but_ineligible",
+      action: "status_or_cancel",
+      ineligibility_code:
+        parsed.code === "LEGACY_UNMETERED" ? "LEGACY_UNMETERED" : "LEGACY_CHECKPOINT_UNVERIFIED",
+      identity: parsed.identity,
+      state_id: parsed.state_id,
+      reason:
+        "Historical pause metadata cannot verify current checkpoint existence or resumability.",
+      checkpoint_exists: null,
+      checkpoint_preserved: null,
+      legacy_checkpoint_preserved_claim: parsed.recovery.checkpoint_preserved,
+      resumable: false,
+      requires_dispatch_mode: null,
+    },
+    "legacy artifact dispatch recovery"
+  );
+  const normalized: ArtifactDispatchPauseV1 = {
+    schema_version: 2,
+    pause_schema_version: 1,
+    action: "paused",
+    identity: parsed.identity,
+    status: parsed.status,
+    state_id: parsed.state_id,
+    code: parsed.code,
+    reason: parsed.reason,
+    retryable: false,
+    dispatch: dispatchStateFromLegacyPause(parsed),
+    recovery,
+  };
+  assertArtifactDispatchPauseV1(normalized);
+  return normalized;
+}
+
 export function validateDirective(value: unknown): Directive {
   const parsed = validateContract(DirectiveSchema, value, "directive");
+  if (parsed.action === "paused" && "pause_schema_version" in parsed) {
+    assertArtifactDispatchPauseV1(parsed);
+  }
   if (parsed.action === "invoke_agent") {
     const purpose = parsed.execution_purpose ?? "phase";
     const hasBinding = parsed.routing_repair_binding !== undefined;

@@ -1,16 +1,17 @@
 /**
  * Penny compaction checkpoint schemas.
  *
- * Version 3 removes semantic memory/session discovery. Recovery state is a
- * strict set of exact current-session run IDs and immutable communication refs
- * proven by result metadata, explicit reused inputs, prior indexes, or named checkpoints.
+ * Version 3.1 removes semantic memory/session discovery and adds an explicit
+ * normalized skill-result status. Recovery state is a strict set of exact
+ * current-session run IDs and immutable communication refs proven by validated
+ * result metadata, explicit reused inputs, prior indexes, or named checkpoints.
  */
 
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-export const SCHEMA_VERSION = "3.0.0" as const;
+export const SCHEMA_VERSION = "3.1.0" as const;
 export const RESUME_REFS_VERSION = 2 as const;
 export const ARTIFACT_REF_SCHEMA_VERSION = 2 as const;
 
@@ -70,6 +71,17 @@ export const EngineRunRefSchema = z
   })
   .strict();
 
+const ContentSchemaIdentitySchema = z
+  .object({
+    schema_id: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^penny\.[a-z0-9-]+\.v[1-9][0-9]*$/),
+    schema_version: z.number().int().positive(),
+  })
+  .strict();
+
 const ArtifactRefFields = {
   artifact_id: ArtifactIdSchema,
   run_id: CanonicalStringSchema,
@@ -80,6 +92,7 @@ const ArtifactRefFields = {
   version: z.number().int().positive(),
   producer: CanonicalStringSchema,
   media_type: CanonicalStringSchema,
+  content_schema: ContentSchemaIdentitySchema.optional(),
   byte_length: z.number().int().nonnegative(),
   content_digest: DigestSchema,
   store_ref: z.string().regex(/^artifact:\/\/sha256\/[0-9a-f]{64}$/),
@@ -109,6 +122,7 @@ export const ArtifactRefSchema = z
       version: ref.version,
       producer: ref.producer,
       media_type: ref.media_type,
+      ...(ref.content_schema ? { content_schema: ref.content_schema } : {}),
       byte_length: ref.byte_length,
       content_digest: ref.content_digest,
       store_ref: ref.store_ref,
@@ -166,16 +180,35 @@ export const ResumeRefSetSchema = z
   })
   .strict();
 
+export const SkillResultStatusSchema = z.enum([
+  "success",
+  "failure",
+  "incomplete",
+  "paused",
+  "cancelled",
+  "unknown",
+]);
+export type SkillResultStatus = z.infer<typeof SkillResultStatusSchema>;
+
 export const SkillInvocationRefSchema = z
   .object({
     skill_name: CanonicalStringSchema,
     session_id: CanonicalStringSchema.optional(),
     goal: z.string().min(1).max(500),
     completed: z.boolean(),
+    result_status: SkillResultStatusSchema,
     result_summary: z.string().max(500).optional(),
     superseded: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.completed !== (value.result_status === "success")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "completed must be true exactly when result_status is success",
+      });
+    }
+  });
 
 export const ToolCallExampleSchema = z
   .object({

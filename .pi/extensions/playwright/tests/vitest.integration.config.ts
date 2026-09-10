@@ -10,6 +10,6 @@ export default defineConfig({
     poolOptions: {
       forks: { singleFork: true },
     },
-    retry: 2,
+    retry: 0,
   },
 });

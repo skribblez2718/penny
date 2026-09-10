@@ -5,22 +5,29 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  ASSESS_EFFECT_PHASES,
   ASSESS_PLAYBOOK_REGISTRATION,
   ASSESS_PLAYBOOK_NAME,
   AssessPlaybook,
   OrchestrationService,
+  UNKNOWN_EFFECT_LIMITATION,
   canonicalJson,
   evaluateAssessLatestVerifiedAssessmentDod,
   initializePennyState,
-  validateAssessment,
-  validateAssessmentProductEnvelope,
-  validateAssessmentProductIntegrity,
-  validateAssessmentValidityReceipt,
+  sha256,
+  unknownEffectEvidenceGraph,
+  validateAssessmentV2,
+  validateAssessmentEvidenceBundle,
+  validateAssessmentProductEnvelopeV2,
+  validateAssessmentProductIntegrityV2,
+  validateAssessmentValidityReceiptV2,
+  validateEffectEvidenceGraph,
   type AgentCompletion,
   type AgentInvocation,
-  type AssessmentDraftV1,
+  type AssessmentDraftV2,
   type AssessmentRequestV1,
   type Directive,
+  type EffectEvidenceRequestV1,
   type JsonValue,
   type ModelClient,
   type PlaybookRegistrationV1,
@@ -101,9 +108,9 @@ function coverage() {
   };
 }
 
-function meetsDraft(summary = "The note satisfies both criteria."): AssessmentDraftV1 {
+function meetsDraft(summary = "The note satisfies both criteria."): AssessmentDraftV2 {
   return {
-    schema_version: 1,
+    schema_version: 2,
     disposition: "meets",
     criterion_outcomes: [
       {
@@ -135,14 +142,10 @@ function meetsDraft(summary = "The note satisfies both criteria."): AssessmentDr
     uncertainties: [],
     request_coverage: coverage(),
     confidence: "PROBABLE",
-    external_actions_performed: false,
-    filesystem_writes_performed: false,
-    tests_executed: false,
-    changes_started: false,
   };
 }
 
-function inconclusiveDraft(): AssessmentDraftV1 {
+function inconclusiveDraft(): AssessmentDraftV2 {
   return {
     ...meetsDraft("The supplied material is insufficient for a required conclusion."),
     disposition: "inconclusive",
@@ -174,7 +177,7 @@ function inconclusiveDraft(): AssessmentDraftV1 {
   };
 }
 
-function persistedDraft(draft: AssessmentDraftV1): string {
+function persistedDraft(draft: AssessmentDraftV2): string {
   return `ASSESSMENT_DRAFT:${canonicalJson(draft)}\nSUMMARY:{"confidence":"${draft.confidence}","complete":true}`;
 }
 
@@ -190,7 +193,7 @@ function veraPass(): string {
     repair_owner: "none",
     findings: [],
     evidence: [
-      "The exact current AssessmentV1 satisfies coverage, index, disposition, and lineage checks.",
+      "The exact current AssessmentV2 satisfies coverage, index, disposition, and lineage checks.",
     ],
     strategy_delta: "Admit only this exact current assessment product.",
   })}`;
@@ -206,6 +209,36 @@ function veraGap(kind: "analysis_gap" | "evidence_gap" | "assessment_product_gap
     evidence: ["The current product disagrees with its exact supplied basis."],
     strategy_delta: `Replace the ${kind} without external verification or actions.`,
   })}`;
+}
+
+function completeNoEventEffects(requestValue: EffectEvidenceRequestV1) {
+  const base = structuredClone(
+    unknownEffectEvidenceGraph({ runId: requestValue.run_id, phases: requestValue.phases })
+  );
+  return validateEffectEvidenceGraph(
+    {
+      ...base,
+      categories: base.categories.map((entry) => ({
+        ...entry,
+        observation: {
+          status: "observed",
+          scope: entry.policy.scope,
+          coverage: "complete",
+          result: "no_event",
+          evidence_refs: [
+            {
+              evidence_id: `synthetic-trace:${requestValue.run_id}:${entry.category}`,
+              evidence_sha256: sha256(`${requestValue.run_id}:${entry.category}`),
+              media_type: "application/json",
+            },
+          ],
+        },
+      })),
+      assurance: "bounded_no_violation",
+      limitations: [],
+    },
+    { runId: requestValue.run_id, phases: requestValue.phases }
+  );
 }
 
 function routingOnly(output: string): string {
@@ -300,12 +333,9 @@ describe("orchestrated assess workflow", () => {
     if (product === null || typeof product !== "object" || Array.isArray(product)) {
       throw new Error("assessment product ref is absent");
     }
-    expect(validateAssessment(readJson(service, String(product.artifact_id)))).toMatchObject({
+    expect(validateAssessmentV2(readJson(service, String(product.artifact_id)))).toMatchObject({
       disposition: "meets",
-      external_actions_performed: false,
-      filesystem_writes_performed: false,
-      tests_executed: false,
-      changes_started: false,
+      effect_evidence: { assurance: "unknown" },
     });
     const validity = terminal.artifacts.find(
       (artifact) => artifact.kind === "assessment-validity-receipt"
@@ -320,34 +350,38 @@ describe("orchestrated assess workflow", () => {
       throw new Error("exact assessment product graph is incomplete");
     }
     expect(
-      validateAssessmentValidityReceipt(readJson(service, validity.artifact_id))
+      validateAssessmentValidityReceiptV2(readJson(service, validity.artifact_id))
     ).toMatchObject({
       verdict: "PASS",
       reviewer: "vera",
       assessment_ref: { artifact_id: product.artifact_id },
-      external_actions_performed: false,
-      filesystem_writes_performed: false,
-      tests_executed: false,
-      changes_started: false,
+      effect_evidence: { assurance: "unknown" },
     });
     expect(
-      validateAssessmentProductIntegrity(readJson(service, integrity.artifact_id))
+      validateAssessmentProductIntegrityV2(readJson(service, integrity.artifact_id))
     ).toMatchObject({
       status: "PASS",
       assessment_ref: { artifact_id: product.artifact_id },
-      external_actions_performed: false,
-      filesystem_writes_performed: false,
-      tests_executed: false,
-      changes_started: false,
+      effect_evidence: { assurance: "unknown" },
     });
     expect(
-      validateAssessmentProductEnvelope(readJson(service, envelope.artifact_id))
+      validateAssessmentProductEnvelopeV2(readJson(service, envelope.artifact_id))
     ).toMatchObject({
       status: "complete",
       assessment_ref: { artifact_id: product.artifact_id },
       validity_receipt_ref: { artifact_id: validity.artifact_id },
       integrity_ref: { artifact_id: integrity.artifact_id },
     });
+    expect(
+      validateAssessmentEvidenceBundle({
+        runId: terminal.identity.run_id,
+        phases: ASSESS_EFFECT_PHASES,
+        assessment: readJson(service, String(product.artifact_id)),
+        validityReceipt: readJson(service, validity.artifact_id),
+        integrity: readJson(service, integrity.artifact_id),
+        envelope: readJson(service, envelope.artifact_id),
+      })
+    ).toMatchObject({ contract_version: 2, effect_evidence: { assurance: "unknown" } });
     expect(
       terminal.artifacts.some((artifact) =>
         /carren.*approval|approval.*carren/iu.test(artifact.kind)
@@ -358,13 +392,33 @@ describe("orchestrated assess workflow", () => {
       met: true,
       unresolved: [],
       result: {
-        external_actions_performed: false,
-        filesystem_writes_performed: false,
-        tests_executed: false,
-        changes_started: false,
+        effect_assurance: "unknown",
+        effect_limitation: UNKNOWN_EFFECT_LIMITATION,
       },
     });
     expect(service.checkpointer.completionAdmission(terminal.identity.run_id)).toBeDefined();
+
+    const missingEffectLimitation = structuredClone(terminal);
+    delete missingEffectLimitation.result.effect_limitation;
+    const completedContext = service.checkpointer.loadRunById(terminal.identity.run_id);
+    if (completedContext === undefined) throw new Error("completed Assess context is absent");
+    expect(
+      evaluateAssessLatestVerifiedAssessmentDod({
+        checkpointer: service.checkpointer,
+        context: completedContext,
+        terminal: missingEffectLimitation,
+        originState: "admitting_assessment",
+        latestProduct: {
+          selector: "terminal_artifact",
+          schema_id: "penny.assessment.v2",
+          product_schema_version: 2,
+          product_id: String(product.artifact_id),
+          sha256: String(product.content_digest),
+        },
+        artifactReader: service.artifacts,
+        projectRoot: PROJECT_ROOT,
+      })
+    ).toEqual({ passed: false, evidence_refs: [] });
 
     const staleVeraContext = service.checkpointer.loadRunById(terminal.identity.run_id);
     if (staleVeraContext === undefined) throw new Error("completed Assess context is absent");
@@ -381,8 +435,8 @@ describe("orchestrated assess workflow", () => {
         originState: "admitting_assessment",
         latestProduct: {
           selector: "terminal_artifact",
-          schema_id: "penny.assessment.v1",
-          product_schema_version: 1,
+          schema_id: "penny.assessment.v2",
+          product_schema_version: 2,
           product_id: String(product.artifact_id),
           sha256: String(product.content_digest),
         },
@@ -390,6 +444,44 @@ describe("orchestrated assess workflow", () => {
         projectRoot: PROJECT_ROOT,
       })
     ).toEqual({ passed: false, evidence_refs: [] });
+  });
+
+  it("admits one synthetic complete no-event trace as bounded evidence without claiming confinement", async () => {
+    const requests: EffectEvidenceRequestV1[] = [];
+    const client = new ScriptedAssessClient([
+      stageComplete("Criterion and evidence decomposition."),
+      persistedDraft(meetsDraft()),
+      veraPass(),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
+      effectEvidenceProvider: {
+        collect: (requestValue) => {
+          requests.push(requestValue);
+          return completeNoEventEffects(requestValue);
+        },
+      },
+    });
+    sequence += 1;
+    const terminal = complete(await service.execute(start(`run-assess-trace-${sequence}`)));
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      phases: ASSESS_EFFECT_PHASES,
+      subject: "worker_and_task_effects",
+      host_artifact_writes: "excluded",
+    });
+    expect(terminal.result).toMatchObject({
+      effect_assurance: "bounded_no_violation",
+      effect_limitation: null,
+      effect_evidence: {
+        assurance: "bounded_no_violation",
+        host_artifact_writes: { included_in_worker_effect_assurance: false },
+      },
+    });
+    expect(String(terminal.result.effect_scope_notice)).toMatch(/does not establish full/u);
   });
 
   it("counts a malformed Vera summary repaired as routing metadata as one execution group", async () => {
@@ -415,10 +507,8 @@ describe("orchestrated assess workflow", () => {
     ]);
     expect(client.invocations[3]?.executionPurpose).toBe("routing_repair");
     expect(terminal.result).toMatchObject({
-      external_actions_performed: false,
-      filesystem_writes_performed: false,
-      tests_executed: false,
-      changes_started: false,
+      effect_assurance: "unknown",
+      effect_limitation: UNKNOWN_EFFECT_LIMITATION,
     });
   });
 
@@ -454,10 +544,8 @@ describe("orchestrated assess workflow", () => {
         )
       ).toEqual([expect.objectContaining({ version: 2 })]);
       expect(terminal.result).toMatchObject({
-        external_actions_performed: false,
-        filesystem_writes_performed: false,
-        tests_executed: false,
-        changes_started: false,
+        effect_assurance: "unknown",
+        effect_limitation: UNKNOWN_EFFECT_LIMITATION,
       });
     }
   });
@@ -490,10 +578,9 @@ describe("orchestrated assess workflow", () => {
       throw new Error("assessment product ref is absent");
     }
     expect(product).toMatchObject({ version: 2 });
-    expect(validateAssessment(readJson(service, String(product.artifact_id)))).toMatchObject({
+    expect(validateAssessmentV2(readJson(service, String(product.artifact_id)))).toMatchObject({
       disposition: "inconclusive",
-      tests_executed: false,
-      changes_started: false,
+      effect_evidence: { assurance: "unknown" },
     });
   });
 
@@ -520,10 +607,8 @@ describe("orchestrated assess workflow", () => {
       "verifying_assessment",
     ]);
     expect(terminal.result).toMatchObject({
-      external_actions_performed: false,
-      filesystem_writes_performed: false,
-      tests_executed: false,
-      changes_started: false,
+      effect_assurance: "unknown",
+      effect_limitation: UNKNOWN_EFFECT_LIMITATION,
     });
   });
 
@@ -638,6 +723,15 @@ describe("orchestrated assess workflow", () => {
     expect(
       terminal.artifacts.filter((artifact) => artifact.kind === "assessment-product-envelope")
     ).toHaveLength(1);
+    const validity = terminal.artifacts.find(
+      (artifact) => artifact.kind === "assessment-validity-receipt"
+    );
+    if (validity === undefined) throw new Error("recovered validity receipt is absent");
+    const recoveredEffects = validateAssessmentValidityReceiptV2(
+      readJson(recovered, validity.artifact_id)
+    ).effect_evidence;
+    expect(terminal.result.effect_evidence).toEqual(recoveredEffects);
+    expect(terminal.result.effect_limitation).toBe(UNKNOWN_EFFECT_LIMITATION);
   });
 
   it("terminates repeated product gaps as bounded non-positive incomplete", async () => {
@@ -662,10 +756,8 @@ describe("orchestrated assess workflow", () => {
         incomplete_reason: "repair_budget_exhausted",
         exhausted: true,
         exhaustion_reason: "verifying_assessment:assessment_product_gap",
-        external_actions_performed: false,
-        filesystem_writes_performed: false,
-        tests_executed: false,
-        changes_started: false,
+        effect_assurance: "unknown",
+        effect_limitation: UNKNOWN_EFFECT_LIMITATION,
       },
     });
     expect(client.invocations.filter((invocation) => invocation.agent === "carren")).toHaveLength(

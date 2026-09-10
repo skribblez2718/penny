@@ -64,7 +64,7 @@ describe("buildSummarizerMessages", () => {
     });
     const text = msg.content[0].text;
     expect(text).toContain("## Goal");
-    expect(text).toContain("LATEST substantive intent");
+    expect(text).toContain("LATEST textual intent");
     expect(text).toContain("do not emit a [RESUME-REFS] block");
     expect(text).toContain("PREVIOUS BRIEF");
     expect(text).toContain("GROUNDED STATE");

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { ArtifactStore } from "./artifact-store.js";
+import {
+  registeredBrowserPolicyOwnerScopeId,
+  runWithRegisteredBrowserPolicy,
+} from "./browser-policy-carrier.js";
 import { canonicalJson, sha256 } from "./checkpointer.js";
 import {
   ConfidenceSchema,
@@ -32,9 +36,19 @@ import {
   type PlaybookRegistrationV1,
 } from "./playbooks/registry.js";
 import { ReceiptAuthority, trustedInvocationDigest } from "./receipts.js";
-import type { ResearchContextOwnerV1 } from "./research-context.js";
+import {
+  ResearchContextResolutionTimeoutError,
+  type ResearchContextOwnerV2,
+} from "./research-context.js";
 
 const CANCELLATION_GRACE_MS = 5_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function workerAbortError(signal: AbortSignal): Error {
+  return signal.reason instanceof LivenessExhaustedError
+    ? signal.reason
+    : new Error("worker execution was cancelled before completion");
+}
 
 type RoutingSummary = {
   readonly confidence: "CERTAIN" | "PROBABLE" | "POSSIBLE" | "UNCERTAIN";
@@ -201,7 +215,7 @@ export interface WorkerExecutorOptions {
    */
   readonly registration?: PlaybookRegistrationV1;
   /** Re-resolves selected safe context envelopes before model/session work. */
-  readonly researchContext?: ResearchContextOwnerV1;
+  readonly researchContext?: ResearchContextOwnerV2;
 }
 
 export class WorkerExecutor {
@@ -268,7 +282,8 @@ export class WorkerExecutor {
       return this.mapConcurrent(
         assignments,
         Math.max(1, this.options.parallelConcurrency),
-        (assignment) => this.executeAssignment(assignment, signal)
+        (assignment) => this.executeAssignment(assignment, signal),
+        signal
       );
     }
     throw new Error(`directive '${directive.action}' is not executable by a worker`);
@@ -337,17 +352,12 @@ export class WorkerExecutor {
         ? researchThinkingLevelForLivenessPreset(boundPolicy.preset)
         : undefined;
     this.assertRepairInputBinding(assignment);
-    const hasContextRefs = assignment.inputArtifacts.artifacts.some(
-      (binding) => binding.ref.kind === "context-source-ref"
-    );
-    if (hasContextRefs && this.options.researchContext === undefined) {
+    const contextRefs = assignment.inputArtifacts.artifacts
+      .map((binding) => binding.ref)
+      .filter((ref) => ref.kind === "context-source-ref");
+    if (contextRefs.length > 0 && this.options.researchContext === undefined) {
       throw new Error("research context refs require the owner resolver before worker use");
     }
-    const contextOverlays =
-      this.options.researchContext?.resolveOverlays(
-        assignment.inputArtifacts.artifacts.map((binding) => binding.ref),
-        assignment.stateId
-      ) ?? [];
     liveness?.admitInvocation({
       runId,
       stateId: assignment.stateId,
@@ -381,8 +391,12 @@ export class WorkerExecutor {
     try {
       const startedAt = new Date().toISOString();
       const configuredTimeoutMs = this.options.workerTimeoutMs ?? 15 * 60 * 1_000;
-      if (!Number.isSafeInteger(configuredTimeoutMs) || configuredTimeoutMs <= 0) {
-        throw new Error("workerTimeoutMs must be a positive integer");
+      if (
+        !Number.isSafeInteger(configuredTimeoutMs) ||
+        configuredTimeoutMs <= 0 ||
+        configuredTimeoutMs > MAX_TIMER_DELAY_MS
+      ) {
+        throw new Error(`workerTimeoutMs must be an integer between 1 and ${MAX_TIMER_DELAY_MS}`);
       }
       const policyTimeoutMs = liveness?.remainingWorkerWallMs(runId, workerId);
       const timeoutMs = Math.min(configuredTimeoutMs, policyTimeoutMs ?? configuredTimeoutMs);
@@ -390,55 +404,100 @@ export class WorkerExecutor {
         throw new LivenessExhaustedError("worker_wall_clock_exhausted");
       }
       const controller = new AbortController();
-      const abort = (): void => controller.abort(signal?.reason);
-      if (signal?.aborted) {
-        abort();
-      } else {
-        signal?.addEventListener("abort", abort, { once: true });
+      const abort = (): void => {
+        controller.abort(new Error("worker execution was cancelled by its caller"));
+      };
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+      const deadlineMs = Date.now() + timeoutMs;
+      if (!Number.isSafeInteger(deadlineMs)) {
+        throw new Error("worker deadline exceeds the safe Unix-millisecond range");
       }
       let timer: NodeJS.Timeout | undefined;
       const timeout = new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
-          controller.abort();
-          reject(new LivenessExhaustedError("worker_wall_clock_exhausted"));
+          const error = new LivenessExhaustedError("worker_wall_clock_exhausted");
+          controller.abort(error);
+          reject(error);
         }, timeoutMs);
       });
       let completion;
       try {
-        completion = await Promise.race([
-          this.modelClient.runAgent({
-            agent: assignment.agent,
-            stateId: assignment.stateId,
-            task: assignment.task,
-            projectRoot: this.options.projectRoot,
-            trustProfile: assignment.trustProfile,
-            inputArtifacts: assignment.inputArtifacts.artifacts.map((binding) => binding.ref),
-            registration,
-            workflowSession: {
-              run_id: runId,
-              workflow_session_id: assignment.identity.session_id,
-              branch_id: assignment.branchId,
-              attempt: assignment.attempt,
-              worker_id: workerId,
-              purpose: assignment.executionPurpose,
-            },
-            executionPurpose: assignment.executionPurpose,
-            ...(assignment.executionPurpose === "routing_repair"
-              ? {
-                  routingRepairGuidance: buildRoutingRepairGuidance(
-                    activeRegistration,
-                    assignment.stateId
-                  ),
-                }
-              : {}),
-            ...(contextOverlays.length === 0 ? {} : { contextOverlays }),
-            signal: controller.signal,
-            ...livenessInvocation,
-            ...(assignment.modelOverride ? { modelOverride: assignment.modelOverride } : {}),
-            ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-          }),
-          timeout,
-        ]);
+        const modelPipeline = async (): ReturnType<ModelClient["runAgent"]> => {
+          // Resolve after queue/liveness/artifact preflight and immediately before the model-client
+          // seam. Every retry/restart takes this async, host-bounded path; rejected bytes never
+          // enter runAgent.
+          const contextOverlays = await (async () => {
+            try {
+              return contextRefs.length === 0
+                ? []
+                : ((await this.options.researchContext?.resolveOverlays(
+                    contextRefs,
+                    assignment.stateId,
+                    { signal: controller.signal, deadline_ms: deadlineMs }
+                  )) ?? []);
+            } catch (error) {
+              if (error instanceof ResearchContextResolutionTimeoutError) {
+                throw new LivenessExhaustedError("worker_wall_clock_exhausted");
+              }
+              throw error;
+            }
+          })();
+          if (controller.signal.aborted) throw workerAbortError(controller.signal);
+          if (Date.now() >= deadlineMs) {
+            throw new LivenessExhaustedError("worker_wall_clock_exhausted");
+          }
+          const invokeModelClient = (): ReturnType<ModelClient["runAgent"]> =>
+            this.modelClient.runAgent({
+              agent: assignment.agent,
+              stateId: assignment.stateId,
+              task: assignment.task,
+              projectRoot: this.options.projectRoot,
+              trustProfile: assignment.trustProfile,
+              inputArtifacts: assignment.inputArtifacts.artifacts.map((binding) => binding.ref),
+              registration,
+              workflowSession: {
+                run_id: runId,
+                workflow_session_id: assignment.identity.session_id,
+                branch_id: assignment.branchId,
+                attempt: assignment.attempt,
+                worker_id: workerId,
+                purpose: assignment.executionPurpose,
+              },
+              executionPurpose: assignment.executionPurpose,
+              ...(assignment.executionPurpose === "routing_repair"
+                ? {
+                    routingRepairGuidance: buildRoutingRepairGuidance(
+                      activeRegistration,
+                      assignment.stateId
+                    ),
+                  }
+                : {}),
+              ...(contextOverlays.length === 0 ? {} : { contextOverlays }),
+              signal: controller.signal,
+              ...livenessInvocation,
+              ...(assignment.modelOverride ? { modelOverride: assignment.modelOverride } : {}),
+              ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+            });
+          const browserNetworkAllowlist = registration.browser_network_allowlist;
+          return browserNetworkAllowlist === undefined
+            ? invokeModelClient()
+            : runWithRegisteredBrowserPolicy(
+                {
+                  ownerScopeId: registeredBrowserPolicyOwnerScopeId({
+                    projectRoot: this.options.projectRoot,
+                    registrationName: activeRegistration.name,
+                    runId,
+                  }),
+                  invocationId: workerId,
+                  registrationName: activeRegistration.name,
+                  stateId: assignment.stateId,
+                  allowlist: browserNetworkAllowlist,
+                },
+                invokeModelClient
+              );
+        };
+        completion = await Promise.race([modelPipeline(), timeout]);
       } finally {
         if (timer !== undefined) clearTimeout(timer);
         signal?.removeEventListener("abort", abort);
@@ -584,6 +643,8 @@ export class WorkerExecutor {
     // Preserve absence versus presence exactly: absence means YAML equality, while a present
     // list is already part of runtimeRegistrationSha256 and must reach PiAgentClient unchanged.
     const allowedTools = "allowed_tools" in phase ? phase.allowed_tools : undefined;
+    const browserNetworkAllowlist =
+      "browser_network_allowlist" in phase ? phase.browser_network_allowlist : undefined;
     return {
       playbook_name: registration.name,
       workflow_name: registration.worker.workflow_name,
@@ -592,6 +653,9 @@ export class WorkerExecutor {
       opening_policy: registration.worker.opening_policy,
       model_policy: registration.worker.model_policy,
       ...(allowedTools === undefined ? {} : { allowed_tools: [...allowedTools] }),
+      ...(browserNetworkAllowlist === undefined
+        ? {}
+        : { browser_network_allowlist: browserNetworkAllowlist }),
     };
   }
 
@@ -648,12 +712,13 @@ export class WorkerExecutor {
   private async mapConcurrent<TInput, TOutput>(
     inputs: readonly TInput[],
     concurrency: number,
-    operation: (input: TInput) => Promise<TOutput>
+    operation: (input: TInput) => Promise<TOutput>,
+    signal?: AbortSignal
   ): Promise<TOutput[]> {
     const output = new Array<TOutput>(inputs.length);
     let nextIndex = 0;
     const worker = async (): Promise<void> => {
-      while (nextIndex < inputs.length) {
+      while (nextIndex < inputs.length && !signal?.aborted) {
         const index = nextIndex;
         nextIndex += 1;
         const input = inputs[index];
@@ -664,6 +729,7 @@ export class WorkerExecutor {
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, inputs.length) }, () => worker()));
+    if (signal?.aborted) throw new Error("parallel worker execution was cancelled");
     return output;
   }
 }
@@ -690,7 +756,7 @@ export class OrchestrationRunner {
       progress = undefined;
       return boundary;
     };
-    let current = initial;
+    let current = this.engine.authorizeDispatch(initial);
     while (current.action === "invoke_agent" || current.action === "invoke_agents_parallel") {
       if (signal?.aborted) {
         return finish(
@@ -739,7 +805,9 @@ export class OrchestrationRunner {
       const cancellationGraceExpired = settlement === undefined;
       const results = settlement?.results ?? completedResults;
       if (results.length > 0) {
-        current = this.engine.acceptWorkerResults(active.identity, results);
+        current = this.engine.authorizeDispatch(
+          this.engine.acceptWorkerResults(active.identity, results)
+        );
         for (const result of results) this.workers.acceptArtifact(result);
       }
       const terminal =

@@ -22,10 +22,15 @@ import {
 } from "./kb/operation-receipts.js";
 import type { OperationEventGroup } from "./kb/contracts.js";
 import {
+  ArtifactDispatchStateV1Schema,
   ContractValidationError,
   EvaluationResultV2Schema,
   FeedbackRouteEvidenceV1Schema,
   OrchestrationRequestSchema,
+  artifactDispatchRecoveryV1,
+  type ArtifactDispatchIneligibilityCode,
+  type ArtifactDispatchPauseCode,
+  type ArtifactDispatchStateV1,
   type ArtifactRef,
   type CompletionAdmissionEnvelope,
   type CompletionEvidenceRef,
@@ -77,8 +82,9 @@ import {
   type PreparedStartV1,
 } from "./playbooks/registry.js";
 import { ReceiptAuthority, trustedInvocationDigest } from "./receipts.js";
-import type { ResearchContextOwnerV1 } from "./research-context.js";
+import type { ResearchContextOwnerV2 } from "./research-context.js";
 import { validateSemanticComposition } from "./composition.js";
+import type { EffectEvidenceProviderV1 } from "./skill-contracts/effects.js";
 import {
   LivenessController,
   malformedErrorDigest,
@@ -98,11 +104,13 @@ export interface EngineOptions {
   /** Exact-byte capability used for typed import admission before run mutation. */
   readonly artifactReader?: ArtifactReader;
   /** Owner-resolved, metadata-only research context seam. */
-  readonly researchContext?: ResearchContextOwnerV1;
+  readonly researchContext?: ResearchContextOwnerV2;
   readonly livenessController?: LivenessController;
   readonly livenessPolicyResolver?: LivenessPolicyResolver;
   /** Deterministic crash-boundary injection used only by local host-recovery tests. */
   readonly researchHostFault?: (point: string) => void;
+  /** Optional trusted, immutable effect-trace snapshot provider. Absence means unknown. */
+  readonly effectEvidenceProvider?: EffectEvidenceProviderV1;
   /**
    * Playbook registry override. Production uses the shipped single-entry registry;
    * tests inject a double to prove multi-playbook dispatch without activating a skill.
@@ -118,6 +126,66 @@ export interface EngineOptions {
    * are unchanged.
    */
   readonly playbookName?: string;
+}
+
+export const ARTIFACT_DISPATCH_MODE_ENV = "PENNY_ARTIFACT_DISPATCH_MODE";
+
+/** Sole execution-owner parser. It is deliberately exact: no trimming or case folding. */
+export function parseArtifactDispatchMode(value: unknown): ArtifactDispatchStateV1 {
+  if (value === undefined) {
+    return validateContract(
+      ArtifactDispatchStateV1Schema,
+      {
+        schema_version: 1,
+        mode: "active",
+        configured_as: "unset",
+        code: "DISPATCH_ACTIVE",
+        reason: "artifact dispatch is active because the setting is unset",
+        dispatch_allowed: true,
+      },
+      "artifact dispatch mode"
+    );
+  }
+  if (value === "active") {
+    return validateContract(
+      ArtifactDispatchStateV1Schema,
+      {
+        schema_version: 1,
+        mode: "active",
+        configured_as: "active",
+        code: "DISPATCH_ACTIVE",
+        reason: "artifact dispatch is explicitly active",
+        dispatch_allowed: true,
+      },
+      "artifact dispatch mode"
+    );
+  }
+  if (value === "paused") {
+    return validateContract(
+      ArtifactDispatchStateV1Schema,
+      {
+        schema_version: 1,
+        mode: "paused",
+        configured_as: "paused",
+        code: "DISPATCH_PAUSED",
+        reason: "artifact dispatch is paused by the execution owner",
+        dispatch_allowed: false,
+      },
+      "artifact dispatch mode"
+    );
+  }
+  return validateContract(
+    ArtifactDispatchStateV1Schema,
+    {
+      schema_version: 1,
+      mode: "paused",
+      configured_as: "invalid",
+      code: "DISPATCH_MODE_INVALID",
+      reason: `${ARTIFACT_DISPATCH_MODE_ENV} must be unset or exactly 'active' or 'paused'; invalid configuration fails closed`,
+      dispatch_allowed: false,
+    },
+    "artifact dispatch mode"
+  );
 }
 
 const CONFIDENCE_RANK: Record<Confidence, number> = {
@@ -410,7 +478,7 @@ export class OrchestrationEngine {
   private readonly dispatchMode: () => string | undefined;
   private readonly artifactReader: ArtifactReader | undefined;
   private readonly artifactStore: ArtifactHostStore | undefined;
-  private readonly researchContext: ResearchContextOwnerV1 | undefined;
+  private readonly researchContext: ResearchContextOwnerV2 | undefined;
   readonly receiptAuthority: ReceiptAuthority;
   readonly liveness: LivenessController;
 
@@ -457,6 +525,9 @@ export class OrchestrationEngine {
       ...(this.researchContext ? { researchContext: this.researchContext } : {}),
       checkpointer: this.checkpointer,
       ...(options.researchHostFault ? { researchHostFault: options.researchHostFault } : {}),
+      ...(options.effectEvidenceProvider
+        ? { effectEvidenceProvider: options.effectEvidenceProvider }
+        : {}),
       /**
        * The private-input custody seam (§5.6), bound to THIS engine's control DB
        * and project root. Playbooks that never declare the capability (research)
@@ -474,7 +545,7 @@ export class OrchestrationEngine {
     });
     this.projectRoot = path.resolve(options.projectRoot);
     this.maxSteps = options.maxSteps;
-    this.dispatchMode = options.dispatchMode ?? (() => process.env.PENNY_ARTIFACT_DISPATCH_MODE);
+    this.dispatchMode = options.dispatchMode ?? (() => process.env[ARTIFACT_DISPATCH_MODE_ENV]);
     this.receiptAuthority = options.receiptAuthority;
     this.liveness = options.livenessController ?? new LivenessController(this.checkpointer);
     const registrationResolver = registration.liveness.resolve;
@@ -545,34 +616,35 @@ export class OrchestrationEngine {
   handle(value: unknown): Directive {
     const request = validateContract(OrchestrationRequestSchema, value, "orchestration request");
     const preparedStart = request.action === "start" ? this.prepareStart(request) : undefined;
-    const dispatch = this.dispatchState();
-    if (!dispatch.active && request.action !== "status" && request.action !== "cancel") {
+    const dispatch = parseArtifactDispatchMode(this.dispatchMode());
+    if (!dispatch.dispatch_allowed && request.action !== "status" && request.action !== "cancel") {
       if (request.action === "start") {
         if (path.resolve(request.project_root) !== this.projectRoot) {
           throw new Error(
             `project_root mismatch: engine owns '${this.projectRoot}', request supplied '${request.project_root}'`
           );
         }
-        // An admitted start already owns a durable run row; pausing preserves it
-        // rather than claiming it was never created.
-        return this.pausedDirective(
-          request.identity,
-          "intake",
-          dispatch.code,
-          dispatch.reason,
-          this.checkpointer.runExists(request.identity.run_id)
-        );
+        if (!this.checkpointer.runExists(request.identity.run_id)) {
+          return this.pausedDirective({
+            identity: request.identity,
+            status: "running",
+            stateId: "intake",
+            code: dispatch.code,
+            reason: dispatch.reason,
+            dispatch,
+            recoveryKind: "start_retry",
+            checkpointExists: false,
+          });
+        }
+        const admitted = this.checkpointer.loadRun(request.identity);
+        const bindingRefusal = this.registrationBindingRefusal(admitted);
+        if (bindingRefusal !== undefined) return bindingRefusal;
+        return this.pausedDirectiveForContext(admitted, dispatch);
       }
       const context = this.checkpointer.loadRun(request.identity);
       const bindingRefusal = this.registrationBindingRefusal(context);
       if (bindingRefusal !== undefined) return bindingRefusal;
-      return this.pausedDirective(
-        context.identity,
-        context.stateId,
-        dispatch.code,
-        dispatch.reason,
-        true
-      );
+      return this.pausedDirectiveForContext(context, dispatch);
     }
     switch (request.action) {
       case "start": {
@@ -693,7 +765,7 @@ export class OrchestrationEngine {
       case "status":
         return this.status(request.identity);
       case "recover":
-        return this.recover(request.identity);
+        return this.recover(request.identity, dispatch);
       case "respond": {
         const context = this.checkpointer.loadRun(request.identity);
         const bindingRefusal = this.registrationBindingRefusal(context);
@@ -751,6 +823,26 @@ export class OrchestrationEngine {
         return next;
       }
     }
+  }
+
+  /**
+   * Re-check the execution-owner setting at the last engine boundary before a
+   * worker, fan-out branch, or child workflow can leave the engine package.
+   */
+  authorizeDispatch(candidate: Directive): Directive {
+    if (
+      candidate.action !== "invoke_agent" &&
+      candidate.action !== "invoke_agents_parallel" &&
+      candidate.action !== "invoke_child_workflow"
+    ) {
+      return candidate;
+    }
+    const dispatch = parseArtifactDispatchMode(this.dispatchMode());
+    if (dispatch.dispatch_allowed) return candidate;
+    const context = this.checkpointer.loadRun(candidate.identity);
+    const bindingRefusal = this.registrationBindingRefusal(context);
+    if (bindingRefusal !== undefined) return bindingRefusal;
+    return this.pausedDirectiveForContext(context, dispatch);
   }
 
   /**
@@ -1859,7 +1951,7 @@ export class OrchestrationEngine {
     });
   }
 
-  private recover(identity: RunIdentity): Directive {
+  private recover(identity: RunIdentity, dispatch: ArtifactDispatchStateV1): Directive {
     const context = this.checkpointer.loadRun(identity);
     const bindingRefusal = this.registrationBindingRefusal(context);
     if (bindingRefusal !== undefined) return bindingRefusal;
@@ -1885,13 +1977,19 @@ export class OrchestrationEngine {
     }
     if (context.terminalDirective !== null) return this.currentDirective(context);
     if (this.requiresLivenessPolicy(context) && !this.liveness.hasPolicy(context.identity.run_id)) {
-      return this.pausedDirective(
-        context.identity,
-        context.stateId,
-        "LEGACY_UNMETERED",
-        "active legacy run has no durable liveness policy; recovery is paused",
-        true
-      );
+      const legacyReason = "active legacy run has no durable liveness policy; recovery is paused";
+      return this.pausedDirective({
+        identity: context.identity,
+        status: context.status,
+        stateId: context.stateId,
+        code: dispatch.code === "DISPATCH_ACTIVE" ? "LEGACY_UNMETERED" : dispatch.code,
+        reason: dispatch.dispatch_allowed ? legacyReason : dispatch.reason,
+        recoveryReason: legacyReason,
+        recoveryIneligibilityCode: "LEGACY_UNMETERED",
+        dispatch,
+        recoveryKind: "saved_but_ineligible",
+        checkpointExists: true,
+      });
     }
     const interruptionReason = this.liveness.recoverOpenWorkers(context.identity.run_id);
     if (interruptionReason !== null) return this.exhaust(identity, interruptionReason);
@@ -1902,54 +2000,118 @@ export class OrchestrationEngine {
     return this.currentDirective(context);
   }
 
-  private dispatchState(): {
-    active: boolean;
-    code: "DISPATCH_PAUSED" | "DISPATCH_MODE_INVALID";
-    reason: string;
-  } {
-    const mode = this.dispatchMode()?.trim() || "active";
-    if (mode === "active") {
-      return {
-        active: true,
-        code: "DISPATCH_PAUSED",
-        reason: "artifact dispatch is active",
-      };
+  private pausedDirectiveForContext(
+    context: RunContext,
+    dispatch: ArtifactDispatchStateV1
+  ): Directive {
+    if (context.terminalDirective !== null) return this.currentDirective(context);
+    if (context.stateId === "intake") {
+      return this.pausedDirective({
+        identity: context.identity,
+        status: context.status,
+        stateId: context.stateId,
+        code: dispatch.code === "DISPATCH_ACTIVE" ? "DISPATCH_PAUSED" : dispatch.code,
+        reason: dispatch.reason,
+        dispatch,
+        recoveryKind: "start_retry",
+        checkpointExists: true,
+      });
     }
-    if (mode === "paused") {
-      return {
-        active: false,
-        code: "DISPATCH_PAUSED",
-        reason: "artifact dispatch is paused by the execution owner",
-      };
+    if (this.requiresLivenessPolicy(context) && !this.liveness.hasPolicy(context.identity.run_id)) {
+      const legacyReason = "active legacy run has no durable liveness policy; recovery is paused";
+      return this.pausedDirective({
+        identity: context.identity,
+        status: context.status,
+        stateId: context.stateId,
+        code: dispatch.code === "DISPATCH_ACTIVE" ? "LEGACY_UNMETERED" : dispatch.code,
+        reason: dispatch.dispatch_allowed ? legacyReason : dispatch.reason,
+        recoveryReason: legacyReason,
+        recoveryIneligibilityCode: "LEGACY_UNMETERED",
+        dispatch,
+        recoveryKind: "saved_but_ineligible",
+        checkpointExists: true,
+      });
     }
-    return {
-      active: false,
-      code: "DISPATCH_MODE_INVALID",
-      reason: `unknown artifact dispatch mode '${mode}'`,
-    };
+    if (
+      context.pendingDirective === null &&
+      !(hasHostContinuation(this.playbook) && this.playbook.needsHostContinuation(context))
+    ) {
+      return this.pausedDirective({
+        identity: context.identity,
+        status: context.status,
+        stateId: context.stateId,
+        code: dispatch.code === "DISPATCH_ACTIVE" ? "DISPATCH_PAUSED" : dispatch.code,
+        reason: dispatch.reason,
+        recoveryReason:
+          "saved run has no pending or host-continuation directive; recovery is not supported",
+        recoveryIneligibilityCode: "CHECKPOINT_NOT_RESUMABLE",
+        dispatch,
+        recoveryKind: "saved_but_ineligible",
+        checkpointExists: true,
+      });
+    }
+    return this.pausedDirective({
+      identity: context.identity,
+      status: context.status,
+      stateId: context.stateId,
+      code: dispatch.code === "DISPATCH_ACTIVE" ? "DISPATCH_PAUSED" : dispatch.code,
+      reason: dispatch.reason,
+      dispatch,
+      recoveryKind: "recoverable_checkpoint",
+      checkpointExists: true,
+    });
   }
 
   private pausedDirective(
-    identity: RunIdentity,
-    stateId: string,
-    code: "DISPATCH_PAUSED" | "DISPATCH_MODE_INVALID" | "LEGACY_UNMETERED",
-    reason: string,
-    checkpointPreserved: boolean
+    input: {
+      readonly identity: RunIdentity;
+      readonly status: RunContext["status"];
+      readonly stateId: string;
+      readonly code: ArtifactDispatchPauseCode;
+      readonly reason: string;
+      readonly recoveryReason?: string;
+      readonly dispatch: ArtifactDispatchStateV1;
+      readonly checkpointExists: boolean;
+    } & (
+      | {
+          readonly recoveryKind: "recoverable_checkpoint" | "start_retry";
+          readonly recoveryIneligibilityCode?: never;
+        }
+      | {
+          readonly recoveryKind: "saved_but_ineligible";
+          readonly recoveryIneligibilityCode: ArtifactDispatchIneligibilityCode;
+        }
+    )
   ): Directive {
+    const recovery =
+      input.recoveryKind === "saved_but_ineligible"
+        ? artifactDispatchRecoveryV1({
+            identity: input.identity,
+            stateId: input.stateId,
+            reason: input.recoveryReason ?? input.reason,
+            kind: input.recoveryKind,
+            checkpointExists: input.checkpointExists,
+            ineligibilityCode: input.recoveryIneligibilityCode,
+          })
+        : artifactDispatchRecoveryV1({
+            identity: input.identity,
+            stateId: input.stateId,
+            reason: input.recoveryReason ?? input.reason,
+            kind: input.recoveryKind,
+            checkpointExists: input.checkpointExists,
+          });
     return directive({
       schema_version: 2,
+      pause_schema_version: 1,
       action: "paused",
-      identity,
-      status: "running",
-      state_id: stateId,
-      code,
-      reason,
-      retryable: true,
-      recovery: {
-        action: "recover",
-        run_id: identity.run_id,
-        checkpoint_preserved: checkpointPreserved,
-      },
+      identity: input.identity,
+      status: input.status,
+      state_id: input.stateId,
+      code: input.code,
+      reason: input.reason,
+      retryable: recovery.kind !== "saved_but_ineligible",
+      dispatch: input.dispatch,
+      recovery,
     });
   }
 

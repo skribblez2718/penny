@@ -57,14 +57,25 @@ function isCapturedRawTool<TParams extends TSchema, TDetails>(
   return isRecord(value) && value.parameters === parameters && typeof value.execute === "function";
 }
 
+function isToolResultHandler(value: unknown): value is (event: { toolCallId: string }) => unknown {
+  return typeof value === "function";
+}
+
 function createRegistrationHost<TParams extends TSchema, TDetails>(
   parameters: TParams
 ): {
   pi: ExtensionAPI;
   registeredTool(): CapturedRawTool<TParams, TDetails>;
+  toolResultPatch(toolCallId: string): unknown;
 } {
   let registered: CapturedRawTool<TParams, TDetails> | undefined;
+  let toolResultHandler: ((event: { toolCallId: string }) => unknown) | undefined;
   const pi = createTestExtensionApi({
+    onEvent(event, handler) {
+      if (event === "tool_result" && isToolResultHandler(handler)) {
+        toolResultHandler = handler;
+      }
+    },
     onRegisterTool(tool) {
       if (!isCapturedRawTool<TParams, TDetails>(tool, parameters)) {
         throw new Error("adapter registered an invalid Pi tool");
@@ -78,6 +89,10 @@ function createRegistrationHost<TParams extends TSchema, TDetails>(
     registeredTool() {
       if (registered === undefined) throw new Error("adapter did not register a Pi tool");
       return registered;
+    },
+    toolResultPatch(toolCallId) {
+      if (toolResultHandler === undefined) throw new Error("adapter did not register its bridge");
+      return toolResultHandler({ toolCallId });
     },
   };
 }
@@ -215,6 +230,9 @@ describe("Pi tool registration adapter contract", () => {
       expect(result.details).toBeUndefined();
       expect(result.content).toEqual(projectResult.content);
       expect(result.isError).toBe(outcome === "error" ? true : undefined);
+      expect(host.toolResultPatch(`call-${outcome}`)).toEqual(
+        outcome === "error" ? { isError: true } : undefined
+      );
     }
   });
 });

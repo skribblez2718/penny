@@ -14,6 +14,11 @@ export type MemoryResultOperation = MemoryOperation | LogstreamOperation;
 export type MemoryLogstreamConfig =
   | { mode: "disabled"; stream: null; rooms: readonly [] }
   | { mode: "primary-advisory"; stream: string; rooms: readonly string[] };
+export type MemoryAutoDiaryMode = "disabled" | "observe-only" | "retain";
+export interface MemoryAutoDiaryConfig {
+  mode: MemoryAutoDiaryMode;
+  shutdownTimeoutMs: number;
+}
 
 export type MemoryErrorCode =
   | "MEMPALACE_UNAVAILABLE"
@@ -43,6 +48,7 @@ export class MemoryError extends Error {
 export interface MemoryRuntimeConfig {
   mode: "hub" | "disabled";
   writeEnabled: boolean;
+  autoDiary: MemoryAutoDiaryConfig;
   logstream: MemoryLogstreamConfig;
   platformConfig: PlatformMemoryConfigV1;
   bearerToken: string;

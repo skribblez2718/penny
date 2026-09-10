@@ -56,7 +56,10 @@ describe("production adapter source guard", () => {
       asMemoryExtensionApi(pi)
     );
 
-    expect(handlers).toEqual(["session_start", "session_shutdown"]);
+    expect(handlers.filter((event) => event.startsWith("session_"))).toEqual([
+      "session_start",
+      "session_shutdown",
+    ]);
     for (const tool of tools) {
       expect(tool.promptGuidelines).toBeUndefined();
       expect(tool.promptSnippet).toBeUndefined();

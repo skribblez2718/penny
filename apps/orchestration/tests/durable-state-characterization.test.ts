@@ -456,19 +456,37 @@ function phaseResultProjection(
 }
 
 function legacyUnmeteredPause(identity: RunIdentity, stateId: string) {
+  const reason = "active legacy run has no durable liveness policy; recovery is paused";
   return {
     schema_version: 2 as const,
+    pause_schema_version: 1 as const,
     action: "paused" as const,
     identity,
     status: "running" as const,
     state_id: stateId,
     code: "LEGACY_UNMETERED" as const,
-    reason: "active legacy run has no durable liveness policy; recovery is paused",
-    retryable: true as const,
+    reason,
+    retryable: false as const,
+    dispatch: {
+      schema_version: 1 as const,
+      mode: "active" as const,
+      configured_as: "unset" as const,
+      code: "DISPATCH_ACTIVE" as const,
+      reason: "artifact dispatch is active because the setting is unset",
+      dispatch_allowed: true as const,
+    },
     recovery: {
-      action: "recover" as const,
-      run_id: identity.run_id,
-      checkpoint_preserved: true,
+      schema_version: 1 as const,
+      kind: "saved_but_ineligible" as const,
+      action: "status_or_cancel" as const,
+      ineligibility_code: "LEGACY_UNMETERED" as const,
+      identity,
+      state_id: stateId,
+      reason,
+      checkpoint_exists: true as const,
+      checkpoint_preserved: true as const,
+      resumable: false as const,
+      requires_dispatch_mode: null,
     },
   };
 }
@@ -911,6 +929,8 @@ describe("TS-200 recovery error codes and fail-closed behavior", () => {
     };
     missingCheckpointer.close();
 
-    expect(projection).toEqual(fixtureObject("contract-projection.v1.json").recovery_fail_closed);
+    expect(projection).toEqual(
+      fixtureObject("artifact-dispatch-recovery-projection.v1.json").recovery_fail_closed
+    );
   });
 });

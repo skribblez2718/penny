@@ -24,34 +24,45 @@ import { RunContext } from "../context.js";
 import {
   artifactApproachDecisionPromptContract,
   artifactApproachPromptContract,
-  assertProducedArtifactLineage,
+  assertProducedArtifactLineageV2,
   canonicalizeProduceRequest,
   parsePersistedArtifactApproach,
   parsePersistedArtifactApproachDecision,
-  parsePersistedProducedArtifactDraft,
-  produceProductEnvelopeId,
-  produceProductIntegrityId,
-  produceQualityReceiptId,
+  parsePersistedProducedArtifactDraftV2,
+  produceProductEnvelopeIdV2,
+  produceProductIntegrityIdV2,
+  produceQualityReceiptIdV2,
   produceRequestConstraints,
-  produceValidityReceiptId,
-  producedArtifactDraftPromptContract,
-  sealProducedArtifact,
-  validateCanonicalProducedArtifactBytes,
-  validateProduceProductEnvelope,
-  validateProduceProductIntegrity,
-  validateProduceQualityReceipt,
+  produceValidityReceiptIdV2,
+  producedArtifactDraftPromptContractV2,
+  sealProducedArtifactV2,
+  validateCanonicalProducedArtifactV2Bytes,
+  validateProduceProductEnvelopeV2,
+  validateProduceProductIntegrityV2,
+  validateProduceQualityReceiptV2,
   validateProduceRequest,
   validateProduceSealFeedback,
-  validateProduceValidityReceipt,
+  validateProduceValidityReceiptV2,
   ProduceDraftValidationError,
   type ArtifactApproachV1,
-  type ProduceProductEnvelopeV1,
-  type ProduceProductIntegrityV1,
-  type ProduceQualityReceiptV1,
+  type ProduceProductEnvelopeV2,
+  type ProduceProductIntegrityV2,
+  type ProduceQualityReceiptV2,
   type ProduceRequestV1,
-  type ProduceValidityReceiptV1,
-  type ProducedArtifactDraftV1,
+  type ProduceValidityReceiptV2,
+  type ProducedArtifactDraftV2,
 } from "../skill-contracts/produce.js";
+import {
+  BOUNDED_EFFECT_NOTICE,
+  EFFECT_POLICY_VIOLATION_LIMITATION,
+  PRODUCE_EFFECT_PHASES,
+  UNKNOWN_EFFECT_LIMITATION,
+  collectEffectEvidence,
+  effectEvidenceSha256,
+  unknownEffectEvidenceGraph,
+  type EffectEvidenceGraphV1,
+  type EffectEvidenceProviderV1,
+} from "../skill-contracts/effects.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
 import {
   hostContinuation,
@@ -305,8 +316,8 @@ export const PRODUCE_SKILL_CONTRACT: SkillContract = {
         name: "produced_artifact",
         direction: "output",
         transport: "artifact",
-        schema_id: "penny.produced-artifact.v1",
-        schema_version_required: 1,
+        schema_id: "penny.produced-artifact.v2",
+        schema_version_required: 2,
         artifact_kind: "semantic-core",
         source: "skill",
         min_items: 1,
@@ -363,8 +374,8 @@ export const PRODUCE_SKILL_CONTRACT: SkillContract = {
     required_receipt_predicates: ["produce_latest_reviewed_artifact_dod.v1"],
     latest_product: {
       selector: "terminal_artifact",
-      schema_id: "penny.produced-artifact.v1",
-      product_schema_version: 1,
+      schema_id: "penny.produced-artifact.v2",
+      product_schema_version: 2,
       artifact_kind: "semantic-core",
       producing_state: "sealing_artifact",
     },
@@ -446,8 +457,8 @@ function latestProductArtifact(context: RunContext): ArtifactRef | undefined {
     (artifact) =>
       artifact.kind === "semantic-core" &&
       artifact.phase === "sealing_artifact" &&
-      artifact.content_schema?.schema_id === "penny.produced-artifact.v1" &&
-      artifact.content_schema.schema_version === 1
+      artifact.content_schema?.schema_id === "penny.produced-artifact.v2" &&
+      artifact.content_schema.schema_version === 2
   );
 }
 
@@ -491,6 +502,21 @@ function latestIntegrityArtifact(context: RunContext): ArtifactRef | undefined {
 
 function latestEnvelopeArtifact(context: RunContext): ArtifactRef | undefined {
   return selectedLatest(context, (artifact) => artifact.kind === "produce-product-envelope");
+}
+
+const LEGACY_PRODUCE_EFFECT_SCHEMAS = new Set([
+  "penny.produced-artifact-draft.v1",
+  "penny.produced-artifact.v1",
+  "penny.produce-quality-receipt.v1",
+  "penny.produce-validity-receipt.v1",
+  "penny.produce-product-integrity.v1",
+  "penny.produce-product-envelope.v1",
+]);
+
+function legacyProduceEffectArtifact(context: RunContext): ArtifactRef | undefined {
+  return context.selectedArtifacts.find((artifact) =>
+    LEGACY_PRODUCE_EFFECT_SCHEMAS.has(artifact.content_schema?.schema_id ?? "")
+  );
 }
 
 function canonicalProduceRequest(
@@ -609,7 +635,7 @@ function outputMetadata(
           ? {
               artifactKind: "produced-artifact-draft",
               mediaType: "text/plain; charset=utf-8",
-              contentSchema: { schema_id: "penny.produced-artifact-draft.v1", schema_version: 1 },
+              contentSchema: { schema_id: "penny.produced-artifact-draft.v2", schema_version: 2 },
             }
           : {};
   return buildOutputArtifactMetadata({
@@ -660,7 +686,7 @@ function refsForState(context: RunContext, state: ProduceWorkerState): readonly 
     ]);
   }
   if (draft === undefined || product === undefined) {
-    throw new Error(`${state} requires the exact latest draft and sealed ProducedArtifactV1`);
+    throw new Error(`${state} requires the exact latest draft and sealed ProducedArtifactV2`);
   }
   const subject = [request, approach, decision, draft, product];
   if (state === "critiquing_artifact") return subject;
@@ -674,7 +700,7 @@ function slotForRef(ref: ArtifactRef): string {
   if (ref.kind === "artifact-approach-decision") return "latest-artifact-approach-decision";
   if (ref.kind === "produced-artifact-draft") return "latest-produced-artifact-draft";
   if (ref.kind === "produce-seal-feedback") return "produce-seal-feedback";
-  if (ref.content_schema?.schema_id === "penny.produced-artifact.v1") {
+  if (ref.content_schema?.schema_id === "penny.produced-artifact.v2") {
     return "latest-produced-artifact";
   }
   if (ref.phase === "critiquing_artifact") return "latest-carren-report";
@@ -701,19 +727,19 @@ function taskForState(context: RunContext, state: ProduceWorkerState): string {
     case "materializing_artifact":
       return [
         boundary,
-        `MECHANICALLY_PROJECTED_PRODUCED_ARTIFACT_DRAFT_CONTRACT:${producedArtifactDraftPromptContract()}`,
-        "Materialize one complete replacement ProducedArtifactDraftV1 from the exact request, Ida alternatives, and latest Demetri selection. Cover every exact request item. A truthful not_applicable is permitted only when required supplied material is absent or the exact constraints make production impossible; explain why and emit empty content. Never claim syntax, compilation, execution, tests, writes, or external checks. Repair all applicable Carren, Vera, or seal-feedback findings in one replacement draft.",
+        `MECHANICALLY_PROJECTED_PRODUCED_ARTIFACT_DRAFT_CONTRACT:${producedArtifactDraftPromptContractV2()}`,
+        "Materialize one complete replacement ProducedArtifactDraftV2 from the exact request, Ida alternatives, and latest Demetri selection. Cover every exact request item. A truthful not_applicable is permitted only when required supplied material is absent or the exact constraints make production impossible; explain why and emit empty content. Never claim syntax, compilation, execution, tests, writes, or external checks. Repair all applicable Carren, Vera, or seal-feedback findings in one replacement draft.",
       ].join("\n\n");
     case "critiquing_artifact":
       return [
         boundary,
-        "Subjectively review the exact latest host-sealed ProducedArtifactV1 against the exact brief, Ida alternatives, Demetri decision, and Skribble draft. Judge fitness for purpose, coherence, clarity, usefulness, restraint, quality of not_applicable reasoning, and whether the artifact actually feels complete. Do not repair it.",
+        "Subjectively review the exact latest host-sealed ProducedArtifactV2 against the exact brief, Ida alternatives, Demetri decision, and Skribble draft. Judge fitness for purpose, coherence, clarity, usefulness, restraint, quality of not_applicable reasoning, and whether the artifact actually feels complete. Treat the host effect graph as scoped evidence, not as full confinement. Do not repair it.",
         "APPROVE only when no major or critical quality defect remains. FAIL uses quality_gap/skribble. Never emit a target state.",
       ].join("\n\n");
     case "verifying_artifact":
       return [
         boundary,
-        "Independently verify objective correctness and compliance of the exact latest ProducedArtifactV1 against the exact request, Ida alternatives, Demetri decision, Skribble draft, and current Carren report. Recompute request coverage, media type, content hash, JSON parse/canonicality when applicable, not_applicable emptiness, no-action flags, exact request/alternatives/decision/draft/source lineage, and ref roles. Treat Carren as prior context, not authority. Do not repair the product.",
+        "Independently verify objective correctness and compliance of the exact latest ProducedArtifactV2 against the exact request, Ida alternatives, Demetri decision, Skribble draft, and current Carren report. Recompute request coverage, media type, content hash, JSON parse/canonicality when applicable, not_applicable emptiness, exact request/alternatives/decision/draft/source lineage, ref roles, and the host-authored versioned effect graph. Treat unknown effect observations or controls as unknown, not as proof of absence. Treat Carren as prior context, not authority. Do not repair the product.",
         "PASS only when every objective check holds. FAIL uses brief_gap/ida when the approach or brief treatment must be reconsidered, or artifact_product_gap/skribble when the draft/product must change. Never emit a target state.",
       ].join("\n\n");
   }
@@ -862,15 +888,19 @@ function persistSealedProduct(input: {
   readonly approach: ArtifactRef;
   readonly decision: ArtifactRef;
   readonly draft: ArtifactRef;
-  readonly draftValue: ProducedArtifactDraftV1;
+  readonly draftValue: ProducedArtifactDraftV2;
 }): { readonly artifact: ArtifactRef; readonly added: boolean } {
-  const product = sealProducedArtifact({
+  const product = sealProducedArtifactV2({
     request: canonicalProduceRequest(input.store, input.context),
     draft: input.draftValue,
     requestRef: input.request,
     approachRef: input.approach,
     decisionRef: input.decision,
     draftRef: input.draft,
+    effectEvidence: unknownEffectEvidenceGraph({
+      runId: input.context.identity.run_id,
+      phases: PRODUCE_EFFECT_PHASES,
+    }),
   });
   const content = canonicalJson(product);
   const upstreamRefs = [input.request, input.approach, input.decision, input.draft];
@@ -900,7 +930,7 @@ function persistSealedProduct(input: {
     canonicalJson(input.store.metadata(interrupted).upstream_refs) === canonicalJson(upstreamRefs)
   ) {
     input.store.select(interrupted);
-    validateCanonicalProducedArtifactBytes(
+    validateCanonicalProducedArtifactV2Bytes(
       input.store.readById(interrupted.artifact_id),
       interrupted
     );
@@ -919,7 +949,7 @@ function persistSealedProduct(input: {
           version - 1
         );
   if (version > 1 && parentRef === null) {
-    throw new Error("ProducedArtifactV1 revision chain is missing its preceding product");
+    throw new Error("ProducedArtifactV2 revision chain is missing its preceding product");
   }
   const metadata: OutputArtifactMetadata = {
     schema_version: 2,
@@ -931,7 +961,7 @@ function persistSealedProduct(input: {
     version,
     producer: "host:artifact-sealer",
     media_type: "application/json",
-    content_schema: { schema_id: "penny.produced-artifact.v1", schema_version: 1 },
+    content_schema: { schema_id: "penny.produced-artifact.v2", schema_version: 2 },
     parent_ref: parentRef,
     upstream_refs: upstreamRefs,
   };
@@ -948,12 +978,12 @@ function persistSealedProduct(input: {
     canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
     input.store.readById(artifact.artifact_id).toString("utf8") !== content
   ) {
-    throw new Error("ProducedArtifactV1 diverged from deterministic host sealing");
+    throw new Error("ProducedArtifactV2 diverged from deterministic host sealing");
   }
   const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("ProducedArtifactV1 failed manifest re-read");
+  if (reread === undefined) throw new Error("ProducedArtifactV2 failed manifest re-read");
   input.store.select(reread);
-  validateCanonicalProducedArtifactBytes(input.store.readById(reread.artifact_id), reread);
+  validateCanonicalProducedArtifactV2Bytes(input.store.readById(reread.artifact_id), reread);
   return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
 }
 
@@ -1142,10 +1172,10 @@ function matchingQualityReceipt(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
   readonly subject: ProduceSubjectV1;
-}): { readonly artifact: ArtifactRef; readonly value: ProduceQualityReceiptV1 } | undefined {
+}): { readonly artifact: ArtifactRef; readonly value: ProduceQualityReceiptV2 } | undefined {
   const artifact = latestQualityReceipt(input.context);
   if (artifact === undefined) return undefined;
-  const value = readCanonicalJson(input.store, artifact, validateProduceQualityReceipt);
+  const value = readCanonicalJson(input.store, artifact, validateProduceQualityReceiptV2);
   return value.product_ref.artifact_id === input.subject.product.artifact_id &&
     value.approach_ref.artifact_id === input.subject.approach.artifact_id &&
     value.decision_ref.artifact_id === input.subject.decision.artifact_id &&
@@ -1159,10 +1189,10 @@ function matchingValidityReceipt(input: {
   readonly store: ArtifactHostStore;
   readonly subject: ProduceSubjectV1;
   readonly quality: ArtifactRef;
-}): { readonly artifact: ArtifactRef; readonly value: ProduceValidityReceiptV1 } | undefined {
+}): { readonly artifact: ArtifactRef; readonly value: ProduceValidityReceiptV2 } | undefined {
   const artifact = latestValidityReceipt(input.context);
   if (artifact === undefined) return undefined;
-  const value = readCanonicalJson(input.store, artifact, validateProduceValidityReceipt);
+  const value = readCanonicalJson(input.store, artifact, validateProduceValidityReceiptV2);
   return value.product_ref.artifact_id === input.subject.product.artifact_id &&
     value.approach_ref.artifact_id === input.subject.approach.artifact_id &&
     value.decision_ref.artifact_id === input.subject.decision.artifact_id &&
@@ -1176,9 +1206,10 @@ function ensureQualityReceipt(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
   readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
+  readonly effectEvidenceProvider?: EffectEvidenceProviderV1;
 }): {
   readonly artifact: ArtifactRef;
-  readonly value: ProduceQualityReceiptV1;
+  readonly value: ProduceQualityReceiptV2;
   readonly added: boolean;
 } {
   const subject = currentSubject(input.context);
@@ -1191,9 +1222,9 @@ function ensureQualityReceipt(input: {
     subject,
   });
   if (evidence === undefined) throw new Error("latest-product Carren APPROVE is absent");
-  const body: Omit<ProduceQualityReceiptV1, "receipt_id"> = {
-    schema_id: "penny.produce-quality-receipt.v1",
-    schema_version: 1,
+  const body: Omit<ProduceQualityReceiptV2, "receipt_id"> = {
+    schema_id: "penny.produce-quality-receipt.v2",
+    schema_version: 2,
     run_id: input.context.identity.run_id,
     verdict: "APPROVE",
     reviewer: "carren",
@@ -1206,14 +1237,18 @@ function ensureQualityReceipt(input: {
     execution_receipt_id: evidence.result.worker_receipt.receipt_id,
     execution_result_sha256: sha256(canonicalJson(evidence.result)),
     created_at: evidence.result.worker_receipt.ended_at,
-    external_actions_performed: false,
-    filesystem_writes_performed: false,
-    tests_executed: false,
+    effect_evidence: collectEffectEvidence({
+      runId: input.context.identity.run_id,
+      phases: PRODUCE_EFFECT_PHASES,
+      ...(input.effectEvidenceProvider === undefined
+        ? {}
+        : { provider: input.effectEvidenceProvider }),
+    }),
     minted_by: "host:produce-receipt-authority",
   };
-  const value = validateProduceQualityReceipt({
+  const value = validateProduceQualityReceiptV2({
     ...body,
-    receipt_id: produceQualityReceiptId(body),
+    receipt_id: produceQualityReceiptIdV2(body),
   });
   const persisted = persistVersionedHostArtifact({
     context: input.context,
@@ -1223,7 +1258,7 @@ function ensureQualityReceipt(input: {
     kind: "produce-quality-receipt",
     operationLabel: "quality-receipt",
     producer: "host:produce-receipt-authority",
-    contentSchema: { schema_id: "penny.produce-quality-receipt.v1", schema_version: 1 },
+    contentSchema: { schema_id: "penny.produce-quality-receipt.v2", schema_version: 2 },
     upstreamRefs: [...subjectRefs(subject), evidence.report],
     content: canonicalJson(value),
   });
@@ -1234,10 +1269,10 @@ function ensureValidityReceipt(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
   readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
-  readonly quality: { readonly artifact: ArtifactRef; readonly value: ProduceQualityReceiptV1 };
+  readonly quality: { readonly artifact: ArtifactRef; readonly value: ProduceQualityReceiptV2 };
 }): {
   readonly artifact: ArtifactRef;
-  readonly value: ProduceValidityReceiptV1;
+  readonly value: ProduceValidityReceiptV2;
   readonly added: boolean;
 } {
   const subject = currentSubject(input.context);
@@ -1258,9 +1293,9 @@ function ensureValidityReceipt(input: {
     carrenReport: input.quality.value.carren_report_ref,
   });
   if (evidence === undefined) throw new Error("latest-product Vera PASS is absent");
-  const body: Omit<ProduceValidityReceiptV1, "receipt_id"> = {
-    schema_id: "penny.produce-validity-receipt.v1",
-    schema_version: 1,
+  const body: Omit<ProduceValidityReceiptV2, "receipt_id"> = {
+    schema_id: "penny.produce-validity-receipt.v2",
+    schema_version: 2,
     run_id: input.context.identity.run_id,
     verdict: "PASS",
     reviewer: "vera",
@@ -1275,14 +1310,12 @@ function ensureValidityReceipt(input: {
     execution_receipt_id: evidence.result.worker_receipt.receipt_id,
     execution_result_sha256: sha256(canonicalJson(evidence.result)),
     created_at: evidence.result.worker_receipt.ended_at,
-    external_actions_performed: false,
-    filesystem_writes_performed: false,
-    tests_executed: false,
+    effect_evidence: input.quality.value.effect_evidence,
     minted_by: "host:produce-receipt-authority",
   };
-  const value = validateProduceValidityReceipt({
+  const value = validateProduceValidityReceiptV2({
     ...body,
-    receipt_id: produceValidityReceiptId(body),
+    receipt_id: produceValidityReceiptIdV2(body),
   });
   const persisted = persistVersionedHostArtifact({
     context: input.context,
@@ -1292,7 +1325,7 @@ function ensureValidityReceipt(input: {
     kind: "produce-validity-receipt",
     operationLabel: "validity-receipt",
     producer: "host:produce-receipt-authority",
-    contentSchema: { schema_id: "penny.produce-validity-receipt.v1", schema_version: 1 },
+    contentSchema: { schema_id: "penny.produce-validity-receipt.v2", schema_version: 2 },
     upstreamRefs: [
       ...subjectRefs(subject),
       input.quality.value.carren_report_ref,
@@ -1326,11 +1359,11 @@ function ensureProductIntegrity(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
   readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
-  readonly quality: { readonly artifact: ArtifactRef; readonly value: ProduceQualityReceiptV1 };
-  readonly validity: { readonly artifact: ArtifactRef; readonly value: ProduceValidityReceiptV1 };
+  readonly quality: { readonly artifact: ArtifactRef; readonly value: ProduceQualityReceiptV2 };
+  readonly validity: { readonly artifact: ArtifactRef; readonly value: ProduceValidityReceiptV2 };
 }): {
   readonly artifact: ArtifactRef;
-  readonly value: ProduceProductIntegrityV1;
+  readonly value: ProduceProductIntegrityV2;
   readonly added: boolean;
 } {
   const subject = currentSubject(input.context);
@@ -1341,15 +1374,15 @@ function ensureProductIntegrity(input: {
   parsePersistedArtifactApproachDecision(input.store.readById(subject.decision.artifact_id), {
     approach,
   });
-  const draft = parsePersistedProducedArtifactDraft(
+  const draft = parsePersistedProducedArtifactDraftV2(
     input.store.readById(subject.draft.artifact_id),
     { request }
   ).draft;
-  const product = validateCanonicalProducedArtifactBytes(
+  const product = validateCanonicalProducedArtifactV2Bytes(
     input.store.readById(subject.product.artifact_id),
     subject.product
   );
-  assertProducedArtifactLineage({
+  assertProducedArtifactLineageV2({
     product,
     request,
     draft,
@@ -1357,7 +1390,14 @@ function ensureProductIntegrity(input: {
     approachRef: subject.approach,
     decisionRef: subject.decision,
     draftRef: subject.draft,
+    effectEvidence: product.effect_evidence,
   });
+  if (
+    canonicalJson(input.quality.value.effect_evidence) !==
+    canonicalJson(input.validity.value.effect_evidence)
+  ) {
+    throw new Error("ProduceV2 quality and validity effect evidence diverged");
+  }
   const executionReceiptIds = exactExecutionReceiptIds({
     context: input.context,
     checkpointer: input.checkpointer,
@@ -1369,9 +1409,9 @@ function ensureProductIntegrity(input: {
       input.validity.value.vera_report_ref,
     ],
   });
-  const body: Omit<ProduceProductIntegrityV1, "integrity_id"> = {
-    schema_id: "penny.produce-product-integrity.v1",
-    schema_version: 1,
+  const body: Omit<ProduceProductIntegrityV2, "integrity_id"> = {
+    schema_id: "penny.produce-product-integrity.v2",
+    schema_version: 2,
     status: "PASS",
     request_ref: subject.request,
     approach_ref: subject.approach,
@@ -1391,15 +1431,14 @@ function ensureProductIntegrity(input: {
       "latest_quality_receipt",
       "latest_validity_receipt",
       "signed_worker_evidence",
-      "no_side_effects",
+      "effect_evidence_consistency",
     ],
-    external_actions_performed: false,
-    filesystem_writes_performed: false,
-    tests_executed: false,
+    product_effect_evidence_sha256: effectEvidenceSha256(product.effect_evidence),
+    effect_evidence: input.quality.value.effect_evidence,
   };
-  const value = validateProduceProductIntegrity({
+  const value = validateProduceProductIntegrityV2({
     ...body,
-    integrity_id: produceProductIntegrityId(body),
+    integrity_id: produceProductIntegrityIdV2(body),
   });
   const persisted = persistVersionedHostArtifact({
     context: input.context,
@@ -1409,7 +1448,7 @@ function ensureProductIntegrity(input: {
     kind: "produce-product-integrity",
     operationLabel: "product-integrity",
     producer: "host:produce-product-validator",
-    contentSchema: { schema_id: "penny.produce-product-integrity.v1", schema_version: 1 },
+    contentSchema: { schema_id: "penny.produce-product-integrity.v2", schema_version: 2 },
     upstreamRefs: [
       ...subjectRefs(subject),
       input.quality.value.carren_report_ref,
@@ -1425,18 +1464,18 @@ function ensureProductIntegrity(input: {
 function ensureProductEnvelope(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
-  readonly quality: { readonly artifact: ArtifactRef; readonly value: ProduceQualityReceiptV1 };
-  readonly validity: { readonly artifact: ArtifactRef; readonly value: ProduceValidityReceiptV1 };
+  readonly quality: { readonly artifact: ArtifactRef; readonly value: ProduceQualityReceiptV2 };
+  readonly validity: { readonly artifact: ArtifactRef; readonly value: ProduceValidityReceiptV2 };
   readonly integrity: ArtifactRef;
 }): {
   readonly artifact: ArtifactRef;
-  readonly value: ProduceProductEnvelopeV1;
+  readonly value: ProduceProductEnvelopeV2;
   readonly added: boolean;
 } {
   const subject = currentSubject(input.context);
-  const body: Omit<ProduceProductEnvelopeV1, "envelope_id"> = {
-    schema_id: "penny.produce-product-envelope.v1",
-    schema_version: 1,
+  const body: Omit<ProduceProductEnvelopeV2, "envelope_id"> = {
+    schema_id: "penny.produce-product-envelope.v2",
+    schema_version: 2,
     run_id: input.context.identity.run_id,
     status: "complete",
     request_ref: subject.request,
@@ -1449,10 +1488,11 @@ function ensureProductEnvelope(input: {
     quality_receipt_ref: input.quality.artifact,
     validity_receipt_ref: input.validity.artifact,
     integrity_ref: input.integrity,
+    effect_evidence: input.quality.value.effect_evidence,
   };
-  const value = validateProduceProductEnvelope({
+  const value = validateProduceProductEnvelopeV2({
     ...body,
-    envelope_id: produceProductEnvelopeId(body),
+    envelope_id: produceProductEnvelopeIdV2(body),
   });
   const persisted = persistVersionedHostArtifact({
     context: input.context,
@@ -1462,7 +1502,7 @@ function ensureProductEnvelope(input: {
     kind: "produce-product-envelope",
     operationLabel: "product-envelope",
     producer: "host:produce-product-validator",
-    contentSchema: { schema_id: "penny.produce-product-envelope.v1", schema_version: 1 },
+    contentSchema: { schema_id: "penny.produce-product-envelope.v2", schema_version: 2 },
     upstreamRefs: [
       ...subjectRefs(subject),
       input.quality.value.carren_report_ref,
@@ -1566,7 +1606,8 @@ export class ProducePlaybook
     private readonly revisions?: ArtifactRevisionLookup,
     private readonly artifactStore?: ArtifactHostStore,
     private readonly checkpointer?: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"],
-    private readonly hostFault?: (point: string) => void
+    private readonly hostFault?: (point: string) => void,
+    private readonly effectEvidenceProvider?: EffectEvidenceProviderV1
   ) {}
 
   initialize(context: RunContext): Directive {
@@ -1790,13 +1831,34 @@ export class ProducePlaybook
   needsHostContinuation(context: RunContext): boolean {
     return (
       context.terminalDirective === null &&
-      (context.stateId === "sealing_artifact" || context.stateId === "admitting_artifact")
+      (legacyProduceEffectArtifact(context) !== undefined ||
+        context.stateId === "sealing_artifact" ||
+        context.stateId === "admitting_artifact")
     );
   }
 
   continueHost(context: RunContext): HostContinuationStepV1 {
     if (!this.needsHostContinuation(context)) {
       throw new Error(`produce state '${context.stateId}' has no deterministic host continuation`);
+    }
+    const legacy = legacyProduceEffectArtifact(context);
+    if (legacy !== undefined) {
+      return {
+        event_type: "produce_legacy_effect_checkpoint_refused",
+        payload: {
+          run_id: context.identity.run_id,
+          legacy_artifact_id: legacy.artifact_id,
+          legacy_schema_id: legacy.content_schema?.schema_id ?? "unknown",
+        },
+        directive: this.terminal(
+          context,
+          "incomplete",
+          false,
+          ["active V1 checkpoint carries only legacy unverified effect assertions"],
+          undefined,
+          { incomplete_reason: "legacy_effect_evidence_unverified" }
+        ),
+      };
     }
     const store = this.artifactStore;
     const checkpointer = this.checkpointer;
@@ -1805,7 +1867,14 @@ export class ProducePlaybook
     }
     if (context.stateId === "sealing_artifact") return this.continueSealing(context, store);
     const subject = currentSubject(context);
-    const quality = ensureQualityReceipt({ context, store, checkpointer });
+    const quality = ensureQualityReceipt({
+      context,
+      store,
+      checkpointer,
+      ...(this.effectEvidenceProvider === undefined
+        ? {}
+        : { effectEvidenceProvider: this.effectEvidenceProvider }),
+    });
     if (quality.added) {
       this.hostFault?.("admitting_artifact:quality-receipt-persistence");
       return {
@@ -1815,6 +1884,25 @@ export class ProducePlaybook
           product_artifact_id: subject.product.artifact_id,
           receipt_artifact_id: quality.artifact.artifact_id,
         },
+      };
+    }
+    if (quality.value.effect_evidence.assurance === "policy_violation") {
+      return {
+        event_type: "produce_effect_policy_violation",
+        payload: {
+          run_id: context.identity.run_id,
+          product_artifact_id: subject.product.artifact_id,
+          effect_evidence_sha256: effectEvidenceSha256(quality.value.effect_evidence),
+        },
+        directive: this.terminal(
+          context,
+          "incomplete",
+          false,
+          [EFFECT_POLICY_VIOLATION_LIMITATION],
+          undefined,
+          { incomplete_reason: "effect_policy_violation" },
+          quality.value.effect_evidence
+        ),
       };
     }
     const validity = ensureValidityReceipt({
@@ -1941,9 +2029,9 @@ export class ProducePlaybook
         ),
       };
     }
-    let draftValue: ProducedArtifactDraftV1;
+    let draftValue: ProducedArtifactDraftV2;
     try {
-      draftValue = parsePersistedProducedArtifactDraft(store.readById(draft.artifact_id), {
+      draftValue = parsePersistedProducedArtifactDraftV2(store.readById(draft.artifact_id), {
         request: canonicalProduceRequest(store, context),
       }).draft;
     } catch (error) {
@@ -2006,16 +2094,41 @@ export class ProducePlaybook
     };
   }
 
+  private terminalEffectEvidence(
+    context: RunContext,
+    supplied?: EffectEvidenceGraphV1
+  ): EffectEvidenceGraphV1 {
+    if (supplied !== undefined) return supplied;
+    if (this.artifactStore !== undefined) {
+      const validityRef = latestValidityReceipt(context);
+      if (validityRef !== undefined) {
+        return readCanonicalJson(this.artifactStore, validityRef, validateProduceValidityReceiptV2)
+          .effect_evidence;
+      }
+      const qualityRef = latestQualityReceipt(context);
+      if (qualityRef !== undefined) {
+        return readCanonicalJson(this.artifactStore, qualityRef, validateProduceQualityReceiptV2)
+          .effect_evidence;
+      }
+    }
+    return unknownEffectEvidenceGraph({
+      runId: context.identity.run_id,
+      phases: PRODUCE_EFFECT_PHASES,
+    });
+  }
+
   private terminal(
     context: RunContext,
     action: "complete" | "incomplete" | "cancelled",
     met: boolean,
     unresolved: readonly string[],
     liveness?: LivenessSnapshotV1,
-    extraResult: Readonly<Record<string, JsonValue>> = {}
+    extraResult: Readonly<Record<string, JsonValue>> = {},
+    effectEvidence?: EffectEvidenceGraphV1
   ): Directive {
     const origin = context.stateId;
     const output = met ? latestProductArtifact(context) : bestPartial(context);
+    const effects = this.terminalEffectEvidence(context, effectEvidence);
     if (met && output === undefined) throw new Error("positive produce terminal has no product");
     const graph = met
       ? this.positiveTerminalArtifacts(context)
@@ -2037,10 +2150,12 @@ export class ProducePlaybook
         met,
         output_artifact_ref: output ?? null,
         best_partial_artifact_refs: met || output === undefined ? [] : [output],
-        external_actions_performed: false,
-        filesystem_writes_performed: false,
-        tests_executed: false,
         ...extraResult,
+        effect_assurance: effects.assurance,
+        effect_limitation: effects.limitations[0] ?? null,
+        effect_scope_notice: BOUNDED_EFFECT_NOTICE,
+        effect_evidence_sha256: effectEvidenceSha256(effects),
+        effect_evidence: effects,
         ...(liveness === undefined ? {} : { liveness }),
       },
       artifacts: graph,
@@ -2083,7 +2198,7 @@ export class ProducePlaybook
 
 function expectedReceiptResult(
   input: Parameters<CompletionReceiptPredicateV1>[0],
-  receipt: ProduceQualityReceiptV1 | ProduceValidityReceiptV1,
+  receipt: ProduceQualityReceiptV2 | ProduceValidityReceiptV2,
   state: ReviewState,
   agent: "carren" | "vera",
   verdict: "APPROVE" | "PASS"
@@ -2121,14 +2236,17 @@ export function evaluateProduceLatestReviewedArtifactDod(
     parsePersistedArtifactApproachDecision(reader.readById(subject.decision.artifact_id), {
       approach,
     });
-    const draft = parsePersistedProducedArtifactDraft(reader.readById(subject.draft.artifact_id), {
-      request,
-    }).draft;
-    const product = validateCanonicalProducedArtifactBytes(
+    const draft = parsePersistedProducedArtifactDraftV2(
+      reader.readById(subject.draft.artifact_id),
+      {
+        request,
+      }
+    ).draft;
+    const product = validateCanonicalProducedArtifactV2Bytes(
       reader.readById(subject.product.artifact_id),
       subject.product
     );
-    assertProducedArtifactLineage({
+    assertProducedArtifactLineageV2({
       product,
       request,
       draft,
@@ -2136,6 +2254,7 @@ export function evaluateProduceLatestReviewedArtifactDod(
       approachRef: subject.approach,
       decisionRef: subject.decision,
       draftRef: subject.draft,
+      effectEvidence: product.effect_evidence,
     });
     const qualityRef = latestQualityReceipt(input.context);
     const validityRef = latestValidityReceipt(input.context);
@@ -2149,10 +2268,10 @@ export function evaluateProduceLatestReviewedArtifactDod(
     ) {
       return { passed: false, evidence_refs: [] };
     }
-    const quality = readCanonicalJson(reader, qualityRef, validateProduceQualityReceipt);
-    const validity = readCanonicalJson(reader, validityRef, validateProduceValidityReceipt);
-    const integrity = readCanonicalJson(reader, integrityRef, validateProduceProductIntegrity);
-    const envelope = readCanonicalJson(reader, envelopeRef, validateProduceProductEnvelope);
+    const quality = readCanonicalJson(reader, qualityRef, validateProduceQualityReceiptV2);
+    const validity = readCanonicalJson(reader, validityRef, validateProduceValidityReceiptV2);
+    const integrity = readCanonicalJson(reader, integrityRef, validateProduceProductIntegrityV2);
+    const envelope = readCanonicalJson(reader, envelopeRef, validateProduceProductEnvelopeV2);
     const expectedExecutionReceiptIds = exactExecutionReceiptIds({
       context: input.context,
       checkpointer: input.checkpointer,
@@ -2217,12 +2336,22 @@ export function evaluateProduceLatestReviewedArtifactDod(
       validityExecution === undefined ||
       qualityExecution.worker_receipt.ended_at !== quality.created_at ||
       validityExecution.worker_receipt.ended_at !== validity.created_at ||
-      product.external_actions_performed !== false ||
-      product.filesystem_writes_performed !== false ||
-      product.tests_executed !== false ||
-      input.terminal.result.external_actions_performed !== false ||
-      input.terminal.result.filesystem_writes_performed !== false ||
-      input.terminal.result.tests_executed !== false ||
+      product.effect_evidence.assurance === "policy_violation" ||
+      quality.effect_evidence.assurance === "policy_violation" ||
+      canonicalJson(validity.effect_evidence) !== canonicalJson(quality.effect_evidence) ||
+      canonicalJson(integrity.effect_evidence) !== canonicalJson(quality.effect_evidence) ||
+      canonicalJson(envelope.effect_evidence) !== canonicalJson(quality.effect_evidence) ||
+      integrity.product_effect_evidence_sha256 !== effectEvidenceSha256(product.effect_evidence) ||
+      input.terminal.result.effect_assurance !== quality.effect_evidence.assurance ||
+      input.terminal.result.effect_evidence_sha256 !==
+        effectEvidenceSha256(quality.effect_evidence) ||
+      canonicalJson(input.terminal.result.effect_evidence) !==
+        canonicalJson(quality.effect_evidence) ||
+      input.terminal.result.effect_limitation !==
+        (quality.effect_evidence.limitations[0] ?? null) ||
+      input.terminal.result.effect_scope_notice !== BOUNDED_EFFECT_NOTICE ||
+      (quality.effect_evidence.assurance === "unknown" &&
+        input.terminal.result.effect_limitation !== UNKNOWN_EFFECT_LIMITATION) ||
       canonicalJson(input.terminal.result.output_artifact_ref) !== canonicalJson(subject.product) ||
       input.terminal.unresolved.length !== 0
     ) {
@@ -2340,5 +2469,11 @@ export const PRODUCE_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
   },
   completionReceiptPredicates: PRODUCE_COMPLETION_RECEIPT_PREDICATES,
   construct: (options) =>
-    new ProducePlaybook(options.artifactRevisions, options.artifactStore, options.checkpointer),
+    new ProducePlaybook(
+      options.artifactRevisions,
+      options.artifactStore,
+      options.checkpointer,
+      undefined,
+      options.effectEvidenceProvider
+    ),
 };

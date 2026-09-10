@@ -72,7 +72,7 @@ export function registerTabsTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
           content: [
             {
               type: "text",
-              text: err instanceof Error ? err.message : String(err),
+              text: browser.safeErrorMessage(err),
             },
           ],
           isError: true,
@@ -112,7 +112,7 @@ export function registerTabsTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
           content: [
             {
               type: "text",
-              text: err instanceof Error ? err.message : String(err),
+              text: browser.safeErrorMessage(err),
             },
           ],
           isError: true,

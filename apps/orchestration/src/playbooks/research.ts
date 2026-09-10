@@ -20,7 +20,7 @@ import type {
   ArtifactReader,
   ArtifactRevisionLookup,
 } from "../artifact-store.js";
-import type { ResearchContextOwnerV1 } from "../research-context.js";
+import type { ResearchContextOwnerV2 } from "../research-context.js";
 import { canonicalJson, sha256, type Checkpointer } from "../checkpointer.js";
 import type {
   FanAggregateCapabilityV1,
@@ -353,7 +353,7 @@ function taskForState(context: RunContext, state: ResearchState): string {
 function selectedInputRefs(
   context: RunContext,
   state: ResearchState,
-  contextOwner?: ResearchContextOwnerV1
+  contextOwner?: ResearchContextOwnerV2
 ): ArtifactRef[] {
   const phases = new Set(INPUT_PHASES_BY_STATE[state]);
   // Entry states consume every cross-run exact input directly. Subsequent phases
@@ -639,7 +639,7 @@ export class ResearchPlaybook
 {
   constructor(
     private readonly revisions?: ArtifactRevisionLookup,
-    private readonly contextOwner?: ResearchContextOwnerV1,
+    private readonly contextOwner?: ResearchContextOwnerV2,
     private readonly artifactStore?: ArtifactHostStore,
     private readonly checkpointer?: Checkpointer,
     private readonly researchHostFault?: (point: string) => void

@@ -5,6 +5,7 @@
  * when building the pi process invocation args and result metadata.
  */
 
+import { EventEmitter } from "node:events";
 import { lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -40,13 +41,19 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 import { runSingleAgent, type SingleResult, type SubagentDetails } from "../../agent-runner.js";
 
 function createMockProc(exitCode = 0) {
-  return {
-    stdout: { on: vi.fn() },
-    stderr: { on: vi.fn() },
-    on: vi.fn((event: string, cb: (code: number) => void) => {
-      if (event === "close") setTimeout(() => cb(exitCode), 0);
-    }),
-  };
+  const proc = new EventEmitter();
+  const stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+  const stderr = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+  Object.assign(proc, {
+    stdout,
+    stderr,
+    kill: vi.fn(() => true),
+  });
+  setTimeout(() => {
+    proc.emit("exit", exitCode, null);
+    proc.emit("close", exitCode, null);
+  }, 0);
+  return proc;
 }
 
 function spawnedArgs(index = 0): string[] {

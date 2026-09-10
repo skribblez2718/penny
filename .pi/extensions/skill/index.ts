@@ -70,7 +70,7 @@ import {
   type ArtifactRef,
 } from "./artifact-client.js";
 import { parseInputArtifacts, type InputArtifactsV2 } from "./input-artifacts.js";
-import { artifactDispatchControl, localArtifactDispatchPause } from "./dispatch-control.js";
+import { parseArtifactDispatchPause } from "./dispatch-control.js";
 import {
   readChainCheckpoint,
   saveChainCheckpoint,
@@ -541,22 +541,17 @@ async function executeTypeScriptSkill(
   }
 
   if (directive.action === "paused") {
-    const control = artifactDispatchControl(process.env);
-    const pause = localArtifactDispatchPause(control, {
-      state_id: directive.state_id,
-      session_id: sessionId,
-      run_id: runId,
-    });
+    const pause = parseArtifactDispatchPause(directive);
     return {
       success: false,
-      session_id: sessionId,
-      skill_name: skillName,
-      state: directive.state_id,
+      session_id: pause.identity.session_id,
+      skill_name: pause.identity.playbook,
+      state: pause.state_id,
       requires_approval: false,
       steps_total: agentsInvoked.length,
       agents_invoked: agentsInvoked,
       errors: [],
-      retriable: true,
+      retriable: pause.retryable,
       dispatch_pause: pause,
       recovery: pause.recovery,
     };
@@ -1187,14 +1182,19 @@ async function executeSkillsChain(
     result.chain_session_id = chainSessionId;
     results.push(result);
 
-    if (!result.success && result.retriable && result.dispatch_pause) {
-      // A dispatch pause is not a failed chain step. Keep both the engine run and
-      // chain step pending/running so a fresh resume reuses the same session and
-      // exact predecessor refs after the owner returns the mode to active.
-      stepEntry.status = "running";
-      delete stepEntry.error;
-      delete stepEntry.error_detail;
-      checkpoint.chain_status = "running";
+    if (!result.success && result.dispatch_pause) {
+      const recovery = result.dispatch_pause.recovery;
+      const chainCanResume = recovery.kind !== "saved_but_ineligible";
+      // Dispatch pauses preserve exact owner facts. Recoverable runs and unstarted
+      // steps remain pending; an ineligible saved run is retained but never called resumable.
+      stepEntry.status = chainCanResume ? "running" : "failed";
+      if (chainCanResume) {
+        delete stepEntry.error;
+        delete stepEntry.error_detail;
+      } else {
+        stepEntry.error = `${result.dispatch_pause.code}: ${result.dispatch_pause.reason}`;
+      }
+      checkpoint.chain_status = chainCanResume ? "running" : "failed";
       saveChainCheckpoint(checkpoint, projectRoot, process.env);
       return {
         success: false,
@@ -1211,10 +1211,10 @@ async function executeSkillsChain(
         chain_session_id: chainSessionId,
         chain_error_step: stepIndex,
         chain_results: results.slice(0, -1),
-        resumable: true,
-        retriable: true,
+        resumable: chainCanResume,
+        retriable: result.dispatch_pause.retryable,
         dispatch_pause: result.dispatch_pause,
-        recovery: result.recovery,
+        recovery,
         output_artifact_ref: finalOutputRef,
       };
     }
@@ -4139,14 +4139,20 @@ export default function skillExtension(
         const text = result.content.find((item) => item.type === "text");
         return new Text(theme.fg("muted", text?.type === "text" ? text.text : "Running…"), 0, 0);
       }
+      if (details.dispatch_pause) {
+        return new Text(formatResult(details, theme.fg.bind(theme)), 0, 0);
+      }
 
       // ── Parallel mode ──
       if (details.mode === "parallel" && details.parallel_results) {
         if (!expanded) {
-          const status = details.success ? "✓" : "✗";
+          const paused = details.parallel_results.filter((item) => item.dispatch_pause).length;
+          const status = details.success ? "✓" : paused > 0 ? "⏸" : "✗";
           const text = theme.fg(
-            details.success ? "success" : "error",
-            `${status} ${details.parallel_results.length} skills`
+            details.success ? "success" : paused > 0 ? "warning" : "error",
+            paused > 0
+              ? `${status} ${paused}/${details.parallel_results.length} dispatch paused`
+              : `${status} ${details.parallel_results.length} skills`
           );
           return new Text(text, 0, 0);
         }
@@ -4165,11 +4171,15 @@ export default function skillExtension(
         container.addChild(new Text(theme.fg("muted", `Session: ${details.session_id}`), 0, 0));
         container.addChild(new Spacer(1));
         for (const r of details.parallel_results) {
-          const s = r.success ? "✓" : "✗";
-          container.addChild(
-            new Text(theme.fg(r.success ? "success" : "error", `  ${s} ${r.skill_name}`), 0, 0)
-          );
+          const s = r.success ? "✓" : r.dispatch_pause ? "⏸" : "✗";
+          const color = r.success ? "success" : r.dispatch_pause ? "warning" : "error";
+          container.addChild(new Text(theme.fg(color, `  ${s} ${r.skill_name}`), 0, 0));
           container.addChild(new Text(theme.fg("muted", `     ${r.session_id}`), 0, 0));
+          if (r.dispatch_pause) {
+            container.addChild(
+              new Text(theme.fg("muted", `     ${r.dispatch_pause.code}: ${r.state}`), 0, 0)
+            );
+          }
         }
         return container;
       }

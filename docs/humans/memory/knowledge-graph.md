@@ -1,6 +1,6 @@
 # Penny's Knowledge Graph
 
-The knowledge graph is the primary runtime's governed temporal relationship store. Workers and skill drivers do not receive KG tools. While durable drawers hold curated notes, the graph answers questions like "what did Penny decide about X?" and "which product was verified by this evidence?"
+The knowledge graph is the primary runtime's governed temporal relationship store. The primary owns every mutation and temporal lifecycle operation. Catalog workers may receive bounded read-only KG query/timeline/statistics access when their owner-materialized active tool list includes YAML-declared memory reads, but they cannot write or use memory for handoff; skill drivers receive no KG tools. While durable drawers hold curated notes, the graph answers questions like "what did Penny decide about X?" and "which product was verified by this evidence?"
 
 ## What the Knowledge Graph Is
 

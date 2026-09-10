@@ -2,17 +2,17 @@
 
 How to design, implement, and operate loops in Penny skills. This document is the operational reference for playbook authors and engine contributors. For the conceptual overview and rationale, see [Loops (Human)](../../humans/skills/loops.md).
 
-## The Universal Loop Shape
+## A Conceptual Loop Lens
 
-Every credible source describes the same abstract cycle: **gather context → take action → verify work → repeat**. In Penny, this maps to the six engine operations:
+A useful abstract cycle is **gather context → take action → verify work → repeat or complete**:
 
 ```
 FRAME → PLAN → ACT ⇄ VERIFY → LEARN → (repeat or complete)
 ```
 
-This shape is a **methodology** documented in SYSTEM.md, not a base class. Each skill implements its own specialized concrete loop as a TypeScript `PlaybookCoreV1` implementation with domain-named states. The engine provides the universal machinery (stepping, checkpointing, contracts, budgets, gates, recovery); each playbook writes its own specialized sentence in that grammar.
+This is a design lens, not policy in `SYSTEM.md`, a required state sequence, or a base class. Each registered skill implements a TypeScript `PlaybookCoreV1` with domain-named states. The engine supplies stepping, checkpointing, closed contracts, budgets, registered repair, gates, and recovery; each playbook uses only the topology its observed failure modes justify.
 
-**Key principle:** universality at the shape level, specialization at the instance level. Do not create a universal procedural base class; each playbook owns its domain-named topology behind the shared interface.
+**Key principle:** share engine invariants, specialize workflow topology. Do not create a universal procedural base class or force every task through every conceptual phase.
 
 ## The Parts Beneath the Loop Classes (Atomic Components)
 
@@ -72,9 +72,9 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 **What:** A separate evaluation step decides whether work converges or cycles back. One agent generates, another evaluates.
 
-**Load-bearing, not optional:** Removing Voyager's critic caused a **−73% drop** in discovered items — the most impactful feedback component in the system.
+**Evidence-gated completion is load-bearing; a separate critic is conditional:** Removing Voyager's critic caused a **−73% drop** in discovered items in that system. Treat this as evidence for grounded evaluation, not as a mandate that every Penny playbook include both verifier and critic roles.
 
-**In Penny:** Completion gates plus verify states (Vera for objective PASS/FAIL, Carren for subjective critique), repair edges in playbooks, model-diverse review where useful, and closed phase-result contracts.
+**In Penny:** Closed completion admission plus playbook-specific authoring, verification, and critique states. Vera supplies objective validity judgments; Carren supplies subjective quality judgment or, in `assess`, authored assessment work. Current review ordering differs intentionally by skill: `assess` Annie analysis→Carren authoring→Vera verification; `decide` decision production→Vera verification→Carren critique; `diagnose` diagnosis production→Vera as the sole review stage; `plan` strategy production→Vera verification→Carren critique; `produce` artifact production→Carren critique→Vera verification; `research` Synthia synthesis→Vera validation→optional Carren report critique (with an optional plan critique earlier); and knowledge-base Synthia composition→Carren lint→Vera verification→consequence-conditioned human review.
 
 **Design rules:**
 
@@ -87,13 +87,13 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 **What:** On verifier failure, repair and retry — under an explicit budget.
 
-**In Penny:** `RunContext.maxIterations`, explicit round budgets, honest exhaustion routes, and bounded malformed-result reissue.
+**In Penny:** Typed evaluation feedback, registration-contract `repair_routing`, `RunContext.iteration`/`RunContext.maxIterations`, route-specific reserved attempts, honest exhaustion targets, and bounded malformed-result reissue.
 
 **Design rules:**
 
-- **Retries must change strategy.** The defining feature of agent paralysis is "continuously retrying a failed action without modifying their strategy." The `strategy_change` field in LEARN SUMMARY must state what will be done differently. The engine should reject a retry whose planned change is absent or ~identical to the prior iteration's.
-- **Budget exhaustion is a legitimate outcome.** Report honestly what was achieved and what remains (`learn_exhausted` → complete with `met=False`). Never fabricate success.
-- **Reflexion-style informed repair:** each retry should be informed by a verbal reflection on the failure (this links L3 to L6).
+- **Repairs must identify a strategy delta.** Playbooks return typed `EvaluationResultV2` feedback with `kind`, findings, detail, and non-empty `strategy_delta`. The engine resolves exactly one registered route, records feedback and strategy-delta digests, charges the attempt, and dispatches the route's repair target. Do not invent a universal retry field outside the typed evaluation contract.
+- **Budget exhaustion is a legitimate outcome.** Follow the registered exhaustion route and report honestly what was achieved and remains; never fabricate success.
+- **Stall handling is playbook- and liveness-specific.** Research compares repeated critique/validation issues; host liveness separately detects repeated protocol failures. Do not claim a universal base progress hook.
 
 ### L4 — Human-in-the-Loop Gates
 
@@ -123,7 +123,7 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 **What:** Optional learning between runs without weight updates: capture grounded outcomes, retrieve relevant prior material, propose and test reusable lessons, authorize promotion, and reuse approved artifacts later.
 
-**In Penny:** The unmarked primary runtime owns explicit MemPalace recall, curated writes, its diary, and governed temporal KG tools. Workers and skill drivers receive none. The orchestration engine does **not** inject retrieved memory into directives; active handoff uses exact artifacts. Full L6 is the [optional learning/curation arrangement](../architecture/atomic-loop-components.md#optional-learningcuration-arrangement-l6), not a single Recall call.
+**In Penny:** The unmarked primary runtime owns curated writes, diary retention, and governed temporal KG lifecycle operations. Catalog workers may receive bounded read-only recall/KG access when their owner-materialized active tool list includes YAML-declared memory reads; they never receive memory writes, advisory logstream access, or memory-based handoff. Skill drivers receive no memory tools. The orchestration engine does **not** inject retrieved memory into directives; active handoff uses exact artifacts. Full L6 is the [optional learning/curation arrangement](../architecture/atomic-loop-components.md#optional-learningcuration-arrangement-l6), not a single Recall call.
 
 **Design rules:**
 
@@ -137,26 +137,26 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 **What:** Time- or event-triggered outer loops: polling, monitoring, recurring maintenance.
 
-**In Penny:** Progress heartbeats.
+**In Penny:** This is a composition pattern, not a general current progress-heartbeat capability. A caller or scheduler may start/resume bounded orchestration work through the public engine surface; durable checkpoints make that resume possible. Progress events are observational telemetry, not autonomous ticks and not a separate handoff channel.
 
 **Design rules:**
 
-- Bounded work per tick
-- Idempotent resume (a re-fired tick must not double-send)
-- Escalation-not-retry when a tick keeps failing
-- These compose with L5: a scheduled tick that starts or resumes an orchestration run gets checkpointing and recovery for free
+- Bound work per caller/scheduler tick
+- Make resume idempotent (a re-fired tick must not duplicate side effects)
+- Escalate rather than retry indefinitely when a tick keeps failing
+- Treat any scheduler as an external owner of timing; the orchestration engine owns only the resumed run's state and transitions
 
 ## Termination Controls
 
 From the research, in order of strength:
 
-| #   | Control                        | What It Does                                                 | Penny Mechanism                                         |
-| --- | ------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------- |
-| 1   | Verifier-gated success         | Success termination only when required gates pass            | closed `CompletionGate` v2 + durable admission envelope |
-| 2   | Bounded iteration budgets      | Hard cap on retries; exhaustion is a legitimate outcome      | `max_iterations`, `learn_exhausted` → `met=False`       |
-| 3   | Structured completion criteria | Written before the work; checked at the end                  | FRAME⇄VERIFY design spine; IDEAL_STATE                  |
-| 4   | Human-in-the-loop checkpoints  | Escape hatch for paralysis and gate for irreversible actions | Planned gates, escalation                               |
-| 5   | Global step caps               | Backstop of last resort                                      | `max_steps` (default 96)                                |
+| #   | Control                        | What It Does                                            | Penny Mechanism                                               |
+| --- | ------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------- |
+| 1   | Verifier-gated success         | Success termination only when required gates pass       | closed `CompletionGate` v2 + durable admission envelope       |
+| 2   | Bounded iteration budgets      | Hard cap on repairs; exhaustion is a legitimate outcome | `RunContext.maxIterations` + registered exhaustion route      |
+| 3   | Structured completion criteria | Closed predicates checked before positive completion    | `CompletionGate` v2 + completion admission evidence           |
+| 4   | Human-in-the-loop checkpoints  | Gate consequence-bearing actions or resolve blockers    | `await_user`/host continuation where the playbook declares it |
+| 5   | Global step caps               | Backstop of last resort                                 | `RunContext.maxSteps`                                         |
 
 ## Failure Modes
 
@@ -166,13 +166,13 @@ Every loop must defend against both ends of the same axis:
 
 **Symptom:** Agent continuously retries a failed action without modifying its strategy. Still struggles with giving up or asking for human help.
 
-**Cause:** No strategy delta between retries. No progress-assessment module.
+**Cause:** No meaningful strategy delta, an incorrect repair route, or repeated no-progress evidence.
 
 **Fix:**
 
-- Require `strategy_change` field in retry SUMMARYs
-- Add stall detection (compare successive iterations' verifier evidence)
-- On stall, route to escalation (L4) rather than burning the remaining budget
+- Require typed evaluation feedback with a non-empty `strategy_delta`
+- Register exactly one repair/exhaustion route for each admitted feedback kind
+- Add playbook-specific stall detection where repeated evidence is measurable; terminate or escalate according to the registered consequence rather than spinning
 
 ### Premature Termination
 
@@ -215,13 +215,14 @@ Same-model self-critique is the degenerate critic and must not be the sole gate.
 
 Match the loop stack to the task's verifiability and step-predictability:
 
-| Task Type             | Primary Loops                                      | Oracle Strength                            | Key Risk                        | Penny Skill              |
-| --------------------- | -------------------------------------------------- | ------------------------------------------ | ------------------------------- | ------------------------ |
-| Coding                | L2+L3 (+L4 gates)                                  | High (tests/lint)                          | Premature "done"                | Direct or delegated work |
-| Security review       | L5+L4 (+bounded L3)                                | High for executed checks, lower for triage | Verifier gaming                 | Direct or delegated work |
-| Research              | L5+L1 fan-out+L2 (optional primary L6 across runs) | Source grounding                           | Shallow or unsupported report   | `research`               |
-| Scheduling/automation | L7+L5 (+L4 before side effects)                    | High but narrow                            | Double-execution, silent retry  | —                        |
-| Long-horizon          | L5 exact refs; optional primary L6                 | Mixed, drifting                            | Lost loop state across sessions | Engine + artifact plane  |
+| Task Type             | Primary Loops                                        | Oracle Strength                | Key Risk                       | Penny Skill                        |
+| --------------------- | ---------------------------------------------------- | ------------------------------ | ------------------------------ | ---------------------------------- |
+| Coding/production     | L2+L3; L4 only when consequences require it          | High (tests/lint)              | Premature "done"               | Direct/delegated work or `produce` |
+| Assessment/diagnosis  | L2; bounded L3 when registered                       | Evidence and rule application  | Unsupported findings           | `assess` or `diagnose`             |
+| Decision/planning     | L2+L3; L4 only when consequences require it          | Mixed                          | Critique replacing evidence    | `decide` or `plan`                 |
+| Research              | L5+L1 fan-out+L2 (optional primary L6 across runs)   | Source grounding               | Shallow or unsupported report  | `research`                         |
+| Knowledge-base work   | L5+L2+L3 with operation-conditioned L4               | Source support + semantic lint | Publishing unsupported claims  | dedicated `knowledge_base` ingress |
+| Scheduling/automation | externally scheduled L7+L5 (+L4 before side effects) | High but narrow                | Double execution, silent retry | caller/scheduler + engine resume   |
 
 **Principle:** Tasks with crisp external oracles can lean on tight verifier-gated retry loops. Fuzzy-oracle tasks must lean on explicit evidence criteria and human escalation because model judgment is weaker than an oracle.
 
@@ -229,13 +230,13 @@ Match the loop stack to the task's verifiability and step-predictability:
 
 Four concrete recommendations from the research, ordered by leverage. Current engine implementation status is tracked in [Atomic Loop Components](../architecture/atomic-loop-components.md) (“How this maps onto Penny today”), not duplicated here — a frozen status list rots the moment a gap closes.
 
-### Rec 1 — Enforce a strategy delta between retries (anti-paralysis)
+### Rec 1 — Enforce a strategy delta through typed repair feedback
 
-`max_iterations` caps how many retries, but nothing required each retry to be different. Now the base `progress_check` is **default-on**: a retry SUMMARY that explicitly declares a `strategy_change` ~identical to the prior recorded iteration's escalates instead of looping. The engine auto-records per-iteration digests (deduped against playbook `record_iteration` calls) so the guard is fed even for playbooks that never opt in. Opt-out: `LOOP_GUARDS = False`; playbooks with their own `progress_check` override are unaffected.
+Each current playbook's `evaluateRepair` returns validated `EvaluationResultV2` feedback with a non-empty `strategy_delta`. The engine resolves exactly one matching `repair_routing` entry, charges `RunContext.iteration` against `RunContext.maxIterations` and reserved attempts, prevents repair bookkeeping from changing engine-owned control fields, and records detail/strategy-delta digests in route evidence. Playbook authors must express repair behavior in that registration contract rather than add Python-era base-loop fields.
 
-### Rec 2 — Add a stall / progress-assessment gate (meta-cognition)
+### Rec 2 — Add measured stall handling only where evidence supports it
 
-The same default-on base `progress_check` compares successive recorded iterations' `gaps`: identical non-empty gaps across the window mean no measurable progress, and the run escalates to the human (L4) rather than burning the remaining budget. Backing it up, the engine's iteration-budget backstop forces **honest exhaustion** (complete, `met=False`, `exhausted` reason in the result) on any playbook that routes past its `max_iterations` — never a fake pass, never a silent spin to the global `max_steps` ceiling.
+There is no universal base progress hook. Research records normalized issue histories and can stop when critique or validation issues repeat without measurable progress; host liveness separately caps repeated malformed/protocol outcomes. Every playbook still has a registered exhaustion path, and positive terminal results pass the closed completion-admission gate. Add broader stall logic only with a measurable signal and tests, not as mandatory scaffolding.
 
 ### Rec 3 — Require externally-grounded evidence in VERIFY contracts
 

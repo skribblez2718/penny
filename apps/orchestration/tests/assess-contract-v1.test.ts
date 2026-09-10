@@ -7,6 +7,7 @@ import {
   canonicalJson,
   canonicalizeAssessmentRequest,
   parsePersistedAssessmentDraft,
+  readAssessmentProduct,
   sealAssessmentDraft,
   sha256,
   validateAssessmentDraft,
@@ -362,6 +363,16 @@ describe("canonical AssessmentV1 sealing", () => {
       schema: { schema_id: "penny.assessment.v1", schema_version: 1 },
     });
     expect(validateCanonicalAssessmentBytes(Buffer.from(content), productRef)).toEqual(assessment);
+    expect(
+      readAssessmentProduct(assessment, {
+        runId: RUN_ID,
+        phases: ["analyzing_assessment", "authoring_assessment", "verifying_assessment"],
+      })
+    ).toMatchObject({
+      contract_version: 1,
+      interpretation: "legacy_unverified_assertion",
+      effect_evidence: { assurance: "unknown" },
+    });
     expect(SEMANTIC_PRODUCT_VALIDATORS.get("penny.assessment.v1")).toMatchObject({
       schema_version: 1,
       artifact_kind: "semantic-core",

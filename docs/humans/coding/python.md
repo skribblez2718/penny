@@ -2,6 +2,28 @@
 
 A human-readable guide to writing clean, maintainable, and secure Python code.
 
+## Project Toolchain
+
+Penny requires Python 3.12 or newer. `uv` owns the Python environment and
+`uv.lock`; use frozen syncs for setup and checks. Black formats Python, Flake8
+lints it, mypy checks typed production code, and pytest runs Python tests.
+Workflow orchestration remains TypeScript under `apps/orchestration/` and uses
+Bun; do not implement skill workflows in Python.
+
+The configured commands are:
+
+```bash
+make setup-dev              # frozen Bun and uv development dependencies
+bun run py:format:check     # Black, configured by pyproject.toml
+bun run py:lint             # Flake8, configured by .flake8
+bun run py:typecheck        # mypy, configured by pyproject.toml
+.venv/bin/python -m pytest <path> -p no:cacheprovider --tb=short -q
+```
+
+`make lint` runs the Python format/lint gates with the repository's other
+checks. `make test` runs Bun unit tests, repository guards, and the applicable
+Python test directories in isolated pytest processes.
+
 ## The Zen of Python
 
 Before writing Python, internalize these principles (run `import this` in a Python REPL):
@@ -19,7 +41,7 @@ Before writing Python, internalize these principles (run `import this` in a Pyth
 ### Indentation and Line Length
 
 - **4 spaces** for indentation (never tabs)
-- **88 characters** max line length (Black/Ruff default)
+- **100 characters** max line length (the configured Black and Flake8 limit)
 - If a line is too long, use implicit line continuation inside parentheses:
 
 ```python
@@ -219,7 +241,9 @@ if minimum < 1024:
 
 ### pytest Best Practices
 
-Install: `pip install pytest`
+Install the locked development environment with `make setup-dev` (or
+`uv sync --frozen --offline --all-extras` when following the underlying command).
+Never use bare `pip` or install project dependencies globally.
 
 ```python
 # test_calculator.py
@@ -245,44 +269,35 @@ def test_divide_by_zero_raises():
 2. **Green**: Write the minimum code to make the test pass
 3. **Refactor**: Clean up the code while keeping tests green
 
-## Linting with Ruff
+## Formatting, Linting, and Type Checking
 
-Ruff replaces Flake8, Black, isort, and more in a single fast tool:
+Use the tools and checked-in configuration the repository actually invokes:
 
 ```bash
-# Check
-ruff check .
-
-# Auto-fix
-ruff check --fix .
-
-# Format
-ruff format .
+bun run py:format          # Black writes formatting changes
+bun run py:format:check    # Black check only
+bun run py:lint            # Flake8, zero errors required
+bun run py:typecheck       # mypy production-code gate
 ```
+
+Black and Flake8 both use a 100-character line limit. Mypy targets Python 3.12
+and currently excludes tests, which remain governed by pytest plus the
+repository's test-discovery and compliance checks. Ruff is not part of Penny's
+configured Python toolchain.
 
 ## Dependency Management
 
-**Always use `uv`** for dependency management in this project:
+**Always use `uv`** for Python dependency and environment management:
 
 ```bash
-# Install dependencies
-uv pip install <package>
-
-# Sync from lock file
-uv pip sync uv.lock
-
-# Activate the virtual environment first
-source .venv/bin/activate
+make setup                 # uv sync --frozen --offline for runtime dependencies
+make setup-dev             # uv sync --frozen --offline --all-extras
+uv add <package>           # deliberately update pyproject.toml and uv.lock
 ```
 
-**Never install packages globally.** Always work inside `.venv/`. Never use bare `pip`.
-
-Recommended `pyproject.toml` config:
-
-```toml
-[tool.ruff.lint]
-select = ["E", "F", "UP", "B", "SIM", "I"]
-```
+Do not use `uv pip install`, `uv pip sync`, bare `pip`, or global installs for
+the project. A dependency change must update and review both `pyproject.toml`
+and `uv.lock`; normal setup and verification consume the lock in frozen mode.
 
 ## Common Anti-Patterns
 
@@ -326,5 +341,8 @@ def fetch_user(user_id: int) -> User | None:
 
 - [PEP 8 — Style Guide for Python Code](https://peps.python.org/pep-0008/)
 - [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
-- [Ruff Documentation](https://docs.astral.sh/ruff/)
+- [uv Documentation](https://docs.astral.sh/uv/)
+- [Black Documentation](https://black.readthedocs.io/)
+- [Flake8 Documentation](https://flake8.pycqa.org/)
+- [mypy Documentation](https://mypy.readthedocs.io/)
 - [pytest Documentation](https://docs.pytest.org/)

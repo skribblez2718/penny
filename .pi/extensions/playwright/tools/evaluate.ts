@@ -77,7 +77,7 @@ export function registerEvaluateTools(pi: ExtensionAPI, _config: PlaywrightConfi
           content: [
             {
               type: "text",
-              text: `Evaluate error: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Evaluate error: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -197,7 +197,7 @@ export function registerEvaluateTools(pi: ExtensionAPI, _config: PlaywrightConfi
           content: [
             {
               type: "text",
-              text: `Wait timed out after ${Date.now() - start}ms: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Wait timed out after ${Date.now() - start}ms: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,

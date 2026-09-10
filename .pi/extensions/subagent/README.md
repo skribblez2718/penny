@@ -47,14 +47,38 @@ They must not recover another agent's output by memory search, repository search
 search, or a name-only pointer.
 
 Every final assistant response—including a valid empty response—is persisted and re-read
-before success. Persistence failure is a typed communication failure, never a best-effort
-warning. Results print IDs in model-visible text:
+before end-to-end success. Persistence failure is a typed communication failure, never a
+best-effort warning, but it remains separate from the already sealed worker terminal outcome.
+A worker may therefore be truthfully `completed` with `output_delivery=failed`; delivery failure
+never rewrites completed process/model truth. The parent aggregate is nevertheless `failed` when
+no branch has end-to-end success, or `partial_failure` when successful siblings remain. It can never
+be `succeeded` beside a required output-delivery failure or Pi `isError`. Results print IDs in
+model-visible text:
 
 - single: one exact-output block;
 - parallel: one labeled ID per branch beside the bounded preview;
 - chain: every step ID in order.
 
 `details.outputArtifactRefs` retains the schema-v2 refs for renderers and compaction.
+
+## Terminal outcomes
+
+Every started worker seals one structured `terminalOutcome` before artifact persistence:
+
+- `completed (assistant_completed)` requires a structured assistant `message_end` with a
+  successful stop reason plus observed process exit and stream close;
+- `cancelled` distinguishes caller/scope cancellation from an assistant cancellation;
+- `failed` distinguishes process lifecycle/setup, process exit, missing structured terminal,
+  assistant error, and malformed terminal failures.
+
+The historical `agent_end` event remains diagnostic and is not required for structured success.
+Success-looking output text is never parsed as status. `details.outcome` separately counts execution
+completion/failure, required artifact states, end-to-end success, and optional streaming callback
+failure. Single, parallel, and chain model-visible output starts with the same aggregate status.
+Streaming updates are best-effort: a throwing or closed update callback is recorded as
+`streaming_update=failed` without changing completed worker truth or parent success. Required
+artifact failure stops a chain; optional streaming failure does not. Late output after the process
+close boundary is ignored.
 
 ## Tool authority
 
@@ -111,6 +135,15 @@ user's OS permissions. Receipt/approval secrets and memory-write/logstream confi
 are stripped. This is not filesystem/process isolation; use an external container or VM
 for untrusted or unattended work.
 
+Each extension instance owns a bounded child-lifecycle scope. A child finalizer is fully constructed
+before scope registration. Setup failure, admission/limit rejection, caller cancellation, process
+exit, output-drain timeout, and session shutdown all converge on one idempotent bounded finalizer.
+Rejected or partially set-up children receive a non-throwing fallback finalizer; shutdown races share
+the same promise, attempt cleanup once, and do not replace a terminal outcome already sealed. The
+scope becomes permanently closed as soon as finalization starts. Admissions during finalization and
+all admissions after its promise resolves are rejected into their own bounded finalizer and cannot
+reopen the scope.
+
 ## Limits and verification
 
 - Maximum parallel tasks/concurrency: 25.
@@ -120,4 +153,5 @@ for untrusted or unattended work.
 ```bash
 bun run --cwd .pi/extensions/subagent test:unit
 bun run --cwd .pi/extensions/subagent test:integration
+# Includes live-local child-process lifecycle coverage; no model or network call.
 ```

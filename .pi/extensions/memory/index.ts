@@ -1,5 +1,4 @@
 import { registerTool } from "../../lib/pi-tool-registration.js";
-import { createHash } from "node:crypto";
 
 import type {
   ExtensionAPI,
@@ -10,113 +9,140 @@ import type {
 
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
 import { MemoryAdapter } from "./adapter.js";
+import {
+  AUTO_DIARY_CANDIDATE_CUSTOM_TYPE,
+  AUTO_DIARY_EVALUATION_CUSTOM_TYPE,
+  AUTO_DIARY_MAX_INPUT_RECEIPTS,
+  AUTO_DIARY_PROCESSED_CUSTOM_TYPE,
+  AutoDiaryEvaluationError,
+  autoDiaryProcessedMarker,
+  collectAutoDiaryActivity,
+  createAutoDiaryInputReceipt,
+  currentAutoDiaryCandidateEntryId,
+  currentAutoDiaryProcessedMarkerMatches,
+  evaluateAutoDiaryCandidateWithModel,
+  latestAutoDiaryUserActivityId,
+  prepareAutoDiaryEvaluation,
+  resolveAutoDiaryCandidate,
+  retainAutoDiaryCandidate,
+  stageAutoDiaryCandidate,
+  type AutoDiaryEvaluation,
+  type AutoDiaryEvaluator,
+  type AutoDiaryInputReceipt,
+  type AutoDiarySessionReader,
+} from "./auto-diary.js";
 import { loadMemoryRuntimeConfig, loadWorkerReadConfig, resolveMemoryActor } from "./config.js";
 import { MemoryLogstreamAdapter } from "./logstream-adapter.js";
 import { MemoryLogstreamClient } from "./logstream-client.js";
 import { createPrimaryLogstreamTools } from "./logstream-tools.js";
 import { createPrimaryMemoryTools, createUnavailableMemoryTools } from "./tools.js";
-import type { MemoryAdapterDependencies, MemoryTelemetry } from "./types.js";
+import { MemoryError, type MemoryAdapterDependencies, type MemoryTelemetry } from "./types.js";
 
 const logger = createLogger("memory");
-const AUTO_DIARY_MAX_BYTES = 2_048;
 
-interface SessionEntryProjection {
-  type?: string;
-  customType?: string;
-  data?: unknown;
-  message?: unknown;
+interface ActiveAutoDiaryEvaluation {
+  evaluation: AutoDiaryEvaluation;
+  evaluationEntryId: string;
+  latestActivityEntryId: string;
+  consumedReceiptCount: number;
+  controller: AbortController;
+  cancelReason?: "primary_turn" | "shutdown";
+  settled?: Promise<void>;
 }
 
-function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+interface AutoDiaryEvaluationFailure {
+  activityEntryId: string;
+  reasonCode: string;
 }
 
-function stringProperty(value: unknown, key: string): string | undefined {
-  if (!isUnknownRecord(value)) return undefined;
-  const property = value[key];
-  return typeof property === "string" ? property : undefined;
-}
-
-function hasPhase(value: unknown, phase: string): boolean {
-  return isUnknownRecord(value) && value.phase === phase;
-}
+type AutoDiaryEvaluationCompletion =
+  | { kind: "candidate"; parameters: Awaited<ReturnType<AutoDiaryEvaluator>> }
+  | { kind: "error"; error: unknown }
+  | { kind: "cancelled" }
+  | { kind: "timeout" };
 
 function errorCodeFrom(value: unknown, fallback: string): string {
   return typeof value === "object" && value !== null && "code" in value
     ? String(value.code)
     : fallback;
 }
+
+function currentEvaluationEntryId(reader: AutoDiarySessionReader): string | null {
+  const leaf = reader.getLeafEntry();
+  return leaf?.type === "custom" &&
+    leaf.customType === AUTO_DIARY_EVALUATION_CUSTOM_TYPE &&
+    typeof leaf.id === "string" &&
+    leaf.id.length > 0 &&
+    leaf.id.length <= 256
+    ? leaf.id
+    : null;
+}
+
+async function evaluateWithDeadline(
+  evaluator: AutoDiaryEvaluator,
+  active: ActiveAutoDiaryEvaluation,
+  reader: AutoDiarySessionReader,
+  context: ExtensionContext,
+  timeoutMs: number
+): Promise<AutoDiaryEvaluationCompletion> {
+  const completed = evaluator(active.evaluation, reader, context, active.controller.signal).then(
+    (parameters): AutoDiaryEvaluationCompletion => ({ kind: "candidate", parameters }),
+    (error: unknown): AutoDiaryEvaluationCompletion => ({ kind: "error", error })
+  );
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const interrupted = new Promise<AutoDiaryEvaluationCompletion>((resolve) => {
+    onAbort = () => resolve({ kind: timedOut ? "timeout" : "cancelled" });
+    active.controller.signal.addEventListener("abort", onAbort, { once: true });
+    if (active.controller.signal.aborted) {
+      onAbort();
+      return;
+    }
+    timer = setTimeout(() => {
+      timedOut = true;
+      active.controller.abort();
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([completed, interrupted]);
+    if (active.controller.signal.aborted) {
+      return { kind: timedOut ? "timeout" : "cancelled" };
+    }
+    return result;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onAbort !== undefined) active.controller.signal.removeEventListener("abort", onAbort);
+  }
+}
+
 export interface MemoryExtensionOptions extends MemoryAdapterDependencies {
   env?: Readonly<Record<string, string | undefined>>;
-}
-
-function boundedLabel(value: string, maximum = 64): string {
-  return Array.from(value)
-    .map((character) => {
-      const codePoint = character.codePointAt(0) ?? -1;
-      return codePoint < 32 || codePoint === 127 || character === "|" ? "_" : character;
-    })
-    .slice(0, maximum)
-    .join("");
-}
-
-/** Build a bounded, content-free diary summary directly from canonical Pi JSONL entries. */
-export function buildDiaryFromSessionEntries(
-  currentSessionId: string,
-  reason: string,
-  entries: readonly SessionEntryProjection[]
-): string | null {
-  const today = new Date().toISOString().split("T")[0];
-  const boundedEntries = entries.slice(-5_000);
-  const agentCount = boundedEntries.filter(
-    (entry) =>
-      entry.type === "custom" &&
-      entry.customType === "penny.observability.agent-lifecycle" &&
-      hasPhase(entry.data, "start")
-  ).length;
-  const toolCounts = new Map<string, number>();
-  for (const entry of boundedEntries) {
-    const role = stringProperty(entry.message, "role");
-    const rawName =
-      entry.type === "message" && role === "toolResult"
-        ? stringProperty(entry.message, "toolName")
-        : undefined;
-    if (typeof rawName !== "string" || rawName.length === 0) continue;
-    const name = boundedLabel(rawName);
-    toolCounts.set(name, (toolCounts.get(name) ?? 0) + 1);
-  }
-  const tools = [...toolCounts.entries()]
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-    .slice(0, 6)
-    .map(([name, count]) => `${name}(${count})`)
-    .join("+");
-  const sessionDigest = createHash("sha256")
-    .update(currentSessionId, "utf8")
-    .digest("hex")
-    .slice(0, 12);
-  const entry =
-    `SESSION:${today}|session-end|Session:${sessionDigest}. Agents:${agentCount}. ` +
-    `Tools:${tools || "none"}. Reason:${boundedLabel(reason)}|★★`;
-  if (Buffer.byteLength(entry, "utf8") > AUTO_DIARY_MAX_BYTES) return null;
-  return entry;
+  telemetry?: MemoryTelemetry;
+  autoDiaryEvaluator?: AutoDiaryEvaluator;
 }
 
 export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
   return function memoryExtension(pi: ExtensionAPI): void {
     const env = options.env ?? process.env;
+    const runtimeTelemetry: MemoryTelemetry = options.telemetry ?? {
+      info(event, context) {
+        logger.info(event, context);
+      },
+      warn(event, context) {
+        logger.warn(event, context);
+      },
+    };
 
     // Runtime markers are deny-only. Resolve role before any config, network,
-    // tool registration, or shutdown hook so workers cannot turn a marker into
+    // tool registration, or lifecycle hook so workers cannot turn a marker into
     // a grant and do not contact the memory plane at all.
     const actor = resolveMemoryActor(env);
     if (actor === "denied") return;
 
-    // ---- Worker-read branch: read-only memory tools for spawned agents ----
-    //
-    // The execution owner (agent-runner) sets PENNY_RUNTIME_ROLE=worker-read
-    // and passes through a minimal set of read-only memory env vars. The
-    // memory extension registers only read tools (writeEnabled=false filters
-    // out all write operations). No auto-diary, no logstream, no KG mutation.
+    // Worker agents receive only owner-granted, bounded read tools. They never
+    // receive automatic-memory tools, messages, writes, or lifecycle hooks.
     if (actor === "worker-read") {
       let workerConfig;
       try {
@@ -140,38 +166,23 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
       }
 
       const workerAdapter = new MemoryAdapter(workerConfig, options);
-      const workerTelemetry: MemoryTelemetry = {
-        info(event, context) {
-          logger.info(event, context);
-        },
-        warn(event, context) {
-          logger.warn(event, context);
-        },
-      };
-
       for (const tool of createPrimaryMemoryTools({
         adapter: workerAdapter,
         callerId: () => "worker-read",
         writeEnabled: false,
-        telemetry: workerTelemetry,
+        telemetry: runtimeTelemetry,
       })) {
         registerTool(pi, tool);
       }
-
-      // No session_shutdown auto-diary hook for workers.
-      // No logstream tools for workers.
       return;
     }
-
-    // ---- Primary branch: full memory tools for the main Penny session ----
 
     let config;
     try {
       config = loadMemoryRuntimeConfig(env);
     } catch (error) {
-      // Durable recall is optional and authority-neutral. Missing or invalid hub
-      // configuration must fail closed by exposing no memory tools; it must not
-      // prevent Pi, workers, or memory-absent workflows from starting.
+      // Durable recall is optional and authority-neutral. Invalid hub policy
+      // fails closed without preventing memory-absent workflows from starting.
       logger.warn("Memory extension disabled: invalid hub configuration", {
         errorCode: errorCodeFrom(error, "MEMPALACE_CONFIG_INVALID"),
       });
@@ -180,24 +191,55 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
     if (config.mode === "disabled") return;
 
     const adapter = new MemoryAdapter(config, options);
-
+    const autoDiaryEvaluator = options.autoDiaryEvaluator ?? evaluateAutoDiaryCandidateWithModel;
     let currentSessionId = "";
+    let lastEvaluatedActivityEntryId: string | null = null;
+    let inputReceipts: AutoDiaryInputReceipt[] = [];
+    let activeEvaluation: ActiveAutoDiaryEvaluation | undefined;
+    let evaluationFailure: AutoDiaryEvaluationFailure | undefined;
+    let authorizedCandidate: { candidateEntryId: string; evaluationId: string } | undefined;
+    let shuttingDown = false;
+    let cancelAutoDiaryEvaluation:
+      | ((reason: "primary_turn" | "shutdown") => Promise<void>)
+      | undefined;
     const diarySessions = new Set<string>();
-    const telemetry: MemoryTelemetry = {
-      info(event, context) {
-        logger.info(event, context);
-      },
-      warn(event, context) {
-        logger.warn(event, context);
-      },
+    const callerId = () => `primary:${currentSessionId || "unbound"}`;
+
+    const reportTrigger = (
+      level: "info" | "warn",
+      disposition: "scheduled" | "skipped" | "failed",
+      reasonCode: string,
+      metadata: Record<string, unknown> = {}
+    ): void => {
+      runtimeTelemetry[level]("primary_auto_diary_trigger", {
+        sessionId: currentSessionId || "unbound",
+        mode: config.autoDiary.mode,
+        disposition,
+        reasonCode,
+        ...metadata,
+      });
     };
 
-    const callerId = () => `primary:${currentSessionId || "unbound"}`;
+    const reportEvaluation = (
+      level: "info" | "warn",
+      disposition: "retain" | "skip" | "uncertain" | "failed",
+      reasonCode: string,
+      metadata: Record<string, unknown> = {}
+    ): void => {
+      runtimeTelemetry[level]("primary_auto_diary_evaluation", {
+        sessionId: currentSessionId || "unbound",
+        mode: config.autoDiary.mode,
+        disposition,
+        reasonCode,
+        ...metadata,
+      });
+    };
+
     for (const tool of createPrimaryMemoryTools({
       adapter,
       callerId,
       writeEnabled: config.writeEnabled,
-      telemetry,
+      telemetry: runtimeTelemetry,
     })) {
       registerTool(pi, tool);
     }
@@ -210,65 +252,372 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
         callerId,
         rooms: config.logstream.rooms,
         writeEnabled: config.writeEnabled,
-        telemetry,
+        telemetry: runtimeTelemetry,
       })) {
         registerTool(pi, tool);
       }
     }
 
+    // Pi's primary active-tool set is session-global and sendMessage() is fire-and-forget.
+    // Narrowing it around an automatic follow-up can capture a queued user/extension turn or
+    // strand the narrowed set after an asynchronous scheduling error. Keep the evaluation off
+    // the primary agent loop instead: ModelRegistry.complete receives one explicit tool schema
+    // and never executes a tool or inserts its response into the primary transcript.
+    const autoDiaryCanEvaluate =
+      config.autoDiary.mode === "observe-only" ||
+      (config.autoDiary.mode === "retain" && config.writeEnabled);
+
     pi.on("session_start", async (_event: SessionStartEvent, context: ExtensionContext) => {
       currentSessionId = context.sessionManager.getSessionId();
       setSessionId(currentSessionId);
+      lastEvaluatedActivityEntryId = autoDiaryCanEvaluate
+        ? latestAutoDiaryUserActivityId(context.sessionManager)
+        : null;
+      inputReceipts = [];
+      activeEvaluation = undefined;
+      evaluationFailure = undefined;
+      authorizedCandidate = undefined;
+      shuttingDown = false;
     });
 
+    if (autoDiaryCanEvaluate) {
+      cancelAutoDiaryEvaluation = async (reason: "primary_turn" | "shutdown"): Promise<void> => {
+        const active = activeEvaluation;
+        if (active === undefined) return;
+        active.cancelReason ??= reason;
+        active.controller.abort();
+        if (active.settled !== undefined) await active.settled;
+      };
+
+      const runEvaluation = async (
+        active: ActiveAutoDiaryEvaluation,
+        context: ExtensionContext
+      ): Promise<void> => {
+        const fail = (reasonCode: string, error?: unknown): void => {
+          evaluationFailure = {
+            activityEntryId: active.latestActivityEntryId,
+            reasonCode,
+          };
+          reportEvaluation("warn", "failed", reasonCode, {
+            sourceCount: active.evaluation.sources.length,
+            retentionAdmission: active.evaluation.retentionAdmission,
+            ...(error === undefined
+              ? {}
+              : { errorCode: errorCodeFrom(error, "MEMPALACE_UNAVAILABLE") }),
+          });
+        };
+
+        try {
+          const completion = await evaluateWithDeadline(
+            autoDiaryEvaluator,
+            active,
+            context.sessionManager,
+            context,
+            config.autoDiary.shutdownTimeoutMs
+          );
+          if (completion.kind === "cancelled") {
+            fail(
+              active.cancelReason === "shutdown"
+                ? "shutdown_before_model_disposition"
+                : "evaluation_cancelled_for_primary_turn"
+            );
+            return;
+          }
+          if (completion.kind === "timeout") {
+            fail("model_evaluation_timeout");
+            return;
+          }
+          if (completion.kind === "error") {
+            const reasonCode =
+              completion.error instanceof AutoDiaryEvaluationError
+                ? completion.error.reasonCode
+                : "evaluation_schedule_failed";
+            fail(reasonCode, completion.error);
+            if (reasonCode === "evaluation_schedule_failed") {
+              reportTrigger("warn", "failed", reasonCode, {
+                errorCode: errorCodeFrom(completion.error, "MEMPALACE_UNAVAILABLE"),
+              });
+            }
+            return;
+          }
+          if (activeEvaluation !== active || active.controller.signal.aborted || shuttingDown) {
+            fail("evaluation_cancelled_before_staging");
+            return;
+          }
+
+          try {
+            const candidate = stageAutoDiaryCandidate(
+              completion.parameters,
+              active.evaluation,
+              active.evaluationEntryId,
+              context.sessionManager
+            );
+            pi.appendEntry(AUTO_DIARY_CANDIDATE_CUSTOM_TYPE, candidate);
+            const candidateEntryId = currentAutoDiaryCandidateEntryId(
+              context.sessionManager,
+              candidate
+            );
+            if (candidateEntryId === null) {
+              throw new MemoryError(
+                "MEMPALACE_INTEGRITY",
+                "Automatic diary candidate was not retained as the current session leaf"
+              );
+            }
+            authorizedCandidate = {
+              candidateEntryId,
+              evaluationId: candidate.evaluationId,
+            };
+            evaluationFailure = undefined;
+
+            const coercedForPrivacy =
+              completion.parameters.disposition === "retain" &&
+              candidate.disposition === "uncertain";
+            reportEvaluation(
+              "info",
+              candidate.disposition,
+              coercedForPrivacy
+                ? "retain_denied_privacy_ambiguity"
+                : `candidate_${candidate.disposition}`,
+              {
+                sourceCount: candidate.sources.length,
+                retentionAdmission: active.evaluation.retentionAdmission,
+              }
+            );
+          } catch (error) {
+            authorizedCandidate = undefined;
+            fail("candidate_stage_failed", error);
+          }
+        } finally {
+          lastEvaluatedActivityEntryId = active.latestActivityEntryId;
+          inputReceipts = inputReceipts.slice(active.consumedReceiptCount);
+          if (activeEvaluation === active) activeEvaluation = undefined;
+        }
+      };
+
+      const cancelBeforePrimaryTurn = async (): Promise<void> => {
+        await cancelAutoDiaryEvaluation?.("primary_turn");
+      };
+      pi.on("before_agent_start", cancelBeforePrimaryTurn);
+      pi.on("agent_start", cancelBeforePrimaryTurn);
+
+      pi.on("input", (event) => {
+        inputReceipts.push(
+          createAutoDiaryInputReceipt(event.text, event.source, (event.images?.length ?? 0) > 0)
+        );
+        if (inputReceipts.length > AUTO_DIARY_MAX_INPUT_RECEIPTS) {
+          inputReceipts = inputReceipts.slice(-AUTO_DIARY_MAX_INPUT_RECEIPTS);
+        }
+      });
+
+      pi.on("agent_settled", async (_event, context) => {
+        if (
+          !currentSessionId ||
+          shuttingDown ||
+          activeEvaluation !== undefined ||
+          !context.isIdle() ||
+          context.hasPendingMessages()
+        ) {
+          return;
+        }
+
+        const preparation = prepareAutoDiaryEvaluation(
+          context.sessionManager,
+          lastEvaluatedActivityEntryId,
+          inputReceipts
+        );
+        if (preparation.status === "none") {
+          lastEvaluatedActivityEntryId = preparation.latestActivityEntryId;
+          inputReceipts = inputReceipts.slice(preparation.consumedReceiptCount);
+          return;
+        }
+        if (preparation.status === "skip") {
+          lastEvaluatedActivityEntryId = preparation.latestActivityEntryId;
+          inputReceipts = inputReceipts.slice(preparation.consumedReceiptCount);
+          authorizedCandidate = undefined;
+          evaluationFailure = {
+            activityEntryId: preparation.latestActivityEntryId,
+            reasonCode: preparation.reasonCode,
+          };
+          reportTrigger("warn", "skipped", preparation.reasonCode);
+          return;
+        }
+
+        authorizedCandidate = undefined;
+        evaluationFailure = undefined;
+        try {
+          pi.appendEntry(AUTO_DIARY_EVALUATION_CUSTOM_TYPE, preparation.evaluation);
+          const evaluationEntryId = currentEvaluationEntryId(context.sessionManager);
+          if (evaluationEntryId === null) {
+            throw new MemoryError(
+              "MEMPALACE_INTEGRITY",
+              "Automatic diary evaluation entry was not retained as the current session leaf"
+            );
+          }
+          const active: ActiveAutoDiaryEvaluation = {
+            evaluation: preparation.evaluation,
+            evaluationEntryId,
+            latestActivityEntryId: preparation.latestActivityEntryId,
+            consumedReceiptCount: preparation.consumedReceiptCount,
+            controller: new AbortController(),
+          };
+          activeEvaluation = active;
+          active.settled = runEvaluation(active, context);
+          reportTrigger("info", "scheduled", "new_user_activity", {
+            sourceCount: preparation.evaluation.sources.length,
+            retentionAdmission: preparation.evaluation.retentionAdmission,
+            isolation: "one-tool-model-client",
+          });
+          await active.settled;
+        } catch (error) {
+          lastEvaluatedActivityEntryId = preparation.latestActivityEntryId;
+          inputReceipts = inputReceipts.slice(preparation.consumedReceiptCount);
+          activeEvaluation = undefined;
+          evaluationFailure = {
+            activityEntryId: preparation.latestActivityEntryId,
+            reasonCode: "evaluation_schedule_failed",
+          };
+          reportTrigger("warn", "failed", "evaluation_schedule_failed", {
+            errorCode: errorCodeFrom(error, "MEMPALACE_UNAVAILABLE"),
+          });
+          reportEvaluation("warn", "failed", "evaluation_not_started", {
+            errorCode: errorCodeFrom(error, "MEMPALACE_UNAVAILABLE"),
+          });
+        }
+      });
+    }
+
     pi.on("session_shutdown", async (event: SessionShutdownEvent, context: ExtensionContext) => {
-      if (!config.writeEnabled) return;
       const session = currentSessionId;
       if (!session || diarySessions.has(session)) return;
       diarySessions.add(session);
-      try {
-        const entry = buildDiaryFromSessionEntries(
-          session,
-          event?.reason || "unknown",
-          context.sessionManager.getEntries()
-        );
-        if (!entry) {
-          logger.warn("Primary auto-diary skipped", {
-            sessionId: session,
-            reason: "bounded observability metadata unavailable",
-          });
-          diarySessions.delete(session);
-          return;
-        }
+      shuttingDown = true;
 
-        const duplicate = await adapter.invokeRaw("check_duplicate", {
-          content: entry,
-          threshold: 0.99,
-        });
-        if (duplicate.payload.is_duplicate === true) {
-          logger.info("Primary auto-diary duplicate suppressed", { sessionId: session });
-          return;
-        }
-        const written = await adapter.invokeRaw("diary_write", {
-          agent_name: "penny",
-          entry,
-          topic: "session-end",
-        });
-        if (written.payload.success === false || typeof written.payload.error === "string") {
-          throw new Error("hub refused auto-diary write");
-        }
-        logger.info("Primary auto-diary written", {
+      runtimeTelemetry.info("primary_session_activity", {
+        sessionId: session,
+        shutdownReason: event.reason,
+        ...collectAutoDiaryActivity(context.sessionManager),
+      });
+
+      const reportDisposition = (
+        level: "info" | "warn",
+        disposition: string,
+        reasonCode: string,
+        metadata: Record<string, unknown> = {}
+      ): void => {
+        runtimeTelemetry[level]("primary_auto_diary_disposition", {
           sessionId: session,
-          entryBytes: Buffer.byteLength(entry, "utf8"),
-          requestId: written.requestId,
+          mode: config.autoDiary.mode,
+          disposition,
+          reasonCode,
+          ...metadata,
         });
-      } catch (error) {
-        diarySessions.delete(session);
-        logger.warn("Primary auto-diary failed", {
-          sessionId: session,
-          errorCode: errorCodeFrom(error, "MEMPALACE_UNAVAILABLE"),
-        });
+      };
+
+      const interruptedEvaluation = activeEvaluation;
+      if (interruptedEvaluation !== undefined) {
+        await cancelAutoDiaryEvaluation?.("shutdown");
+        authorizedCandidate = undefined;
+        reportDisposition("warn", "uncertain", "shutdown_before_model_disposition");
+        return;
       }
+      if (config.autoDiary.mode === "disabled") {
+        reportDisposition("info", "skip", "mode_disabled");
+        return;
+      }
+      if (config.autoDiary.mode === "retain" && !config.writeEnabled) {
+        reportDisposition("info", "skip", "writes_disabled");
+        return;
+      }
+      const latestActivityEntryId = latestAutoDiaryUserActivityId(context.sessionManager);
+      if (latestActivityEntryId !== lastEvaluatedActivityEntryId) {
+        authorizedCandidate = undefined;
+        reportDisposition("warn", "uncertain", "activity_not_evaluated");
+        return;
+      }
+      if (
+        evaluationFailure !== undefined &&
+        evaluationFailure.activityEntryId === latestActivityEntryId
+      ) {
+        reportDisposition("warn", "uncertain", evaluationFailure.reasonCode);
+        return;
+      }
+
+      const resolution = resolveAutoDiaryCandidate(context.sessionManager);
+      if (resolution.status === "absent") {
+        reportDisposition("info", "skip", resolution.reasonCode);
+        return;
+      }
+      if (resolution.status === "invalid") {
+        reportDisposition("warn", "uncertain", resolution.reasonCode);
+        return;
+      }
+
+      const candidate = resolution.candidate;
+      if (
+        authorizedCandidate?.candidateEntryId !== resolution.candidateEntryId ||
+        authorizedCandidate.evaluationId !== candidate.evaluationId
+      ) {
+        reportDisposition("warn", "uncertain", "candidate_not_authorized");
+        return;
+      }
+      try {
+        pi.appendEntry(
+          AUTO_DIARY_PROCESSED_CUSTOM_TYPE,
+          autoDiaryProcessedMarker(resolution.candidateEntryId, candidate.evaluationId)
+        );
+        if (
+          !currentAutoDiaryProcessedMarkerMatches(
+            context.sessionManager,
+            resolution.candidateEntryId,
+            candidate.evaluationId
+          )
+        ) {
+          throw new MemoryError(
+            "MEMPALACE_INTEGRITY",
+            "Automatic diary processed marker was not retained as the current session leaf"
+          );
+        }
+      } catch (error) {
+        reportDisposition("warn", "uncertain", "candidate_state_unavailable", {
+          errorCode: errorCodeFrom(error, "MEMPALACE_INTEGRITY"),
+        });
+        return;
+      }
+      if (candidate.disposition === "skip" || candidate.disposition === "uncertain") {
+        reportDisposition("info", candidate.disposition, `candidate_${candidate.disposition}`);
+        return;
+      }
+
+      const candidateMetadata = {
+        entryBytes: Buffer.byteLength(candidate.entry, "utf8"),
+        futureValueBytes: Buffer.byteLength(candidate.futureValue, "utf8"),
+        automaticProvenance: candidate.provenance,
+      };
+      if (config.autoDiary.mode === "observe-only") {
+        reportDisposition("info", "observe-only", "candidate_retain", candidateMetadata);
+        return;
+      }
+
+      const outcome = await retainAutoDiaryCandidate(
+        adapter,
+        candidate,
+        config.autoDiary.shutdownTimeoutMs
+      );
+      const metadata = {
+        ...candidateMetadata,
+        ...("requestId" in outcome && outcome.requestId !== undefined
+          ? { requestId: outcome.requestId }
+          : {}),
+        ...("errorCode" in outcome && outcome.errorCode !== undefined
+          ? { errorCode: outcome.errorCode }
+          : {}),
+      };
+      reportDisposition(
+        outcome.disposition === "failed" || outcome.disposition === "ambiguous" ? "warn" : "info",
+        outcome.disposition,
+        outcome.reasonCode,
+        metadata
+      );
     });
   };
 }
@@ -276,6 +625,60 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
 export default createMemoryExtension();
 
 export { MemoryAdapter } from "./adapter.js";
+export {
+  AUTO_DIARY_ACTIVITY_LOOKBACK_ENTRIES,
+  AUTO_DIARY_AUTOMATIC_PROVENANCE,
+  AUTO_DIARY_CANDIDATE_CUSTOM_TYPE,
+  AUTO_DIARY_CANDIDATE_LOOKBACK_ENTRIES,
+  AUTO_DIARY_CANDIDATE_TOOL_NAME,
+  AUTO_DIARY_EVALUATION_CUSTOM_TYPE,
+  AUTO_DIARY_MAX_ACTIVITY_SOURCES,
+  AUTO_DIARY_MAX_COMBINED_SOURCE_BYTES,
+  AUTO_DIARY_MAX_ENTRY_BYTES,
+  AUTO_DIARY_MAX_EVALUATION_PROMPT_BYTES,
+  AUTO_DIARY_MAX_INPUT_RECEIPTS,
+  AUTO_DIARY_MAX_MODEL_INPUT_BYTES,
+  AUTO_DIARY_MAX_REASON_BYTES,
+  AUTO_DIARY_MAX_SHUTDOWN_TIMEOUT_MS,
+  AUTO_DIARY_MAX_SOURCE_BLOCKS,
+  AUTO_DIARY_MAX_SOURCE_BYTES,
+  AUTO_DIARY_MIN_SHUTDOWN_TIMEOUT_MS,
+  AUTO_DIARY_PROCESSED_CUSTOM_TYPE,
+  AUTO_DIARY_SOURCE_LOOKBACK_ENTRIES,
+  AUTO_DIARY_WRITE_TOPIC,
+  AutoDiaryEvaluationError,
+  autoDiaryProcessedMarker,
+  buildAutoDiaryEvaluationPrompt,
+  buildAutoDiaryModelInput,
+  collectAutoDiaryActivity,
+  createAutoDiaryInputReceipt,
+  currentAutoDiaryCandidateEntryId,
+  currentAutoDiaryProcessedMarkerMatches,
+  evaluateAutoDiaryCandidateWithModel,
+  latestAutoDiaryUserActivityId,
+  prepareAutoDiaryEvaluation,
+  resolveAutoDiaryCandidate,
+  retainAutoDiaryCandidate,
+  stageAutoDiaryCandidate,
+} from "./auto-diary.js";
+export type {
+  AutoDiaryActivityTelemetry,
+  AutoDiaryCandidate,
+  AutoDiaryCandidateParameters,
+  AutoDiaryCandidateResolution,
+  AutoDiaryEvaluation,
+  AutoDiaryEvaluationFailureReason,
+  AutoDiaryEvaluationPreparation,
+  AutoDiaryEvaluator,
+  AutoDiaryInputOrigin,
+  AutoDiaryInputReceipt,
+  AutoDiaryRetentionAdmission,
+  AutoDiaryRetentionAdmissionReason,
+  AutoDiaryRetentionOutcome,
+  AutoDiarySessionReader,
+  AutoDiarySourceGrounding,
+  RetainAutoDiaryCandidate,
+} from "./auto-diary.js";
 export { loadMemoryRuntimeConfig, loadWorkerReadConfig, resolveMemoryActor } from "./config.js";
 export { CANONICAL_KG_PREDICATES, KG_PREDICATE_SCHEMA_VERSION } from "./kg-policy.js";
 export {
@@ -296,6 +699,8 @@ export {
 export { MemoryError } from "./types.js";
 export type {
   LogstreamOperation,
+  MemoryAutoDiaryConfig,
+  MemoryAutoDiaryMode,
   MemoryErrorCode,
   MemoryExecution,
   MemoryLogstreamConfig,

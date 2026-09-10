@@ -38,8 +38,14 @@ import type {
   CompactionReason,
   BoundaryShiftRecord,
   ResumeRef,
+  SkillResultStatus,
 } from "./schema.js";
 import { detectPendingState } from "./pending.js";
+import {
+  collectValidatedSkillResultNodes,
+  parseSkillResultDetails,
+  type ParsedSkillResultDetails,
+} from "./skill-results.js";
 import { readExactCheckpoints } from "./checkpointer.js";
 import { generateModelSummary, renderGroundedDigest, type SummarizerCtx } from "./summarizer.js";
 import { loanEnabled } from "./loans.js";
@@ -126,83 +132,167 @@ const CONFIG = {
 
 export interface SkillInvocation {
   skill_name: string;
-  session_id: string;
+  session_id?: string;
   goal: string;
   completed: boolean;
+  result_status: SkillResultStatus;
+  result_summary?: string;
   constraints?: Record<string, unknown>;
 }
 
+interface ExactToolCallPair {
+  callIndex: number;
+  blockIndex: number;
+  callId: string;
+  tool: string;
+  params?: Record<string, unknown>;
+  resultIndex: number;
+  result: SessionMessage;
+}
+
+/** Pair globally unique call/result IDs in causal order; ambiguity is omission. */
+function collectExactToolCallPairs(
+  messages: SessionMessage[],
+  toolName?: string
+): ExactToolCallPair[] {
+  const calls = new Map<
+    string,
+    Array<{
+      callIndex: number;
+      blockIndex: number;
+      tool: string;
+      params?: Record<string, unknown>;
+    }>
+  >();
+  const results = new Map<string, Array<{ resultIndex: number; result: SessionMessage }>>();
+
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const message = messages[messageIndex];
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (let blockIndex = 0; blockIndex < message.content.length; blockIndex++) {
+        const block = message.content[blockIndex];
+        if (
+          block.type !== "toolCall" ||
+          typeof block.id !== "string" ||
+          block.id.length === 0 ||
+          typeof block.name !== "string" ||
+          block.name.length === 0
+        ) {
+          continue;
+        }
+        const entries = calls.get(block.id) ?? [];
+        entries.push({
+          callIndex: messageIndex,
+          blockIndex,
+          tool: block.name,
+          ...(block.arguments ? { params: block.arguments } : {}),
+        });
+        calls.set(block.id, entries);
+      }
+    }
+    if (
+      message.role === "toolResult" &&
+      typeof message.toolCallId === "string" &&
+      message.toolCallId.length > 0
+    ) {
+      const entries = results.get(message.toolCallId) ?? [];
+      entries.push({ resultIndex: messageIndex, result: message });
+      results.set(message.toolCallId, entries);
+    }
+  }
+
+  const pairs: ExactToolCallPair[] = [];
+  for (const [callId, callEntries] of calls) {
+    const resultEntries = results.get(callId);
+    if (callEntries.length !== 1 || resultEntries?.length !== 1) continue;
+    const call = callEntries[0];
+    const result = resultEntries[0];
+    if (
+      result.resultIndex <= call.callIndex ||
+      (result.result.toolName !== undefined && result.result.toolName !== call.tool) ||
+      (toolName !== undefined && call.tool !== toolName)
+    ) {
+      continue;
+    }
+    pairs.push({ ...call, callId, ...result });
+  }
+  return pairs.sort((a, b) => a.callIndex - b.callIndex || a.blockIndex - b.blockIndex);
+}
+
+export interface ExtractedSkillResultData {
+  status: SkillResultStatus;
+  success: boolean;
+  session_id?: string;
+  summary?: string;
+  parsed?: ParsedSkillResultDetails;
+}
+
 /**
- * Scan messages (newest first) for the most recent `skill` tool call.
- *
- * The session_id comes ONLY from the paired tool result — it is never
- * fabricated. An absent owner-supplied ID stays absent; compaction never
- * guesses an address from naming conventions.
+ * Parse the structured result boundary before considering transport status.
+ * Prose is never parsed as a substitute for absent, malformed, or unknown-version details.
+ */
+export function extractResultData(resultMsg: SessionMessage): ExtractedSkillResultData {
+  const parsed = parseSkillResultDetails(resultMsg.details);
+  if (parsed) {
+    const status =
+      resultMsg.isError === true && parsed.status !== "failure" ? "unknown" : parsed.status;
+    return {
+      status,
+      success: status === "success",
+      ...(parsed.sessionId ? { session_id: parsed.sessionId } : {}),
+      ...(parsed.summary ? { summary: parsed.summary } : {}),
+      parsed,
+    };
+  }
+  if (resultMsg.isError === true) return { status: "failure", success: false };
+  return { status: "unknown", success: false };
+}
+
+/**
+ * Scan messages newest-first for the most recent `skill` tool call. Result
+ * metadata is accepted only from one exact, unique call/result ID pair.
  */
 export function detectDominantSkill(messages: SessionMessage[]): SkillInvocation | null {
+  const pairs = collectExactToolCallPairs(messages, "skill");
+  const pairsByCall = new Map(
+    pairs.map((pair) => [`${pair.callIndex}:${pair.blockIndex}`, pair] as const)
+  );
+
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
 
-    for (const block of msg.content) {
+    for (let blockIndex = msg.content.length - 1; blockIndex >= 0; blockIndex--) {
+      const block = msg.content[blockIndex];
       if (block.type !== "toolCall" || block.name !== "skill" || !block.arguments) continue;
 
       const skillName =
-        typeof block.arguments.skill_name === "string" ? block.arguments.skill_name : "";
-      const goal = typeof block.arguments.goal === "string" ? block.arguments.goal : "";
+        typeof block.arguments.skill_name === "string" ? block.arguments.skill_name.trim() : "";
+      const goal = typeof block.arguments.goal === "string" ? block.arguments.goal.trim() : "";
       if (!skillName || !goal) continue;
 
-      // Pair with THIS call's result: match by toolCallId when the call
-      // has an id; otherwise take the first subsequent skill toolResult.
-      let completed = false;
-      let sessionId = "";
-      for (let j = i + 1; j < messages.length; j++) {
-        const resultMsg = messages[j];
-        if (resultMsg.role !== "toolResult") continue;
-        const matches = block.id
-          ? resultMsg.toolCallId === block.id
-          : resultMsg.toolName === "skill";
-        if (matches) {
-          const resultData = extractResultData(resultMsg);
-          completed = resultData.success || false;
-          sessionId = resultData.session_id || "";
-          break;
-        }
+      const pair = pairsByCall.get(`${i}:${blockIndex}`);
+      let resultData: ExtractedSkillResultData = { status: "unknown", success: false };
+      if (pair) {
+        const candidate = extractResultData(pair.result);
+        // A structurally valid result for another skill is still an invalid pair.
+        if (!candidate.parsed || candidate.parsed.skillName === skillName) resultData = candidate;
       }
 
-      // Most recent invocation wins — stop scanning
       const rawConstraints = block.arguments.constraints;
       return {
         skill_name: skillName,
-        session_id: sessionId,
-        goal,
-        completed,
+        ...(resultData.session_id ? { session_id: resultData.session_id } : {}),
+        goal: goal.slice(0, 500),
+        completed: resultData.status === "success",
+        result_status: resultData.status,
+        ...(resultData.summary ? { result_summary: resultData.summary } : {}),
         ...(isRecord(rawConstraints) ? { constraints: rawConstraints } : {}),
       };
     }
   }
 
   return null;
-}
-
-function extractResultData(resultMsg: SessionMessage): {
-  success: boolean;
-  session_id: string;
-  summary: string;
-} {
-  const text = resultMsg.content?.toString() || "";
-  try {
-    const parsed = asRecord(JSON.parse(text));
-    const planSummary = asRecord(parsed.plan_summary);
-    const plan = asRecord(parsed.plan);
-    return {
-      success: Boolean(parsed.success),
-      session_id: asString(parsed.session_id),
-      summary: asString(planSummary.goal) || asString(plan.title),
-    };
-  } catch {
-    return { success: false, session_id: "", summary: "" };
-  }
 }
 
 // ============================================================
@@ -212,32 +302,23 @@ function extractResultData(resultMsg: SessionMessage): {
 interface ExtractedState {
   goal: string;
   constraints: string[];
-  /** True when a COMPLETED skill's goal was displaced by a fresher user pivot. */
+  /** True when the dominant skill's goal was displaced by a later user turn. */
   superseded: boolean;
 }
 
-/** The minimum length for a user message to count as a substantive goal signal. */
-const SUBSTANTIVE_MIN_LEN = 10;
-
 /**
- * Find the chronologically LATEST substantive user message.
+ * Find the chronologically latest textual user input.
  *
- * `messages` is chronological, so we scan from the end (newest-first) and
- * return the first user-role message with real text. There is NO keyword or
- * phrase denylist: the only gate is a length floor (trivial acks like "ok"
- * are not intent). Removing the denylist is the core of the goal-recency
- * fix — the latest substantive intent wins, whatever words it uses.
+ * There is deliberately no minimum length or keyword gate: a short pivot can
+ * be the user's clearest current goal, and silently restoring older completed
+ * work is more harmful than preserving a terse latest instruction.
  */
-function newestSubstantiveUserMessage(
-  messages: SessionMessage[]
-): { text: string; index: number } | null {
+function newestUserMessage(messages: SessionMessage[]): { text: string; index: number } | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role !== "user") continue;
-    const content = extractTextContent(msg);
-    if (content && content.trim().length > SUBSTANTIVE_MIN_LEN) {
-      return { text: content.trim(), index: i };
-    }
+    const content = extractTextContent(msg)?.replace(/\s+/g, " ").trim();
+    if (content) return { text: content.slice(0, 500), index: i };
   }
   return null;
 }
@@ -267,17 +348,17 @@ function latestSkillCallIndex(messages: SessionMessage[]): number {
  * fallback path — the model path derives the goal from the conversation).
  * Precedence puts recency ahead of stale durable state (RC3 fix):
  *
- *   1. INCOMPLETE active skill goal (genuinely current work)
- *   2. newest substantive user message in the merged window (latest intent)
- *   3. exact checkpoint run goal
- *   4. previousSummary carry-forward (never overrides a fresh user pivot)
- *   5. system message
- *   6. default (caller supplies)
+ *   1. newest user message after the dominant skill call (latest pivot)
+ *   2. dominant skill goal, regardless of its honest terminal status
+ *   3. newest user message in the merged window
+ *   4. exact checkpoint run goal
+ *   5. previousSummary carry-forward (never overrides fresh input)
+ *   6. system message
+ *   7. default (caller supplies)
  *
- * Supersession: a COMPLETED skill does NOT set Goal when a substantive user
- * message follows it — that later pivot wins and `superseded` is returned so
- * the caller can flag `dominant_skill.superseded`. A completed skill with no
- * later user pivot still supplies the goal (best summary of the session).
+ * Supersession is status-independent: any later textual user input displaces
+ * the older skill goal. This prevents both completed and terminally failed
+ * work from being misrepresented as the current request.
  *
  * Constraints come ONLY from explicit sources (the skill call's constraints
  * object). Keyword-scraping free text for "must"/"prefer" produced noise
@@ -293,23 +374,17 @@ export function extractSessionState(
   let superseded = false;
   const constraints: string[] = [];
 
-  const newestUser = newestSubstantiveUserMessage(messages);
+  const newestUser = newestUserMessage(messages);
 
-  // Precedence #1 / supersession: the dominant skill.
+  // Precedence #1/#2: a later user turn supersedes the dominant skill;
+  // otherwise the explicit skill call still defines that invocation's goal.
   if (dominantSkill?.goal) {
-    if (!dominantSkill.completed) {
-      // Incomplete active skill wins outright.
-      goal = dominantSkill.goal.slice(0, 500);
+    const skillIdx = latestSkillCallIndex(messages);
+    if (newestUser && newestUser.index > skillIdx) {
+      goal = newestUser.text;
+      superseded = true;
     } else {
-      // Completed skill: a substantive user message AFTER the skill call is a
-      // genuine pivot and supersedes the (done) skill goal.
-      const skillIdx = latestSkillCallIndex(messages);
-      if (newestUser && newestUser.index > skillIdx) {
-        goal = newestUser.text.slice(0, 500);
-        superseded = true;
-      } else {
-        goal = dominantSkill.goal.slice(0, 500);
-      }
+      goal = dominantSkill.goal.slice(0, 500);
     }
   }
 
@@ -323,28 +398,20 @@ export function extractSessionState(
     }
   }
 
-  // Precedence #2: newest substantive user message. Recency beats stale
-  // durable state (RC3 fix): a fresh user pivot must outrank an exact run's
-  // older goal and any carry-forward. An INCOMPLETE active skill (above) is
-  // genuinely current, so it still wins; everything downstream is staler than
-  // the user's latest word.
-  if (!goal && newestUser) {
-    goal = newestUser.text.slice(0, 500);
-  }
+  // Precedence #3: newest user input beats stale durable state.
+  if (!goal && newestUser) goal = newestUser.text;
 
-  // Precedence #3: exact checkpoint run goal.
+  // Precedence #4: exact checkpoint run goal.
   if (!goal && engineRunGoal) {
     goal = engineRunGoal.slice(0, 500);
   }
 
-  // Precedence #4: carry forward the prior Goal. This only fires when the
-  // current window yielded no fresher substantive signal, so a fresh user
-  // pivot (handled above) always wins over carry-forward.
+  // Precedence #5: carry forward the prior Goal only without fresher input.
   if (!goal && previousSummaryGoal) {
     goal = previousSummaryGoal.slice(0, 500);
   }
 
-  // Precedence #5: system message.
+  // Precedence #6: system message.
   if (!goal) {
     for (const msg of messages) {
       const content = extractTextContent(msg);
@@ -481,13 +548,17 @@ export function deriveWorkContext(input: WorkContextInput): {
 } {
   let current_work: string | undefined;
 
-  if (input.dominantSkill && !input.dominantSkill.completed) {
-    current_work =
-      `Running skill "${input.dominantSkill.skill_name}" — ${input.dominantSkill.goal}`.slice(
-        0,
-        1000
-      );
-  } else if (input.engineRuns.length > 0) {
+  if (input.dominantSkill) {
+    const skill = input.dominantSkill;
+    const statusLine: Partial<Record<SkillResultStatus, string>> = {
+      paused: `Skill "${skill.skill_name}" is paused — ${skill.goal}`,
+      failure: `Skill "${skill.skill_name}" failed — ${skill.goal}`,
+      incomplete: `Skill "${skill.skill_name}" ended incomplete — ${skill.goal}`,
+      cancelled: `Skill "${skill.skill_name}" was cancelled — ${skill.goal}`,
+    };
+    current_work = statusLine[skill.result_status]?.slice(0, 1000);
+  }
+  if (!current_work && input.engineRuns.length > 0) {
     const r = input.engineRuns[0];
     current_work =
       `${r.playbook} run ${r.run_id} is ${r.status} in state ${r.current_state_id}`.slice(0, 1000);
@@ -562,28 +633,18 @@ export function extractToolCalls(
   messages: SessionMessage[],
   maxCalls: number = 15
 ): ToolCallExample[] {
-  const examples: ToolCallExample[] = [];
-
-  for (let i = messages.length - 1; i >= 0 && examples.length < maxCalls; i--) {
-    const msg = messages[i];
-    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
-
-    for (const block of msg.content) {
-      if (block.type === "toolCall" && block.arguments) {
-        const nextMsg = messages[i + 1];
-        const isSuccess = nextMsg?.role === "toolResult" && !isToolResultError(nextMsg);
-
-        examples.push({
-          tool: block.name ?? "",
-          params: block.arguments,
-          successful: isSuccess,
-        });
-        if (examples.length >= maxCalls) break;
-      }
-    }
-  }
-
-  return examples.reverse(); // chronological order
+  if (maxCalls <= 0) return [];
+  return collectExactToolCallPairs(messages)
+    .filter(
+      (pair): pair is ExactToolCallPair & { params: Record<string, unknown> } =>
+        pair.params !== undefined
+    )
+    .slice(-maxCalls)
+    .map((pair) => ({
+      tool: pair.tool,
+      params: pair.params,
+      successful: !isToolResultError(pair.result),
+    }));
 }
 
 /**
@@ -595,43 +656,37 @@ export function extractToolErrorRecovery(
   messages: SessionMessage[],
   maxPairs: number = 3
 ): ToolErrorRecovery[] {
-  const pairs: ToolErrorRecovery[] = [];
+  if (maxPairs <= 0) return [];
+  const exactPairs = collectExactToolCallPairs(messages).filter(
+    (pair): pair is ExactToolCallPair & { params: Record<string, unknown> } =>
+      pair.params !== undefined
+  );
+  const recoveries: ToolErrorRecovery[] = [];
 
-  for (let i = 0; i < messages.length && pairs.length < maxPairs; i++) {
-    const msg = messages[i];
-    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+  for (let index = 0; index < exactPairs.length && recoveries.length < maxPairs; index++) {
+    const failed = exactPairs[index];
+    if (!isToolResultError(failed.result)) continue;
 
-    for (const block of msg.content) {
-      if (block.type !== "toolCall" || !block.arguments) continue;
+    const retry = exactPairs
+      .slice(index + 1)
+      .find(
+        (candidate) =>
+          candidate.tool === failed.tool &&
+          candidate.callIndex > failed.resultIndex &&
+          candidate.params !== undefined &&
+          !isToolResultError(candidate.result)
+      );
+    if (!retry?.params) continue;
 
-      const nextMsg = messages[i + 1];
-      if (!isToolResultError(nextMsg)) {
-        continue;
-      }
-
-      // Find the retry (next assistant message with same tool)
-      let foundRetry = false;
-      for (let j = i + 2; j < messages.length && !foundRetry; j++) {
-        const retryMsg = messages[j];
-        if (retryMsg.role !== "assistant" || !Array.isArray(retryMsg.content)) continue;
-
-        for (const retryBlock of retryMsg.content) {
-          if (retryBlock.type === "toolCall" && retryBlock.name === block.name) {
-            pairs.push({
-              tool: block.name ?? "",
-              failed_params: block.arguments,
-              error_message: nextMsg?.content?.toString().slice(0, 200) || "Unknown error",
-              corrected_params: retryBlock.arguments ?? {},
-            });
-            foundRetry = true;
-            break;
-          }
-        }
-      }
-    }
+    recoveries.push({
+      tool: failed.tool,
+      failed_params: failed.params,
+      error_message: failed.result.content?.toString().slice(0, 200) || "Unknown error",
+      corrected_params: retry.params,
+    });
   }
 
-  return pairs;
+  return recoveries;
 }
 
 // ============================================================
@@ -867,16 +922,16 @@ export function createProseSummary(artifact: PennyCompactArtifact): string {
   lines.push(artifact.goal || "(not set)");
   lines.push("");
 
-  // Dominant skill
+  // Dominant skill continuity, including honest terminal/non-terminal status.
   if (artifact.dominant_skill) {
     const ds = artifact.dominant_skill;
-    const status = ds.completed ? "complete" : "incomplete";
     const supersededTag = ds.superseded ? ", superseded by a newer request" : "";
-    lines.push(`## Active Skill`);
-    lines.push(`- **${ds.skill_name}** (${status}${supersededTag})`);
+    lines.push(`## Skill Continuity`);
+    lines.push(`- **${ds.skill_name}** (${ds.result_status}${supersededTag})`);
     if (ds.goal && ds.goal !== artifact.goal) {
       lines.push(`- Skill goal: ${ds.goal}`);
     }
+    if (ds.result_summary) lines.push(`- Result: ${ds.result_summary}`);
     lines.push("");
   }
 
@@ -1018,34 +1073,49 @@ function addCanonicalRunId(ids: Set<string>, value: unknown): void {
   if (ref?.type === "run") ids.add(ref.run_id);
 }
 
-/** Inspect only named, owner-produced skill result fields. */
-function collectRunIdsFromSkillResult(value: unknown, ids: Set<string>, depth = 0): void {
-  if (depth > 4) return;
-  const result = asRecord(value);
-  addCanonicalRunId(ids, result.run_id);
-  addCanonicalRunId(ids, result.approval_run_id);
+function addRunIdFromArtifactCandidate(ids: Set<string>, value: unknown): void {
+  const parsed = ArtifactRefSchema.safeParse(value);
+  if (parsed.success) addCanonicalRunId(ids, parsed.data.run_id);
+}
 
-  for (const key of ["output_artifact_ref", "artifact_ref"] as const) {
-    const ref = asRecord(result[key]);
-    addCanonicalRunId(ids, ref.run_id);
-  }
-  for (const key of ["result", "escalation"] as const) {
-    if (result[key] !== undefined) collectRunIdsFromSkillResult(result[key], ids, depth + 1);
-  }
-  for (const key of ["questions", "parallel_results", "chain_results"] as const) {
-    const values = result[key];
-    if (!Array.isArray(values)) continue;
-    for (const entry of values) collectRunIdsFromSkillResult(entry, ids, depth + 1);
+/** Inspect only named fields on a schema-validated skill result. */
+function collectRunIdsFromParsedSkillResult(
+  parsed: ParsedSkillResultDetails,
+  ids: Set<string>
+): void {
+  for (const node of collectValidatedSkillResultNodes(parsed)) {
+    if (node.status === "unknown") continue;
+    const details = node.details;
+    const pause = asRecord(details.dispatch_pause);
+    addCanonicalRunId(ids, pause.run_id);
+    addCanonicalRunId(ids, asRecord(pause.identity).run_id);
+
+    addRunIdFromArtifactCandidate(ids, details.output_artifact_ref);
+    for (const ref of asArray(details.best_partial_artifact_refs)) {
+      addRunIdFromArtifactCandidate(ids, ref);
+    }
+
+    const result = asRecord(details.result);
+    addRunIdFromArtifactCandidate(ids, result.output_artifact_ref);
+    for (const ref of asArray(result.best_partial_artifact_refs)) {
+      addRunIdFromArtifactCandidate(ids, ref);
+    }
+
+    const escalation = asRecord(details.escalation);
+    for (const question of asArray(escalation.questions)) {
+      addCanonicalRunId(ids, asRecord(question).approval_run_id);
+    }
   }
 }
 
-/** Exact run IDs already supplied by trusted skill tool-result metadata. */
+/** Exact run IDs supplied by validated, exactly paired skill tool results. */
 export function collectExplicitRunIds(messages: SessionMessage[]): string[] {
   const ids = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "toolResult" || message.toolName !== "skill") continue;
-    collectRunIdsFromSkillResult(message.details, ids);
-    collectRunIdsFromSkillResult(safeJsonParse(extractTextContent(message)), ids);
+  for (const pair of collectExactToolCallPairs(messages, "skill")) {
+    const result = extractResultData(pair.result);
+    if (result.parsed && result.status !== "unknown") {
+      collectRunIdsFromParsedSkillResult(result.parsed, ids);
+    }
   }
   return Array.from(ids);
 }
@@ -1077,14 +1147,15 @@ function addArtifactCandidate(values: unknown[], value: unknown): void {
   if (value !== undefined && value !== null) values.push(value);
 }
 
-function collectSkillArtifactCandidates(value: unknown, values: unknown[], depth = 0): void {
-  if (depth > 4) return;
-  const result = asRecord(value);
-  addArtifactCandidate(values, result.output_artifact_ref);
-  for (const key of ["parallel_results", "chain_results"] as const) {
-    const children = result[key];
-    if (!Array.isArray(children)) continue;
-    for (const child of children) collectSkillArtifactCandidates(child, values, depth + 1);
+function collectSkillArtifactCandidates(parsed: ParsedSkillResultDetails, values: unknown[]): void {
+  for (const node of collectValidatedSkillResultNodes(parsed)) {
+    if (node.status === "unknown") continue;
+    const details = node.details;
+    addArtifactCandidate(values, details.output_artifact_ref);
+    values.push(...asArray(details.best_partial_artifact_refs));
+    const result = asRecord(details.result);
+    addArtifactCandidate(values, result.output_artifact_ref);
+    values.push(...asArray(result.best_partial_artifact_refs));
   }
 }
 
@@ -1125,19 +1196,18 @@ export function collectCurrentSessionArtifactRefs(
   projectRoot = process.env.PROJECT_ROOT || process.cwd()
 ): ArtifactRef[] {
   const candidates: unknown[] = [];
-  for (const message of messages) {
-    if (message.role !== "toolResult") continue;
-    const details = asRecord(message.details);
-    if (message.toolName === "subagent") {
-      addArtifactCandidate(candidates, details.finalOutputArtifactRef);
-      candidates.push(...asArray(details.outputArtifactRefs));
-      const results = details.results;
-      if (Array.isArray(results)) {
-        for (const result of results)
-          addArtifactCandidate(candidates, asRecord(result).outputArtifactRef);
-      }
-    } else if (message.toolName === "skill") {
-      collectSkillArtifactCandidates(details, candidates);
+  for (const pair of collectExactToolCallPairs(messages, "subagent")) {
+    const details = asRecord(pair.result.details);
+    addArtifactCandidate(candidates, details.finalOutputArtifactRef);
+    candidates.push(...asArray(details.outputArtifactRefs));
+    for (const result of asArray(details.results)) {
+      addArtifactCandidate(candidates, asRecord(result).outputArtifactRef);
+    }
+  }
+  for (const pair of collectExactToolCallPairs(messages, "skill")) {
+    const result = extractResultData(pair.result);
+    if (result.parsed && result.status !== "unknown") {
+      collectSkillArtifactCandidates(result.parsed, candidates);
     }
   }
 
@@ -1193,15 +1263,6 @@ export function parsePriorArtifactRefs(previousSummary: string | undefined): Res
     return parseResumeRefs(previousSummary).refs.filter((ref) => ref.type === "artifact");
   } catch {
     return [];
-  }
-}
-
-function safeJsonParse(text: string | null): unknown {
-  if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    return {};
   }
 }
 
@@ -1288,7 +1349,7 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
   }
 
   const work = deriveWorkContext({
-    dominantSkill: dominant,
+    dominantSkill: extracted.superseded ? null : dominant,
     engineRuns,
     pending,
     goal,
@@ -1312,6 +1373,8 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
             ...(dominant.session_id ? { session_id: dominant.session_id } : {}),
             goal: dominant.goal,
             completed: dominant.completed,
+            result_status: dominant.result_status,
+            ...(dominant.result_summary ? { result_summary: dominant.result_summary } : {}),
             ...(extracted.superseded ? { superseded: true } : {}),
           },
         }
@@ -1352,6 +1415,16 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
     pending,
     readFiles,
     modifiedFiles,
+    ...(dominant
+      ? {
+          skill: {
+            name: dominant.skill_name,
+            status: dominant.result_status,
+            goal: dominant.goal,
+            superseded: extracted.superseded,
+          },
+        }
+      : {}),
   });
   artifact = applyEviction(artifact);
   artifact.resume_refs = createResumeRefSet(
@@ -1628,6 +1701,51 @@ export function withResumeRefs(prose: string, artifact: PennyCompactArtifact): s
   return refs ? `${prose}\n\n---\n${refs}` : prose;
 }
 
+/** Keep the code-selected, recency-ordered goal authoritative on the model path. */
+export function enforceSelectedGoal(prose: string, selectedGoal: string): string {
+  const goal = selectedGoal.replace(/\s+/g, " ").trim().slice(0, 500);
+  const lines = prose.trim().split("\n");
+  const start = lines.findIndex((line) => /^#{1,6}\s+Goal\s*$/i.test(line.trim()));
+  if (start < 0) return [`## Goal`, goal, "", ...lines].join("\n").trim();
+
+  let end = start + 1;
+  while (end < lines.length && !/^#{1,6}\s+/.test(lines[end].trim())) end++;
+  return [...lines.slice(0, start), "## Goal", goal, "", ...lines.slice(end)]
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Replace model-inferred skill state with the validated structured result. */
+export function enforceSkillContinuity(prose: string, artifact: PennyCompactArtifact): string {
+  const skill = artifact.dominant_skill;
+  if (!skill) return prose;
+  const lines = prose.trim().split("\n");
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (!/^#{1,6}\s+(?:Active Skill|Skill Continuity)\s*$/i.test(lines[index].trim())) continue;
+    let end = index + 1;
+    while (end < lines.length && !/^#{1,6}\s+/.test(lines[end].trim())) end++;
+    lines.splice(index, end - index);
+  }
+
+  const goalStart = lines.findIndex((line) => /^#{1,6}\s+Goal\s*$/i.test(line.trim()));
+  let insertAt = goalStart >= 0 ? goalStart + 1 : 0;
+  while (insertAt < lines.length && !/^#{1,6}\s+/.test(lines[insertAt].trim())) insertAt++;
+  const supersededTag = skill.superseded ? ", superseded by a newer request" : "";
+  const section = [
+    "## Skill Continuity",
+    `- **${skill.skill_name}** (${skill.result_status}${supersededTag})`,
+    ...(skill.goal !== artifact.goal ? [`- Skill goal: ${skill.goal}`] : []),
+    ...(skill.result_summary ? [`- Result: ${skill.result_summary}`] : []),
+    "",
+  ];
+  lines.splice(insertAt, 0, ...section);
+  return lines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /**
  * Compute the boundary shift from the previous compaction to this one, sourced
  * from branchEntries. Returns undefined on a session's first compaction (no
@@ -1747,12 +1865,13 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
     if (modelResult) {
       artifact.summary_source = "model";
       artifact.summary_model = modelResult.model;
-      artifact.prose_summary = modelResult.prose.slice(0, 20_000);
-      // Keep artifact.goal (archive + stagnation canary) consistent with the
-      // brief the model actually wrote.
-      const modelGoal = parseGoalFromSummary(modelResult.prose);
-      if (modelGoal) artifact.goal = modelGoal;
-      modelProse = modelResult.prose;
+      // Goal and skill status are code-owned: model prose cannot revive or
+      // misclassify an older skill.
+      modelProse = enforceSkillContinuity(
+        enforceSelectedGoal(modelResult.prose, artifact.goal),
+        artifact
+      );
+      artifact.prose_summary = modelProse.slice(0, 20_000);
     } else if (loanEnabled("compaction_deterministic_summary")) {
       artifact.summary_source = "deterministic_fallback";
     } else {

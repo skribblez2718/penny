@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from memory.common import ValidationError
-from memory.offline_access import authorize_offline_target
+from memory.offline_access import authorize_offline_target, revalidate_offline_authorization
 
 
 def _receipt(path: Path, target: Path, *, checks: dict[str, bool] | None = None) -> Path:
@@ -100,3 +100,45 @@ def test_rejects_receipt_for_a_different_copy(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError, match="does not match"):
         authorize_offline_target(second, receipt, environment={})
+
+
+def test_revalidation_rejects_changed_receipt_identity(tmp_path: Path) -> None:
+    target = tmp_path / "copy"
+    target.mkdir()
+    receipt = _receipt(tmp_path / "receipt.json", target)
+    authorization = authorize_offline_target(target, receipt, environment={})
+    document = json.loads(receipt.read_text(encoding="utf-8"))
+    document["approved_by"] = "changed-owner"
+    receipt.write_text(json.dumps(document), encoding="utf-8")
+    receipt.chmod(0o600)
+
+    with pytest.raises(ValidationError, match="identity changed"):
+        revalidate_offline_authorization(authorization, environment={})
+
+
+def test_revalidation_rejects_replaced_target_identity(tmp_path: Path) -> None:
+    target = tmp_path / "copy"
+    target.mkdir()
+    receipt = _receipt(tmp_path / "receipt.json", target)
+    authorization = authorize_offline_target(target, receipt, environment={})
+    target.rename(tmp_path / "parked")
+    target.mkdir()
+
+    with pytest.raises(ValidationError, match="identity changed"):
+        revalidate_offline_authorization(authorization, environment={})
+
+
+def test_rejects_symlink_target_and_receipt(tmp_path: Path) -> None:
+    target = tmp_path / "copy"
+    target.mkdir()
+    receipt = _receipt(tmp_path / "receipt.json", target)
+    linked_target = tmp_path / "linked-copy"
+    linked_target.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValidationError, match="must not be a symlink"):
+        authorize_offline_target(linked_target, receipt, environment={})
+
+    linked_receipt = tmp_path / "linked-receipt.json"
+    linked_receipt.symlink_to(receipt)
+    with pytest.raises(ValidationError, match="must not be a symlink"):
+        authorize_offline_target(target, linked_receipt, environment={})

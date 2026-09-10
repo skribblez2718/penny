@@ -155,7 +155,11 @@ describe("actual registered Pi tool result path", () => {
     await sessionStart(
       {},
       {
-        sessionManager: { getSessionId: () => "registered-tool-session" },
+        sessionManager: {
+          getSessionId: () => "registered-tool-session",
+          getLeafEntry: () => undefined,
+          getEntry: () => undefined,
+        },
       }
     );
 

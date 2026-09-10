@@ -9,6 +9,7 @@
     "test:unit": "bunx vitest run --config tests/vitest.config.ts",
     "test:integration": "bunx vitest run --config tests/vitest.integration.config.ts",
     "test:e2e": "bunx vitest run --config tests/vitest.e2e.config.ts",
+    "test:browser:release": "bun run scripts/verify-release-browser-prerequisites.ts && bunx vitest run --config tests/vitest.integration.config.ts tests/integration/network-policy-browser.test.ts --retry=0 && bunx vitest run --config tests/vitest.e2e.config.ts tests/e2e/network-policy.e2e.test.ts --retry=0",
     "lint": "eslint . --ext .ts --max-warnings=0",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,json,md}\"",

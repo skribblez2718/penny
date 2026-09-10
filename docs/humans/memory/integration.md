@@ -15,8 +15,11 @@ The primary extension, online admin tools, evals, audits, and retention planners
 all call that hub. They do not open palace bytes, spawn raw peers, or fall back to
 direct/prefer storage. An unavailable hub fails closed.
 
-Only the unmarked primary Penny runtime exposes memory tools. Workers and skill
-drivers expose none.
+The unmarked primary Penny runtime owns the full memory surface, including all
+writes and lifecycle operations. A catalog worker can receive a bounded
+read-only recall bundle when its owner-materialized active tool list includes
+YAML-declared memory reads; that bundle cannot write, use the advisory log, or act as artifact/workflow
+handoff. Skill drivers receive no memory tools.
 
 ## Optional advisory log
 

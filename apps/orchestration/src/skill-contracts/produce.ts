@@ -15,6 +15,14 @@ import {
   assertUnique,
   validateSkillSchema,
 } from "./common.js";
+import {
+  EffectEvidenceGraphV1Schema,
+  PRODUCE_EFFECT_PHASES,
+  effectEvidenceSha256,
+  legacyUnverifiedEffectEvidence,
+  validateEffectEvidenceGraph,
+  type EffectEvidenceGraphV1,
+} from "./effects.js";
 
 const MAX_REQUEST_ITEMS = 64;
 const MAX_SOURCE_ITEMS = 128;
@@ -1431,4 +1439,800 @@ export function validateProduceProductEnvelope(value: unknown): ProduceProductEn
   const { envelope_id: envelopeId, ...body } = envelope;
   assertDerived(envelopeId, "paenv_", body, "ProduceProductEnvelopeV1");
   return envelope;
+}
+
+// ---------------------------------------------------------------------------
+// V2 effect-evidence contracts. V1 declarations above remain immutable readers;
+// their literal-false values are historical assertions, never effect evidence.
+// ---------------------------------------------------------------------------
+
+const {
+  schema_version: _producedDraftV1Version,
+  external_actions_performed: _producedDraftV1External,
+  filesystem_writes_performed: _producedDraftV1Writes,
+  tests_executed: _producedDraftV1Tests,
+  ...ProducedArtifactDraftV2Properties
+} = ProducedArtifactDraftProperties;
+
+const ProducedArtifactCoreV2Properties = {
+  schema_version: Type.Literal(2),
+  ...ProducedArtifactDraftV2Properties,
+  content_sha256: Sha256Schema,
+};
+
+export const ProducedArtifactDraftV2Schema = Type.Object(
+  { schema_version: Type.Literal(2), ...ProducedArtifactDraftV2Properties },
+  { additionalProperties: false }
+);
+export type ProducedArtifactDraftV2 = Readonly<Static<typeof ProducedArtifactDraftV2Schema>>;
+
+export const ProducedArtifactV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.produced-artifact.v2"),
+    ...ProducedArtifactCoreV2Properties,
+    request: ProduceRequestV1Schema,
+    request_sha256: Sha256Schema,
+    source_lineage: ProducedArtifactSourceLineageV1Schema,
+    effect_evidence: EffectEvidenceGraphV1Schema,
+  },
+  { additionalProperties: false }
+);
+export type ProducedArtifactV2 = Readonly<Static<typeof ProducedArtifactV2Schema>>;
+
+export const ProduceQualityReceiptV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.produce-quality-receipt.v2"),
+    schema_version: Type.Literal(2),
+    receipt_id: Type.String({ pattern: "^pqrc_[a-f0-9]{64}$" }),
+    run_id: OpaqueIdSchema,
+    verdict: Type.Literal("APPROVE"),
+    reviewer: Type.Literal("carren"),
+    request_ref: ArtifactRefSchema,
+    approach_ref: ArtifactRefSchema,
+    decision_ref: ArtifactRefSchema,
+    draft_ref: ArtifactRefSchema,
+    product_ref: ArtifactRefSchema,
+    carren_report_ref: ArtifactRefSchema,
+    execution_receipt_id: OpaqueIdSchema,
+    execution_result_sha256: Sha256Schema,
+    created_at: Rfc3339UtcSchema,
+    effect_evidence: EffectEvidenceGraphV1Schema,
+    minted_by: Type.Literal("host:produce-receipt-authority"),
+  },
+  { additionalProperties: false }
+);
+export type ProduceQualityReceiptV2 = Readonly<Static<typeof ProduceQualityReceiptV2Schema>>;
+
+export const ProduceValidityReceiptV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.produce-validity-receipt.v2"),
+    schema_version: Type.Literal(2),
+    receipt_id: Type.String({ pattern: "^pvrc_[a-f0-9]{64}$" }),
+    run_id: OpaqueIdSchema,
+    verdict: Type.Literal("PASS"),
+    reviewer: Type.Literal("vera"),
+    request_ref: ArtifactRefSchema,
+    approach_ref: ArtifactRefSchema,
+    decision_ref: ArtifactRefSchema,
+    draft_ref: ArtifactRefSchema,
+    product_ref: ArtifactRefSchema,
+    carren_report_ref: ArtifactRefSchema,
+    vera_report_ref: ArtifactRefSchema,
+    quality_receipt_ref: ArtifactRefSchema,
+    execution_receipt_id: OpaqueIdSchema,
+    execution_result_sha256: Sha256Schema,
+    created_at: Rfc3339UtcSchema,
+    effect_evidence: EffectEvidenceGraphV1Schema,
+    minted_by: Type.Literal("host:produce-receipt-authority"),
+  },
+  { additionalProperties: false }
+);
+export type ProduceValidityReceiptV2 = Readonly<Static<typeof ProduceValidityReceiptV2Schema>>;
+
+const PRODUCE_INTEGRITY_CHECKS_V2 = [
+  "canonical_product",
+  "exact_request_coverage",
+  "exact_source_lineage",
+  "canonical_json_content_when_applicable",
+  "latest_quality_receipt",
+  "latest_validity_receipt",
+  "signed_worker_evidence",
+  "effect_evidence_consistency",
+] as const;
+
+export const ProduceProductIntegrityV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.produce-product-integrity.v2"),
+    schema_version: Type.Literal(2),
+    integrity_id: Type.String({ pattern: "^pair_[a-f0-9]{64}$" }),
+    status: Type.Literal("PASS"),
+    request_ref: ArtifactRefSchema,
+    approach_ref: ArtifactRefSchema,
+    decision_ref: ArtifactRefSchema,
+    draft_ref: ArtifactRefSchema,
+    product_ref: ArtifactRefSchema,
+    carren_report_ref: ArtifactRefSchema,
+    vera_report_ref: ArtifactRefSchema,
+    quality_receipt_ref: ArtifactRefSchema,
+    validity_receipt_ref: ArtifactRefSchema,
+    execution_receipt_ids: Type.Array(OpaqueIdSchema, {
+      minItems: 5,
+      maxItems: 16,
+      uniqueItems: true,
+    }),
+    checks: Type.Array(
+      Type.Union([
+        Type.Literal("canonical_product"),
+        Type.Literal("exact_request_coverage"),
+        Type.Literal("exact_source_lineage"),
+        Type.Literal("canonical_json_content_when_applicable"),
+        Type.Literal("latest_quality_receipt"),
+        Type.Literal("latest_validity_receipt"),
+        Type.Literal("signed_worker_evidence"),
+        Type.Literal("effect_evidence_consistency"),
+      ]),
+      { minItems: 8, maxItems: 8, uniqueItems: true }
+    ),
+    product_effect_evidence_sha256: Sha256Schema,
+    effect_evidence: EffectEvidenceGraphV1Schema,
+  },
+  { additionalProperties: false }
+);
+export type ProduceProductIntegrityV2 = Readonly<Static<typeof ProduceProductIntegrityV2Schema>>;
+
+export const ProduceProductEnvelopeV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.produce-product-envelope.v2"),
+    schema_version: Type.Literal(2),
+    envelope_id: Type.String({ pattern: "^paenv_[a-f0-9]{64}$" }),
+    run_id: OpaqueIdSchema,
+    status: Type.Literal("complete"),
+    request_ref: ArtifactRefSchema,
+    approach_ref: ArtifactRefSchema,
+    decision_ref: ArtifactRefSchema,
+    draft_ref: ArtifactRefSchema,
+    product_ref: ArtifactRefSchema,
+    carren_report_ref: ArtifactRefSchema,
+    vera_report_ref: ArtifactRefSchema,
+    quality_receipt_ref: ArtifactRefSchema,
+    validity_receipt_ref: ArtifactRefSchema,
+    integrity_ref: ArtifactRefSchema,
+    effect_evidence: EffectEvidenceGraphV1Schema,
+  },
+  { additionalProperties: false }
+);
+export type ProduceProductEnvelopeV2 = Readonly<Static<typeof ProduceProductEnvelopeV2Schema>>;
+
+function producedArtifactDraftV2AsV1(draft: ProducedArtifactDraftV2): ProducedArtifactDraftV1 {
+  return {
+    ...draft,
+    schema_version: 1,
+    external_actions_performed: false,
+    filesystem_writes_performed: false,
+    tests_executed: false,
+  };
+}
+
+export function validateProducedArtifactDraftV2(
+  value: unknown,
+  input: { readonly request: unknown }
+): ProducedArtifactDraftV2 {
+  const request = validateProduceRequest(input.request);
+  let draft: ProducedArtifactDraftV2;
+  try {
+    draft = validateSkillSchema(ProducedArtifactDraftV2Schema, value, "ProducedArtifactDraftV2");
+    validateOutputName(draft.output_name);
+    validateText(draft.media_type, "ProducedArtifactDraftV2.media_type", 128, false);
+    validateText(draft.rationale, "ProducedArtifactDraftV2.rationale", 16_384);
+    for (const item of [...draft.assumptions, ...draft.uncertainties]) {
+      validateText(item, "ProducedArtifactDraftV2 assumption or uncertainty", 8_192);
+    }
+  } catch (error) {
+    const issues =
+      error instanceof SkillSchemaValidationError
+        ? sanitizeIssues(error.issues)
+        : sanitizeIssues([
+            error instanceof Error ? error.message : "closed schema validation failed",
+          ]);
+    throw new ProduceDraftValidationError("SCHEMA_INVALID", issues);
+  }
+  const issues = draftSemanticIssues(producedArtifactDraftV2AsV1(draft), request);
+  if (issues.length > 0) throw new ProduceDraftValidationError("SEMANTIC_INVALID", issues);
+  return draft;
+}
+
+export function parsePersistedProducedArtifactDraftV2(
+  bytes: Uint8Array,
+  input: { readonly request: unknown }
+): { readonly draft: ProducedArtifactDraftV2; readonly summary: ProduceRoutingSummaryV1 } {
+  const parsed = parseTwoLineCore(bytes, {
+    prefix: DRAFT_PREFIX,
+    label: "ProducedArtifactDraftV2",
+    maximumBytes: MAX_PERSISTED_PRODUCE_DRAFT_BYTES,
+    validate: (value) => validateProducedArtifactDraftV2(value, input),
+    validateSummary: (value) =>
+      validateSkillSchema(ProduceRoutingSummaryV1Schema, value, "Produce routing summary"),
+    summaryText: (summary) => `{"confidence":"${summary.confidence}","complete":true}`,
+    confidence: (value) => value.confidence,
+  });
+  return { draft: parsed.value, summary: parsed.summary };
+}
+
+export function producedArtifactDraftPromptContractV2(): string {
+  return canonicalJson({
+    schema: ProducedArtifactDraftV2Schema,
+    transport: {
+      encoding: "strict UTF-8",
+      maximum_output_bytes: MAX_PERSISTED_PRODUCE_DRAFT_BYTES,
+      maximum_content_bytes: MAX_PRODUCED_CONTENT_BYTES,
+      canonical_framing:
+        "exactly PRODUCED_ARTIFACT_DRAFT:<canonical-single-line-JSON> then SUMMARY:<compact-JSON>",
+    },
+    output_identity: {
+      output_name: "exact request output_name",
+      artifact_kind: "exact request artifact_kind",
+      media_type: "host-defined mediaTypeForArtifactKind value",
+    },
+    content: {
+      produced: "nonempty exact content; the host derives content_sha256 while sealing",
+      not_applicable: "empty content and a truthful rationale; the host derives its digest",
+      json: "produced JSON must be parseable canonical JSON",
+      other_kinds: "no compilation, execution, or syntax-check claim",
+    },
+    coverage:
+      "every coverage array is the complete ascending zero-based index set for its exact request array",
+    effect_evidence_authorship:
+      "host only; the worker makes no absence, observation, prevention, or confinement claim",
+  });
+}
+
+function assertProduceSourceRefsV2(input: {
+  readonly requestRef: ArtifactRef;
+  readonly approachRef: ArtifactRef;
+  readonly decisionRef: ArtifactRef;
+  readonly draftRef: ArtifactRef;
+}): void {
+  const refs = [input.requestRef, input.approachRef, input.decisionRef, input.draftRef];
+  if (
+    input.requestRef.kind !== "produce-request" ||
+    input.requestRef.phase !== "intake" ||
+    input.requestRef.branch_id !== null ||
+    input.requestRef.producer !== "host:request-admission" ||
+    input.approachRef.kind !== "artifact-approach" ||
+    input.approachRef.phase !== "exploring_artifact_approaches" ||
+    input.approachRef.branch_id !== null ||
+    input.approachRef.producer !== "agent:ida" ||
+    input.approachRef.content_schema?.schema_id !== "penny.artifact-approach.v1" ||
+    input.approachRef.content_schema.schema_version !== 1 ||
+    input.decisionRef.kind !== "artifact-approach-decision" ||
+    input.decisionRef.phase !== "selecting_artifact_approach" ||
+    input.decisionRef.branch_id !== null ||
+    input.decisionRef.producer !== "agent:demetri" ||
+    input.decisionRef.content_schema?.schema_id !== "penny.artifact-approach-decision.v1" ||
+    input.decisionRef.content_schema.schema_version !== 1 ||
+    input.draftRef.kind !== "produced-artifact-draft" ||
+    input.draftRef.phase !== "materializing_artifact" ||
+    input.draftRef.branch_id !== null ||
+    input.draftRef.producer !== "agent:skribble" ||
+    input.draftRef.content_schema?.schema_id !== "penny.produced-artifact-draft.v2" ||
+    input.draftRef.content_schema.schema_version !== 2 ||
+    new Set(refs.map((ref) => ref.artifact_id)).size !== refs.length ||
+    new Set(refs.map((ref) => ref.run_id)).size !== 1
+  ) {
+    throw new Error("ProducedArtifactV2 sealing refs have invalid, stale, or cross-run roles");
+  }
+}
+
+export function sealProducedArtifactV2(input: {
+  readonly request: unknown;
+  readonly draft: unknown;
+  readonly requestRef: ArtifactRef;
+  readonly approachRef: ArtifactRef;
+  readonly decisionRef: ArtifactRef;
+  readonly draftRef: ArtifactRef;
+  readonly effectEvidence: unknown;
+}): ProducedArtifactV2 {
+  const request = validateProduceRequest(input.request);
+  const draft = validateProducedArtifactDraftV2(input.draft, { request });
+  assertProduceSourceRefsV2(input);
+  const effectEvidence = validateEffectEvidenceGraph(input.effectEvidence);
+  if (effectEvidence.run_id !== input.requestRef.run_id) {
+    throw new Error("ProducedArtifactV2 effect evidence run disagrees");
+  }
+  const lineage: ProducedArtifactSourceLineagePreimageV1 = {
+    request_artifact_id: input.requestRef.artifact_id,
+    request_artifact_sha256: input.requestRef.content_digest,
+    approach_artifact_id: input.approachRef.artifact_id,
+    approach_artifact_sha256: input.approachRef.content_digest,
+    decision_artifact_id: input.decisionRef.artifact_id,
+    decision_artifact_sha256: input.decisionRef.content_digest,
+    draft_artifact_id: input.draftRef.artifact_id,
+    draft_artifact_sha256: input.draftRef.content_digest,
+    draft_sha256: sha256(canonicalJson(draft)),
+    source_material: sourceMaterialLineage(request),
+  };
+  return validateProducedArtifactV2({
+    schema_id: "penny.produced-artifact.v2",
+    ...draft,
+    content_sha256: sha256(draft.content),
+    request,
+    request_sha256: produceRequestSha256(request),
+    source_lineage: {
+      ...lineage,
+      lineage_sha256: producedArtifactSourceLineageSha256(lineage),
+    },
+    effect_evidence: effectEvidence,
+  });
+}
+
+function projectDraftV2Unchecked(product: ProducedArtifactV2): ProducedArtifactDraftV2 {
+  return {
+    schema_version: 2,
+    disposition: product.disposition,
+    output_name: product.output_name,
+    artifact_kind: product.artifact_kind,
+    media_type: product.media_type,
+    content: product.content,
+    rationale: product.rationale,
+    assumptions: product.assumptions,
+    uncertainties: product.uncertainties,
+    request_coverage: product.request_coverage,
+    confidence: product.confidence,
+  };
+}
+
+export function validateProducedArtifactV2(value: unknown): ProducedArtifactV2 {
+  const product = validateSkillSchema(ProducedArtifactV2Schema, value, "ProducedArtifactV2");
+  const request = validateProduceRequest(product.request);
+  if (product.request_sha256 !== produceRequestSha256(request)) {
+    throw new Error("ProducedArtifactV2 request digest drifted");
+  }
+  if (product.content_sha256 !== sha256(product.content)) {
+    throw new Error("ProducedArtifactV2 content digest drifted");
+  }
+  const draft = validateProducedArtifactDraftV2(projectDraftV2Unchecked(product), { request });
+  const lineage: ProducedArtifactSourceLineagePreimageV1 = {
+    request_artifact_id: product.source_lineage.request_artifact_id,
+    request_artifact_sha256: product.source_lineage.request_artifact_sha256,
+    approach_artifact_id: product.source_lineage.approach_artifact_id,
+    approach_artifact_sha256: product.source_lineage.approach_artifact_sha256,
+    decision_artifact_id: product.source_lineage.decision_artifact_id,
+    decision_artifact_sha256: product.source_lineage.decision_artifact_sha256,
+    draft_artifact_id: product.source_lineage.draft_artifact_id,
+    draft_artifact_sha256: product.source_lineage.draft_artifact_sha256,
+    draft_sha256: product.source_lineage.draft_sha256,
+    source_material: product.source_lineage.source_material,
+  };
+  if (product.source_lineage.lineage_sha256 !== producedArtifactSourceLineageSha256(lineage)) {
+    throw new Error("ProducedArtifactV2 source lineage digest drifted");
+  }
+  assertUnique(
+    [
+      lineage.request_artifact_id,
+      lineage.approach_artifact_id,
+      lineage.decision_artifact_id,
+      lineage.draft_artifact_id,
+    ],
+    "ProducedArtifactV2 source lineage artifact IDs"
+  );
+  if (
+    canonicalJson(lineage.source_material) !== canonicalJson(sourceMaterialLineage(request)) ||
+    lineage.draft_sha256 !== sha256(canonicalJson(draft))
+  ) {
+    throw new Error("ProducedArtifactV2 draft or inline-source lineage drifted");
+  }
+  validateEffectEvidenceGraph(product.effect_evidence, {
+    runId: product.effect_evidence.run_id,
+    phases: PRODUCE_EFFECT_PHASES,
+  });
+  return product;
+}
+
+export function assertProducedArtifactLineageV2(input: {
+  readonly product: unknown;
+  readonly request: unknown;
+  readonly draft: unknown;
+  readonly requestRef: ArtifactRef;
+  readonly approachRef: ArtifactRef;
+  readonly decisionRef: ArtifactRef;
+  readonly draftRef: ArtifactRef;
+  readonly effectEvidence: unknown;
+}): ProducedArtifactV2 {
+  const expected = sealProducedArtifactV2(input);
+  const product = validateProducedArtifactV2(input.product);
+  if (canonicalJson(product) !== canonicalJson(expected)) {
+    throw new Error(
+      "ProducedArtifactV2 exact request, draft, approach, source, or effect lineage diverged"
+    );
+  }
+  return product;
+}
+
+export function validateCanonicalProducedArtifactV2Bytes(
+  bytes: Uint8Array,
+  ref: ArtifactRef
+): ProducedArtifactV2 {
+  const body = Buffer.from(bytes);
+  if (
+    ref.kind !== "semantic-core" ||
+    ref.phase !== "sealing_artifact" ||
+    ref.branch_id !== null ||
+    ref.producer !== "host:artifact-sealer" ||
+    ref.media_type !== "application/json" ||
+    ref.content_schema?.schema_id !== "penny.produced-artifact.v2" ||
+    ref.content_schema.schema_version !== 2 ||
+    ref.byte_length !== body.length ||
+    ref.content_digest !== sha256(body) ||
+    ref.store_ref !== `artifact://sha256/${ref.content_digest}`
+  ) {
+    throw new Error("ProducedArtifactV2 ref is stale or has the wrong semantic identity");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(body.toString("utf8"));
+  } catch {
+    throw new Error("ProducedArtifactV2 artifact is not JSON");
+  }
+  const product = validateProducedArtifactV2(value);
+  if (canonicalJson(product) !== body.toString("utf8")) {
+    throw new Error("ProducedArtifactV2 artifact bytes are not canonical JSON");
+  }
+  return product;
+}
+
+function assertCommonSubjectRefsV2(input: {
+  readonly runId: string;
+  readonly requestRef: ArtifactRef;
+  readonly approachRef: ArtifactRef;
+  readonly decisionRef: ArtifactRef;
+  readonly draftRef: ArtifactRef;
+  readonly productRef: ArtifactRef;
+}): void {
+  const refs = [
+    input.requestRef,
+    input.approachRef,
+    input.decisionRef,
+    input.draftRef,
+    input.productRef,
+  ];
+  if (
+    refs.some((ref) => ref.run_id !== input.runId) ||
+    input.requestRef.kind !== "produce-request" ||
+    input.requestRef.phase !== "intake" ||
+    input.requestRef.producer !== "host:request-admission" ||
+    input.approachRef.kind !== "artifact-approach" ||
+    input.approachRef.phase !== "exploring_artifact_approaches" ||
+    input.approachRef.producer !== "agent:ida" ||
+    input.decisionRef.kind !== "artifact-approach-decision" ||
+    input.decisionRef.phase !== "selecting_artifact_approach" ||
+    input.decisionRef.producer !== "agent:demetri" ||
+    input.draftRef.kind !== "produced-artifact-draft" ||
+    input.draftRef.phase !== "materializing_artifact" ||
+    input.draftRef.producer !== "agent:skribble" ||
+    input.draftRef.content_schema?.schema_id !== "penny.produced-artifact-draft.v2" ||
+    input.draftRef.content_schema.schema_version !== 2 ||
+    input.productRef.kind !== "semantic-core" ||
+    input.productRef.phase !== "sealing_artifact" ||
+    input.productRef.producer !== "host:artifact-sealer" ||
+    input.productRef.content_schema?.schema_id !== "penny.produced-artifact.v2" ||
+    input.productRef.content_schema.schema_version !== 2 ||
+    refs.some((ref) => ref.branch_id !== null) ||
+    new Set(refs.map((ref) => ref.artifact_id)).size !== refs.length
+  ) {
+    throw new Error("ProduceV2 current-product subject refs disagree");
+  }
+}
+
+export function produceQualityReceiptIdV2(
+  body: Omit<ProduceQualityReceiptV2, "receipt_id">
+): `pqrc_${string}` {
+  return `pqrc_${sha256(canonicalJson(body))}`;
+}
+
+export function validateProduceQualityReceiptV2(value: unknown): ProduceQualityReceiptV2 {
+  const receipt = validateSkillSchema(
+    ProduceQualityReceiptV2Schema,
+    value,
+    "ProduceQualityReceiptV2"
+  );
+  assertOpaqueId(receipt.run_id, "ProduceQualityReceiptV2.run_id");
+  assertRfc3339Utc(receipt.created_at, "ProduceQualityReceiptV2.created_at");
+  assertCommonSubjectRefsV2({
+    runId: receipt.run_id,
+    requestRef: receipt.request_ref,
+    approachRef: receipt.approach_ref,
+    decisionRef: receipt.decision_ref,
+    draftRef: receipt.draft_ref,
+    productRef: receipt.product_ref,
+  });
+  if (
+    receipt.carren_report_ref.run_id !== receipt.run_id ||
+    receipt.carren_report_ref.kind !== "agent-output" ||
+    receipt.carren_report_ref.phase !== "critiquing_artifact" ||
+    receipt.carren_report_ref.producer !== "agent:carren" ||
+    receipt.carren_report_ref.branch_id !== null
+  ) {
+    throw new Error("ProduceQualityReceiptV2 Carren report role disagrees");
+  }
+  validateEffectEvidenceGraph(receipt.effect_evidence, {
+    runId: receipt.run_id,
+    phases: PRODUCE_EFFECT_PHASES,
+  });
+  const { receipt_id: receiptId, ...body } = receipt;
+  assertDerived(receiptId, "pqrc_", body, "ProduceQualityReceiptV2");
+  return receipt;
+}
+
+export function produceValidityReceiptIdV2(
+  body: Omit<ProduceValidityReceiptV2, "receipt_id">
+): `pvrc_${string}` {
+  return `pvrc_${sha256(canonicalJson(body))}`;
+}
+
+export function validateProduceValidityReceiptV2(value: unknown): ProduceValidityReceiptV2 {
+  const receipt = validateSkillSchema(
+    ProduceValidityReceiptV2Schema,
+    value,
+    "ProduceValidityReceiptV2"
+  );
+  assertOpaqueId(receipt.run_id, "ProduceValidityReceiptV2.run_id");
+  assertRfc3339Utc(receipt.created_at, "ProduceValidityReceiptV2.created_at");
+  assertCommonSubjectRefsV2({
+    runId: receipt.run_id,
+    requestRef: receipt.request_ref,
+    approachRef: receipt.approach_ref,
+    decisionRef: receipt.decision_ref,
+    draftRef: receipt.draft_ref,
+    productRef: receipt.product_ref,
+  });
+  if (
+    receipt.carren_report_ref.run_id !== receipt.run_id ||
+    receipt.carren_report_ref.kind !== "agent-output" ||
+    receipt.carren_report_ref.phase !== "critiquing_artifact" ||
+    receipt.carren_report_ref.producer !== "agent:carren" ||
+    receipt.vera_report_ref.run_id !== receipt.run_id ||
+    receipt.vera_report_ref.kind !== "agent-output" ||
+    receipt.vera_report_ref.phase !== "verifying_artifact" ||
+    receipt.vera_report_ref.producer !== "agent:vera" ||
+    receipt.quality_receipt_ref.run_id !== receipt.run_id ||
+    receipt.quality_receipt_ref.kind !== "produce-quality-receipt" ||
+    receipt.quality_receipt_ref.phase !== "admitting_artifact" ||
+    receipt.quality_receipt_ref.branch_id !== "quality" ||
+    receipt.quality_receipt_ref.producer !== "host:produce-receipt-authority"
+  ) {
+    throw new Error("ProduceValidityReceiptV2 review or quality-receipt roles disagree");
+  }
+  validateEffectEvidenceGraph(receipt.effect_evidence, {
+    runId: receipt.run_id,
+    phases: PRODUCE_EFFECT_PHASES,
+  });
+  const { receipt_id: receiptId, ...body } = receipt;
+  assertDerived(receiptId, "pvrc_", body, "ProduceValidityReceiptV2");
+  return receipt;
+}
+
+export function produceProductIntegrityIdV2(
+  body: Omit<ProduceProductIntegrityV2, "integrity_id">
+): `pair_${string}` {
+  return `pair_${sha256(canonicalJson(body))}`;
+}
+
+export function validateProduceProductIntegrityV2(value: unknown): ProduceProductIntegrityV2 {
+  const integrity = validateSkillSchema(
+    ProduceProductIntegrityV2Schema,
+    value,
+    "ProduceProductIntegrityV2"
+  );
+  if (canonicalJson(integrity.checks) !== canonicalJson(PRODUCE_INTEGRITY_CHECKS_V2)) {
+    throw new Error("ProduceProductIntegrityV2 checks are incomplete or reordered");
+  }
+  const runId = integrity.product_ref.run_id;
+  assertCommonSubjectRefsV2({
+    runId,
+    requestRef: integrity.request_ref,
+    approachRef: integrity.approach_ref,
+    decisionRef: integrity.decision_ref,
+    draftRef: integrity.draft_ref,
+    productRef: integrity.product_ref,
+  });
+  const refs = [
+    integrity.request_ref,
+    integrity.approach_ref,
+    integrity.draft_ref,
+    integrity.product_ref,
+    integrity.carren_report_ref,
+    integrity.vera_report_ref,
+    integrity.quality_receipt_ref,
+    integrity.validity_receipt_ref,
+  ];
+  if (
+    refs.some((ref) => ref.run_id !== runId) ||
+    new Set(refs.map((ref) => ref.artifact_id)).size !== refs.length ||
+    integrity.carren_report_ref.phase !== "critiquing_artifact" ||
+    integrity.carren_report_ref.producer !== "agent:carren" ||
+    integrity.vera_report_ref.phase !== "verifying_artifact" ||
+    integrity.vera_report_ref.producer !== "agent:vera" ||
+    integrity.quality_receipt_ref.kind !== "produce-quality-receipt" ||
+    integrity.quality_receipt_ref.branch_id !== "quality" ||
+    integrity.validity_receipt_ref.kind !== "produce-validity-receipt" ||
+    integrity.validity_receipt_ref.branch_id !== "validity"
+  ) {
+    throw new Error("ProduceProductIntegrityV2 exact artifact roles disagree");
+  }
+  validateEffectEvidenceGraph(integrity.effect_evidence, {
+    runId,
+    phases: PRODUCE_EFFECT_PHASES,
+  });
+  const { integrity_id: integrityId, ...body } = integrity;
+  assertDerived(integrityId, "pair_", body, "ProduceProductIntegrityV2");
+  return integrity;
+}
+
+export function produceProductEnvelopeIdV2(
+  body: Omit<ProduceProductEnvelopeV2, "envelope_id">
+): `paenv_${string}` {
+  return `paenv_${sha256(canonicalJson(body))}`;
+}
+
+export function validateProduceProductEnvelopeV2(value: unknown): ProduceProductEnvelopeV2 {
+  const envelope = validateSkillSchema(
+    ProduceProductEnvelopeV2Schema,
+    value,
+    "ProduceProductEnvelopeV2"
+  );
+  assertOpaqueId(envelope.run_id, "ProduceProductEnvelopeV2.run_id");
+  assertCommonSubjectRefsV2({
+    runId: envelope.run_id,
+    requestRef: envelope.request_ref,
+    approachRef: envelope.approach_ref,
+    decisionRef: envelope.decision_ref,
+    draftRef: envelope.draft_ref,
+    productRef: envelope.product_ref,
+  });
+  const refs = [
+    envelope.request_ref,
+    envelope.approach_ref,
+    envelope.draft_ref,
+    envelope.product_ref,
+    envelope.carren_report_ref,
+    envelope.vera_report_ref,
+    envelope.quality_receipt_ref,
+    envelope.validity_receipt_ref,
+    envelope.integrity_ref,
+  ];
+  if (
+    refs.some((ref) => ref.run_id !== envelope.run_id) ||
+    new Set(refs.map((ref) => ref.artifact_id)).size !== refs.length ||
+    envelope.carren_report_ref.phase !== "critiquing_artifact" ||
+    envelope.vera_report_ref.phase !== "verifying_artifact" ||
+    envelope.quality_receipt_ref.kind !== "produce-quality-receipt" ||
+    envelope.validity_receipt_ref.kind !== "produce-validity-receipt" ||
+    envelope.integrity_ref.kind !== "produce-product-integrity" ||
+    envelope.integrity_ref.phase !== "admitting_artifact" ||
+    envelope.integrity_ref.branch_id !== "integrity" ||
+    envelope.integrity_ref.producer !== "host:produce-product-validator"
+  ) {
+    throw new Error("ProduceProductEnvelopeV2 exact artifact roles disagree");
+  }
+  validateEffectEvidenceGraph(envelope.effect_evidence, {
+    runId: envelope.run_id,
+    phases: PRODUCE_EFFECT_PHASES,
+  });
+  const { envelope_id: envelopeId, ...body } = envelope;
+  assertDerived(envelopeId, "paenv_", body, "ProduceProductEnvelopeV2");
+  return envelope;
+}
+
+function producedSchemaIdentity(value: unknown): {
+  readonly schema_id?: unknown;
+  readonly schema_version?: unknown;
+} {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as { readonly schema_id?: unknown; readonly schema_version?: unknown })
+    : {};
+}
+
+export type ProducedArtifactCompatibilityView =
+  | {
+      readonly contract_version: 1;
+      readonly interpretation: "legacy_unverified_assertion";
+      readonly value: ProducedArtifactV1;
+      readonly effect_evidence: EffectEvidenceGraphV1;
+    }
+  | {
+      readonly contract_version: 2;
+      readonly interpretation: "effect_evidence_v1";
+      readonly value: ProducedArtifactV2;
+      readonly effect_evidence: EffectEvidenceGraphV1;
+    };
+
+export function readProducedArtifactProduct(
+  value: unknown,
+  input: { readonly runId: string; readonly phases: readonly string[] }
+): ProducedArtifactCompatibilityView {
+  if (canonicalJson(input.phases) !== canonicalJson(PRODUCE_EFFECT_PHASES)) {
+    throw new Error("PRODUCED_ARTIFACT_SCOPE_UNSUPPORTED: phase scope does not match the contract");
+  }
+  const identity = producedSchemaIdentity(value);
+  if (identity.schema_id === "penny.produced-artifact.v1" && identity.schema_version === 1) {
+    const legacy = legacyUnverifiedEffectEvidence(input);
+    return {
+      contract_version: 1,
+      interpretation: legacy.interpretation,
+      value: validateProducedArtifact(value),
+      effect_evidence: legacy.effect_evidence,
+    };
+  }
+  if (identity.schema_id === "penny.produced-artifact.v2" && identity.schema_version === 2) {
+    const product = validateProducedArtifactV2(value);
+    return {
+      contract_version: 2,
+      interpretation: "effect_evidence_v1",
+      value: product,
+      effect_evidence: product.effect_evidence,
+    };
+  }
+  throw new Error(
+    "PRODUCED_ARTIFACT_VERSION_UNSUPPORTED: refusing unknown or mismatched product version"
+  );
+}
+
+export function validateProduceEvidenceBundle(input: {
+  readonly runId: string;
+  readonly phases: readonly string[];
+  readonly product: unknown;
+  readonly qualityReceipt: unknown;
+  readonly validityReceipt: unknown;
+  readonly integrity: unknown;
+  readonly envelope: unknown;
+}): { readonly contract_version: 1 | 2; readonly effect_evidence: EffectEvidenceGraphV1 } {
+  const versions = [
+    producedSchemaIdentity(input.product).schema_version,
+    producedSchemaIdentity(input.qualityReceipt).schema_version,
+    producedSchemaIdentity(input.validityReceipt).schema_version,
+    producedSchemaIdentity(input.integrity).schema_version,
+    producedSchemaIdentity(input.envelope).schema_version,
+  ];
+  if (versions.every((version) => version === 1)) {
+    validateProducedArtifact(input.product);
+    validateProduceQualityReceipt(input.qualityReceipt);
+    validateProduceValidityReceipt(input.validityReceipt);
+    validateProduceProductIntegrity(input.integrity);
+    validateProduceProductEnvelope(input.envelope);
+    return {
+      contract_version: 1,
+      effect_evidence: legacyUnverifiedEffectEvidence(input).effect_evidence,
+    };
+  }
+  if (!versions.every((version) => version === 2)) {
+    throw new Error(
+      "PRODUCE_VERSION_PAIRING_UNSUPPORTED: old/new evidence artifacts cannot be mixed"
+    );
+  }
+  const product = validateProducedArtifactV2(input.product);
+  const quality = validateProduceQualityReceiptV2(input.qualityReceipt);
+  const validity = validateProduceValidityReceiptV2(input.validityReceipt);
+  const integrity = validateProduceProductIntegrityV2(input.integrity);
+  const envelope = validateProduceProductEnvelopeV2(input.envelope);
+  const graphJson = canonicalJson(quality.effect_evidence);
+  if (
+    product.effect_evidence.assurance === "policy_violation" ||
+    quality.effect_evidence.assurance === "policy_violation" ||
+    canonicalJson(validity.effect_evidence) !== graphJson ||
+    canonicalJson(integrity.effect_evidence) !== graphJson ||
+    canonicalJson(envelope.effect_evidence) !== graphJson ||
+    integrity.product_effect_evidence_sha256 !== effectEvidenceSha256(product.effect_evidence)
+  ) {
+    throw new Error(
+      "ProduceV2 effect-evidence lineage diverged across receipts/integrity/envelope"
+    );
+  }
+  if (canonicalJson(input.phases) !== canonicalJson(PRODUCE_EFFECT_PHASES)) {
+    throw new Error("ProduceV2 compatibility scope does not match the active phase contract");
+  }
+  validateEffectEvidenceGraph(quality.effect_evidence, {
+    runId: input.runId,
+    phases: PRODUCE_EFFECT_PHASES,
+  });
+  return { contract_version: 2, effect_evidence: quality.effect_evidence };
 }

@@ -195,9 +195,10 @@ memory search part of workflow correctness. Exact refs survive malformed-SUMMARY
 retry, clarification, process restart, parallel partial recovery, and compaction.
 The model cannot list, search, guess, or self-grant artifacts.
 
-Workers and skill drivers have no durable-memory tools. The unmarked primary
-runtime retains bounded, value-triggered recall and curated cross-session memory
-as a separate capability.
+The unmarked primary runtime owns curated cross-session writes and temporal
+lifecycle operations. Catalog workers can receive bounded read-only recall when
+their owner-materialized active tool list includes YAML-declared memory reads;
+memory is never workflow handoff. Skill drivers receive no memory tools.
 
 ### Consequence
 

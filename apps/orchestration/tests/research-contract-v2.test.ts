@@ -7,6 +7,7 @@ import type { ArtifactRef } from "../src/contracts.js";
 import { RESEARCH_BUDGET_POLICY, researchLivenessPolicy } from "../src/liveness.js";
 import {
   ContextSourceRefV1Schema,
+  ContextSourceRefV2Schema,
   GroundedSynthesisV1Schema,
   MAX_RESEARCH_SEMANTIC_DRAFT_BYTES,
   ProductReceiptV1Schema,
@@ -15,6 +16,7 @@ import {
   ResearchBudgetSnapshotV1Schema,
   ResearchProductEnvelopeV1Schema,
   ResearchSemanticDraftV1Schema,
+  ResolvedContextV2Schema,
   SemanticCoreRefV1Schema,
   SkillPortV1Schema,
   canonicalizeResearchRequest,
@@ -26,6 +28,7 @@ import {
   researchRuntimeConstraints,
   validateCanonicalGroundedSynthesisBytes,
   validateContextSourceRef,
+  validateContextSourceRefV2,
   validateDeterministicRenderRef,
   validateGroundedSynthesis,
   validateProductReceipt,
@@ -33,7 +36,9 @@ import {
   validateResearchProductGraph,
   validateResearchRequest,
   validateResearchSemanticDraft,
+  validateResolvedContextV2,
   validateSemanticCoreRef,
+  validateVersionedContextSourceRef,
   validateSkillPort,
 } from "../src/skill-contracts/research.js";
 import { validateSkillSchema } from "../src/skill-contracts/common.js";
@@ -177,6 +182,74 @@ describe("P2 closed research schema vectors", () => {
         validateSkillSchema(schema, { ...record(vector, "closed vector"), rogue: true }, "closed")
       ).toThrow();
     }
+  });
+
+  it("versions current context and resolver contracts while refusing unknown future versions", () => {
+    const legacy = validateContextSourceRef(positive.context_source_ref);
+    const contextV2 = validateContextSourceRefV2({
+      ...legacy,
+      schema_id: "penny.context-source-ref.v2",
+      schema_version: 2,
+      admission: {
+        authority_kind: "resolver_v2",
+        resolver_schema_id: "penny.research-context-resolution.v2",
+        resolver_schema_version: 2,
+        eligibility: {
+          status: "eligible",
+          checked_at: "2026-09-01T00:00:00Z",
+          valid_from: "2026-09-01T00:00:00Z",
+          valid_through: "2026-10-01T00:00:00Z",
+        },
+        approval: { status: "not_required" },
+      },
+    });
+    expect(contextV2.schema_version).toBe(2);
+
+    const currentResolution = validateResolvedContextV2({
+      schema_id: "penny.research-context-resolution.v2",
+      schema_version: 2,
+      source_kind: "versioned_document",
+      source_id: legacy.source_id,
+      content: "current bytes",
+      media_type: legacy.content.media_type,
+      role: legacy.role,
+      scope_id: legacy.scope_id,
+      revision: legacy.revision,
+      freshness: { status: "not_time_sensitive" },
+      upstream_locators: legacy.upstream_locators,
+      provider: legacy.provider,
+      verification_disposition: legacy.verification_disposition,
+      conflict: { status: "none" },
+      eligibility: {
+        status: "eligible",
+        checked_at: "2026-09-01T00:00:00Z",
+        valid_from: "2026-09-01T00:00:00Z",
+        valid_through: "2026-10-01T00:00:00Z",
+      },
+      approval: { status: "not_required" },
+    });
+    expect(currentResolution.schema_version).toBe(2);
+    expect(() =>
+      validateSkillSchema(
+        ContextSourceRefV2Schema,
+        { ...contextV2, unbound_default: true },
+        "closed ContextSourceRefV2"
+      )
+    ).toThrow();
+    expect(() =>
+      validateSkillSchema(
+        ResolvedContextV2Schema,
+        { ...currentResolution, unbound_default: true },
+        "closed ResolvedContextV2"
+      )
+    ).toThrow();
+    expect(() =>
+      validateVersionedContextSourceRef({
+        ...contextV2,
+        schema_id: "penny.context-source-ref.v3",
+        schema_version: 3,
+      })
+    ).toThrow(/ContextSourceRef/u);
   });
 
   it("requires exact canonical GroundedSynthesis bytes and matching typed metadata", () => {

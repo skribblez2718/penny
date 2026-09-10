@@ -106,9 +106,21 @@ to that step.
 
 ## Recovery
 
-`PENNY_ARTIFACT_DISPATCH_MODE` accepts `active|paused`. A pause is retriable and preserves
-the pending checkpoint. A fresh recovery under `active` reissues the exact selected refs
-and output contract. Unknown mode values fail closed.
+`PENNY_ARTIFACT_DISPATCH_MODE` is parsed once by the TypeScript execution owner. Unset and
+exact `active` permit dispatch; only exact `paused` pauses it. Blank, padded, case-varied,
+and unknown values are invalid and fail closed as paused. While paused or invalid, the
+engine does not dispatch workers, tools, child workflows, or parallel branches; `status`
+and `cancel` remain available.
+
+Current-engine pause results carry versioned facts for the exact run, session, state,
+dispatch setting, observed checkpoint existence, and resumability. Recovery is intentionally
+three-way: activate then recover only a current-storage-validated resumable checkpoint;
+activate then retry a start that has no resumable checkpoint (whether or not an admission row
+exists); or use status/cancel for a saved-but-ineligible checkpoint. Historical pause records
+are compatibility-only: their immutable `checkpoint_preserved` value remains an explicitly
+unverified legacy claim, never current checkpoint existence or resumability, and the renderer
+provides status/cancel guidance only. `LEGACY_UNMETERED` remains a typed ineligibility reason
+because adding liveness authority retroactively is forbidden.
 
 The TypeScript database is the current opaque project partition's unversioned
 `orchestration/orchestration.db` below `${PENNY_STATE_ROOT:-<Pi getAgentDir()>/penny}`.

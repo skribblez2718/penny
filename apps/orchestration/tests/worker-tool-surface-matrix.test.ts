@@ -13,6 +13,8 @@ interface SessionCapture {
   readonly requested: readonly string[];
   readonly active: readonly string[];
   readonly thinkingLevel: unknown;
+  registeredBrowserAllowlist?: readonly string[];
+  playwrightExtensionLoaded?: boolean;
   prompt?: string;
 }
 
@@ -33,6 +35,14 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
         active: [...created.session.getActiveToolNames()],
         thinkingLevel: args[0]?.thinkingLevel,
       };
+      const carrierModule = await import("../src/browser-policy-carrier.js");
+      const carrier = carrierModule.currentRegisteredBrowserPolicyCarrier();
+      if (carrier !== undefined) {
+        capture.registeredBrowserAllowlist = carrier.allowlist;
+        capture.playwrightExtensionLoaded = created.extensionsResult.extensions.some((extension) =>
+          extension.resolvedPath.includes("/playwright/")
+        );
+      }
       sessionCaptures.push(capture);
       vi.spyOn(created.session, "prompt").mockImplementation(async (prompt) => {
         capture.prompt = prompt;
@@ -45,6 +55,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 
 import { registerTool } from "../../../.pi/lib/pi-tool-registration.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import { canonicalBrowserNetworkAllowlist } from "../src/browser-policy-carrier.js";
 import { canonicalJson, Checkpointer } from "../src/checkpointer.js";
 import type { Directive } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
@@ -131,7 +142,10 @@ function unavailableMemoryExtension(names: readonly string[]): InlineExtension {
   };
 }
 
-function registration(agent: string): PlaybookRegistrationV1 {
+function registration(
+  agent: string,
+  browserNetworkAllowlist?: readonly string[]
+): PlaybookRegistrationV1 {
   const shipped = resolvePlaybook("research");
   if (shipped === undefined || shipped.worker.kind !== "catalog-agent") {
     throw new Error("research catalog registration is unavailable");
@@ -155,6 +169,9 @@ function registration(agent: string): PlaybookRegistrationV1 {
             result_schema_id: "penny.test.tool-surface-summary",
             result_schema_version: 1,
             schema: Type.Record(Type.String(), Type.Unknown()),
+            ...(browserNetworkAllowlist === undefined
+              ? {}
+              : { browser_network_allowlist: browserNetworkAllowlist }),
           },
         ],
       ]),
@@ -285,6 +302,41 @@ describe("TypeScript skill worker exact tool surfaces", () => {
       expect(pending).toMatchObject({ state_id: "planning", agent: "piper" });
     } finally {
       checkpointer.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("carries a synthetic registered browser policy through real Pi extension loading", async () => {
+    sessionCaptures.length = 0;
+    const directory = mkdtempSync(path.join(tmpdir(), "penny-browser-policy-session-"));
+    const agent = "echo";
+    const declared = declaredTools(agent);
+    const memoryNames = declared.filter((name) => name.startsWith("memory_"));
+    const browserAllowlist = canonicalBrowserNetworkAllowlist(["HTTPS://Allowed.Example"]);
+    const activeRegistration = registration(agent, browserAllowlist);
+    try {
+      using artifacts = new ArtifactStore(path.join(directory, "artifacts"));
+      const client = new PiAgentClient({
+        workerExtensions: [unavailableMemoryExtension(memoryNames)],
+        testOnlySessionManagerFactory: (invocation) =>
+          SessionManager.inMemory(invocation.projectRoot),
+      });
+      const workers = new WorkerExecutor(client, artifacts, {
+        projectRoot: PROJECT_ROOT,
+        parallelConcurrency: 1,
+        registration: activeRegistration,
+      });
+
+      await expect(workers.execute(directive(agent, "hardened-untrusted", 10_001))).rejects.toBe(
+        promptBoundary
+      );
+      const capture = sessionCaptures[0];
+      if (capture === undefined) throw new Error("browser policy SDK session capture is absent");
+      expect(capture.requested).toEqual(declared);
+      expect([...capture.active].sort()).toEqual([...declared].sort());
+      expect(capture.registeredBrowserAllowlist).toEqual(["https://allowed.example:443"]);
+      expect(capture.playwrightExtensionLoaded).toBe(true);
+    } finally {
       rmSync(directory, { recursive: true, force: true });
     }
   });

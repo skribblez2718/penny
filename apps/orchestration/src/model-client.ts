@@ -28,6 +28,10 @@ export type { InlineExtension };
 
 import { canonicalJson } from "./checkpointer.js";
 import {
+  assertRegisteredBrowserPolicyCarrier,
+  registeredBrowserPolicyOwnerScopeId,
+} from "./browser-policy-carrier.js";
+import {
   LivenessTerminalReasonSchema,
   validateContract,
   type ArtifactRef,
@@ -41,7 +45,7 @@ import {
   LivenessExhaustedError,
   type WorkerPromptBudgetV1,
 } from "./liveness.js";
-import type { ResearchContextOverlayV1 } from "./research-context.js";
+import type { ResearchContextOverlay } from "./research-context.js";
 import {
   assertOwnerDirectory,
   assertOwnerFile,
@@ -68,6 +72,8 @@ export interface ActiveWorkerRegistrationMetadataV1 {
    * YAML equality; presence is the registration-digest-bound strict subset revalidated here.
    */
   readonly allowed_tools?: readonly string[];
+  /** Exact immutable phase policy; only WorkerExecutor may project it from registration. */
+  readonly browser_network_allowlist?: readonly string[];
 }
 
 export interface WorkflowSessionCorrelationV1 {
@@ -125,8 +131,11 @@ export interface AgentInvocation {
   /** Summary-only guidance mechanically projected from the active phase registration. */
   readonly routingRepairGuidance?: string;
   readonly executionPurpose?: "phase" | "routing_repair";
-  /** Bounded owner-resolved content; never used for tool selection or telemetry. */
-  readonly contextOverlays?: readonly ResearchContextOverlayV1[];
+  /**
+   * Bounded owner-resolved content plus use-time validation metadata. WorkerExecutor supplies
+   * this only after its cancellable resolver Promise has passed the host-owned deadline race.
+   */
+  readonly contextOverlays?: readonly ResearchContextOverlay[];
   readonly signal?: AbortSignal;
   /** Host-enforced, non-observational charge sink. Errors abort before admission. */
   readonly liveness?: AgentSessionLivenessSink;
@@ -830,10 +839,13 @@ export function buildAgentOpening(input: {
       : "INPUT ARTIFACTS: none.",
     (input.invocation.contextOverlays?.length ?? 0) > 0
       ? `OWNER-RESOLVED RESEARCH CONTEXT:\n${input.invocation.contextOverlays
-          ?.map(
-            (overlay) =>
-              `SOURCE ENVELOPE ${canonicalJson(overlay.source)}\nCONTENT:\n${overlay.content}`
-          )
+          ?.map((overlay) => {
+            const validation =
+              "validation" in overlay
+                ? `\nUSE-TIME VALIDATION ${canonicalJson(overlay.validation)}`
+                : "";
+            return `SOURCE ENVELOPE ${canonicalJson(overlay.source)}${validation}\nCONTENT:\n${overlay.content}`;
+          })
           .join("\n\n")}`
       : "",
     repair
@@ -859,6 +871,30 @@ export class PiAgentClient implements ModelClient {
         `agent '${invocation.agent}' state '${invocation.stateId}' has no active-registration guidance`
       );
     }
+    const browserNetworkAllowlist = registration.browser_network_allowlist;
+    if (browserNetworkAllowlist !== undefined && invocation.workflowSession === undefined) {
+      throw new Error(
+        `agent '${invocation.agent}' state '${invocation.stateId}' restricted browser policy requires host workflow correlation`
+      );
+    }
+    // This is the runtime-host admission check. A registration policy without the
+    // Worker's matching context-local carrier, or any carrier on an ordinary phase,
+    // is refused before resource loading and before createAgentSession.
+    assertRegisteredBrowserPolicyCarrier({
+      registrationName: registration.playbook_name,
+      stateId: invocation.stateId,
+      ...(invocation.workflowSession === undefined
+        ? {}
+        : {
+            ownerScopeId: registeredBrowserPolicyOwnerScopeId({
+              projectRoot: invocation.projectRoot,
+              registrationName: registration.playbook_name,
+              runId: invocation.workflowSession.run_id,
+            }),
+            invocationId: invocation.workflowSession.worker_id,
+          }),
+      ...(browserNetworkAllowlist === undefined ? {} : { allowlist: browserNetworkAllowlist }),
+    });
     const spec = invocation.session;
     const isolatedSystemPrompt = spec?.isolatedSystemPrompt;
     const isolated = isolatedSystemPrompt !== undefined;
@@ -920,6 +956,9 @@ export class PiAgentClient implements ModelClient {
     if (isolated && registeredSubset !== undefined) {
       throw new Error("private session cannot carry a catalog registration tool subset");
     }
+    if (isolated && browserNetworkAllowlist !== undefined) {
+      throw new Error("private session cannot carry a catalog browser network policy");
+    }
     if (!isolated && registeredSubset !== undefined) {
       if (
         registeredSubset.length === 0 ||
@@ -939,6 +978,14 @@ export class PiAgentClient implements ModelClient {
         : [...registeredSubset];
     if (isolated && allowed.length === 0) {
       throw new Error("private session has no exact tool-name allowlist");
+    }
+    if (
+      browserNetworkAllowlist !== undefined &&
+      !allowed.some((tool) => tool.startsWith("playwright_"))
+    ) {
+      throw new Error(
+        `agent '${invocation.agent}' state '${invocation.stateId}' browser policy has no active Playwright tool`
+      );
     }
     const isolatedResources =
       isolatedSystemPrompt === undefined

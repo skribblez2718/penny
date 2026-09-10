@@ -4,11 +4,13 @@ HTTP-only, role-scoped access to a MemPalace 3.7.1 MCP hub. Ordinary recall/cura
 
 ## Runtime policy
 
-- **Primary:** only an unmarked trusted main Pi runtime is primary.
-- **Denied:** any `PENNY_RUNTIME_ROLE` marker—including `worker`, `skill-driver`, or `primary`—is deny-only. The extension registers zero tools and zero lifecycle hooks.
+- **Primary:** only an unmarked trusted main Pi runtime is primary and may receive the full configured surface, including owner-enabled writes and lifecycle hooks.
+- **Worker read:** the execution owner may launch a catalog worker with the explicit `PENNY_RUNTIME_ROLE=worker-read` marker. The extension then registers only bounded read tools; it never registers writes, advisory logstream tools, automatic-diary hooks, or other lifecycle hooks.
+- **Denied:** every other `PENNY_RUNTIME_ROLE` marker—including `worker`, `skill-driver`, `primary`, and invented values—is deny-only. The extension registers zero tools and zero lifecycle hooks.
 - **Disabled:** `PENNY_MEMORY_MODE=disabled` registers nothing.
 - **Hub:** production otherwise requires `PENNY_MEMORY_MODE=hub` (the default). `legacy`, `shadow`, `direct`, and `prefer` are rejected. No temporary mode remains; compatibility retirement is owned by the memory platform under MEM-07.
-- **Write gate:** `PENNY_MEMORY_WRITE_MODE` defaults to `disabled`. Read-only qualification omits every mutating tool, suppresses automatic diary writes, and rejects direct adapter writes before HTTP. The owner enables writes only after the journaled canary and reconciliation gate.
+- **Write gate:** `PENNY_MEMORY_WRITE_MODE` defaults to `disabled`. Read-only qualification omits every durable mutating tool, suppresses automatic diary writes, and rejects direct adapter writes before HTTP. The owner enables writes only after the journaled canary and reconciliation gate.
+- **Automatic diary gate:** `PENNY_MEMORY_AUTO_DIARY_MODE` defaults to `disabled`. `observe-only` automatically runs a bounded retention evaluation after new direct user activity in an isolated model client whose request contains exactly the non-persistent `memory_stage_diary_candidate` schema; it makes no duplicate or diary request. `retain` additionally requires the ordinary write gate before one duplicate check and at most one diary-write attempt.
 - **Advisory logstream gate:** `PENNY_MEMORY_LOGSTREAM_MODE` defaults to `disabled`. `primary-advisory` is valid only with hub mode, a safe configured stream, and a nonempty safe room allowlist. It is independent of curated-write mode for list/wait; append/ack additionally require the ordinary write gate.
 
 A model cannot grant itself tools, enable writes, select a stream/principal, or address another principal by emitting role, bundle, or routing text.
@@ -19,6 +21,8 @@ A model cannot grant itself tools, enable writes, select a stream/principal, or 
 | ------------------------------------- | --------------------------------------------------------------------------- |
 | `PENNY_MEMORY_MODE`                   | `hub` or `disabled` only                                                    |
 | `PENNY_MEMORY_WRITE_MODE`             | `disabled` (default) or owner-enabled `enabled` after canary reconciliation |
+| `PENNY_MEMORY_AUTO_DIARY_MODE`        | `disabled` (default), `observe-only`, or `retain`                           |
+| `PENNY_MEMORY_AUTO_DIARY_TIMEOUT_MS`  | Evaluation and duplicate/write deadlines; 100–10000 ms, default 2000        |
 | `PENNY_MEMORY_LOGSTREAM_MODE`         | `disabled` (default) or `primary-advisory`                                  |
 | `PENNY_MEMORY_LOGSTREAM_STREAM`       | Required safe lowercase slash-separated stream when advisory mode is active |
 | `PENNY_MEMORY_LOGSTREAM_ROOMS`        | Required nonempty comma-separated safe room allowlist; no duplicates        |
@@ -50,13 +54,13 @@ Exactly one token reference (`*_TOKEN_FILE` or `*_TOKEN_ENV`) is required in hub
 
 `shared-trust-domain` means **whole-palace trust**: the bearer credential can access the entire configured palace. Wings, rooms, principal IDs, and routing headers are not ACLs. Use an isolated endpoint/root/credential or disable memory for any principal that is not trusted with all palace data.
 
-## Primary tool bundles
+## Memory tool bundles
 
-During read-only qualification, write operations below are omitted while read operations—including duplicate checks and diary reads—remain available.
+The primary can receive all configured bundles below. During read-only qualification, write operations are omitted while read operations—including duplicate checks and diary reads—remain available. A `worker-read` process receives only these read operations, independent of the primary write setting.
 
 - **Recall read:** `memory_smart_search`, compatibility `memory_search`, `memory_get_drawer`, bounded `memory_list_drawers`, bounded `memory_get_taxonomy`
 - **Curated write:** `memory_check_duplicate`, `memory_add_drawer`
-- **Diary:** `memory_diary_read`, `memory_diary_write` (primary `penny` diary only)
+- **Diary:** `memory_diary_read`, `memory_diary_write` (primary `penny` diary only). The automatic evaluator's `memory_stage_diary_candidate` schema exists only inside its isolated model request and is never registered on the primary or worker tool surface.
 - **KG read:** `memory_kg_query`, `memory_kg_timeline`, `memory_kg_stats`
 - **KG write:** `memory_kg_add`, `memory_kg_invalidate`, `memory_kg_supersede`
 
@@ -109,7 +113,20 @@ KG predicate schema **v1** is an exact allowlist implemented in `kg-policy.ts`, 
 
 ## Automatic diary
 
-Only the unmarked primary runtime with writes explicitly enabled installs effective shutdown-write behavior. It builds one bounded entry from content-free observability metadata, duplicate-checks it, writes at most once per session, logs metadata only, and tolerates observability or hub failure. Read-only qualification closes without a memory request. Worker and skill-driver processes make zero diary or KG shutdown calls.
+Routine session activity is operational telemetry only. The primary shutdown hook counts at most 5,000 current-branch entries (agent starts, tool results, and user/assistant messages) without logging message content or tool names. Transcript size and activity counts never admit a diary candidate.
+
+Automatic retention uses a primary-only, extension-controlled lifecycle:
+
+1. The input hook retains only bounded metadata receipts (origin plus a SHA-256 digest, never input text). On `agent_settled`, the extension compares new current-branch user entries with those receipts. No new direct user activity means no trigger. Extension-origin messages do not count as user activity; missing, transformed, over-bound, or ambiguous sources fail closed and emit a metadata-only skip.
+2. Once per matched new activity, the extension persists an automatic evaluation containing at most eight exact user-message entry IDs and digests. It then calls the active model through an isolated client request containing bounded, revalidated source text and exactly one tool schema: `memory_stage_diary_candidate`. Primary active tools are never narrowed or mutated, so schedule failure, cancellation, shutdown, and model failure cannot strand a changed primary tool set. The isolated response is never inserted into the primary conversation.
+3. The host accepts exactly one valid call to that isolated schema and records model-reviewed `retain`, `skip`, or `uncertain` state without executing any primary-session tool or calling the hub. Unrelated tool calls, multiple calls, invalid arguments, and model prose are discarded and fail closed. Routine/transient activity must be skipped. Sensitive, quoted, pasted, external, injected, unsupported, or privacy/provenance-ambiguous material must be uncertain or skipped. The isolated evaluation emits no Pi follow-up turn, so it cannot recurse. A primary user or extension turn cancels and awaits the isolated evaluation before its own agent run proceeds.
+4. Retain admission has a separate trusted provenance/privacy boundary rather than trusting the model's `safe_to_retain` claim alone. Only exact text-only interactive input with no tool result, custom model-visible message, compaction, branch summary, or bash result in the evaluated activity is retain-eligible. RPC or mixed external/tool context is privacy-ambiguous; even an adversarial model `retain` attempt is deterministically coerced to a content-free `uncertain` candidate. No keyword or secret-pattern classifier grants admission.
+5. Shutdown examines at most 512 current-branch entries for the newest candidate and revalidates the automatic evaluation, source IDs, digests, bounds, uniqueness, retain admission, and a bounded in-process authorization created only after successful automatic staging. Persisted candidates are not adopted as authorization after restart. Missing, stale, ambiguous, malformed, skipped, uncertain, forged, or unevaluated-latest-activity state fails closed. Before network work it appends and verifies a content-free processed marker, so restart or repeated shutdown cannot blindly replay the candidate. Entries are at most 2,048 UTF-8 bytes; assessments/reasons are at most 512 UTF-8 bytes.
+6. `observe-only` reports the disposition and byte counts without candidate text or hub access. Writable `retain` requires an unambiguous boolean duplicate result before one non-retried diary write with topic `automatic-session-continuity-v1`. Isolated evaluation and the later duplicate/write shutdown operation are each bounded by the configured deadline (2,000 ms by default); duplicate checking and writing share one shutdown deadline. Timeout during a write is commit-ambiguous and never blindly retried.
+
+`primary_auto_diary_trigger`, `primary_auto_diary_evaluation`, and `primary_auto_diary_disposition` telemetry covers every scheduled trigger, source skip, model disposition, refusal/failure, duplicate, retain, and ambiguous outcome without logging source or candidate text. Manual `memory_diary_write` registration, arguments, and behavior are unchanged when durable writes are enabled. Existing diary entries are never deleted or rewritten by this path; after an ambiguous write, review the diary before any manual recovery.
+
+Workers and skill drivers receive no staging schema, input/settled/shutdown automatic-memory hooks, isolated evaluation, or automatic memory call. Global durable writes remain default-off, and disabling automatic diary mode preserves manual retention.
 
 ## Tests
 

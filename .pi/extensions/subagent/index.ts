@@ -72,6 +72,16 @@ import {
   directChainTask,
   persistDirectChainOutput,
 } from "./chain-artifacts.js";
+import { createChildLifecycleScope, type ChildLifecycleScope } from "./child-lifecycle.js";
+import {
+  classifyWorkerResult,
+  formatWorkerOutcomeBoundary,
+  formatWorkerOutcomeSummaryBoundary,
+  sealWorkerTerminalOutcome,
+  summarizeWorkerResults,
+  workerOutcomeSummaryHasError,
+  workerResultHasError,
+} from "./worker-outcome.js";
 
 const logger = createLogger("subagent");
 
@@ -246,7 +256,8 @@ async function runSingleAgentLocal(
   skillContextContent: string | undefined = undefined,
   progressEmitter?: ProgressEmitter,
   modelOverride?: string,
-  ownerEnvironment?: NodeJS.ProcessEnv
+  ownerEnvironment?: NodeJS.ProcessEnv,
+  lifecycleScope?: ChildLifecycleScope
 ): Promise<SingleResult> {
   // Adapt OnUpdateCallback from AgentToolResult<SubagentDetails> to the shared
   // agent-runner's simpler update callback signature
@@ -272,7 +283,8 @@ async function runSingleAgentLocal(
     skillContextContent,
     progressEmitter,
     modelOverride,
-    ownerEnvironment
+    ownerEnvironment,
+    lifecycleScope
   );
 }
 
@@ -382,7 +394,6 @@ type SubagentToolParams = Static<typeof SubagentParams>;
 
 /** Raised when a caller-supplied artifact ID fails existence/integrity preflight. */
 class InputArtifactError extends Error {}
-class ArtifactCommunicationError extends Error {}
 
 interface HostToolCatalog {
   getAllTools(): unknown;
@@ -408,6 +419,13 @@ export function readHostToolNames(host: unknown): Set<string> | undefined {
 
 export default function (pi: ExtensionAPI) {
   const handoffBudget = resolveToolResultBudget(process.env);
+  const childLifecycleScope = createChildLifecycleScope({
+    maxActiveChildren: MAX_PARALLEL_TASKS,
+  });
+
+  pi.on("session_shutdown", async () => {
+    await childLifecycleScope.finalize();
+  });
 
   const buildInputArtifactHandoff = async (
     artifactIds: readonly string[] | undefined,
@@ -444,6 +462,12 @@ export default function (pi: ExtensionAPI) {
     cwd: string;
     upstreamRefsByIndex?: ReadonlyArray<readonly ArtifactRef[]>;
   }): Promise<void> => {
+    for (const result of options.results) {
+      sealWorkerTerminalOutcome(result);
+      result.outputArtifactRequired = true;
+      result.outputArtifactState = "pending";
+    }
+
     for (let index = 0; index < options.results.length; index += 1) {
       const result = options.results[index];
       if (result === undefined) continue;
@@ -459,6 +483,7 @@ export default function (pi: ExtensionAPI) {
           cwd: options.cwd,
           env: process.env,
         });
+        result.outputArtifactState = "persisted";
         logger.info("subagent_output_artifact_verified", {
           mode: options.runId.split(":", 1)[0],
           agent: result.agent,
@@ -467,14 +492,17 @@ export default function (pi: ExtensionAPI) {
         });
       } catch (error) {
         const code = error instanceof ArtifactClientError ? error.code : "ARTIFACT_PERSIST_FAILED";
+        result.outputArtifactState = "failed";
+        result.outputArtifactError =
+          `${code}: exact output for '${result.agent}' could not be persisted and re-read`.slice(
+            0,
+            240
+          );
         logger.warn("subagent_output_persist_failed", {
           errorCode: code,
           agent: result.agent,
           mode: options.runId.split(":", 1)[0],
         });
-        throw new ArtifactCommunicationError(
-          `${code}: exact output for '${result.agent}' could not be persisted and re-read`
-        );
       }
     }
   };
@@ -554,6 +582,7 @@ export default function (pi: ExtensionAPI) {
             agentScope,
             projectAgentsDir: discovery.projectAgentsDir,
             results,
+            outcome: summarizeWorkerResults(results),
             ...(artifactRunId ? { artifactRunId } : {}),
             ...(outputArtifactRefs.length > 0
               ? {
@@ -713,10 +742,13 @@ export default function (pi: ExtensionAPI) {
             resolveSkillContext(step.skillContext, ctx.cwd),
             undefined,
             step.model,
-            ownerEnvironment
+            ownerEnvironment,
+            childLifecycleScope
           );
+          sealWorkerTerminalOutcome(result);
           const exactOutput = getFinalOutput(result.messages);
-          let stepOutputRef: ArtifactRef;
+          result.outputArtifactRequired = true;
+          result.outputArtifactState = "pending";
           try {
             const persisted = await persistDirectChainOutput({
               metadata: outputMetadata,
@@ -724,8 +756,8 @@ export default function (pi: ExtensionAPI) {
               cwd: ctx.cwd,
               env: process.env,
             });
-            stepOutputRef = persisted;
             result.outputArtifactRef = persisted;
+            result.outputArtifactState = "persisted";
             logger.info("subagent_output_artifact_verified", {
               mode: "chain",
               agent: step.agent,
@@ -733,38 +765,46 @@ export default function (pi: ExtensionAPI) {
               artifactId: persisted.artifact_id,
             });
           } catch (error) {
-            if (!(error instanceof ArtifactClientError)) throw error;
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Chain stopped at step ${i + 1} (${step.agent}): exact output persistence failed (${error.code}).`,
-                },
-              ],
-              details: makeDetails("chain")(results),
-              isError: true,
-            };
+            const code =
+              error instanceof ArtifactClientError ? error.code : "ARTIFACT_PERSIST_FAILED";
+            result.outputArtifactState = "failed";
+            result.outputArtifactError =
+              `${code}: exact output for '${result.agent}' could not be persisted and re-read`.slice(
+                0,
+                240
+              );
           }
           results.push(result);
 
-          const isError =
-            result.exitCode !== 0 ||
-            result.stopReason === "error" ||
-            result.stopReason === "aborted";
-          if (isError) {
-            const errorMsg = result.errorMessage || result.stderr || exactOutput || "(no output)";
+          if (workerResultHasError(result)) {
+            const outcomeSummary = summarizeWorkerResults(results);
+            const details = makeDetails("chain")(results);
+            const diagnostic =
+              result.outputArtifactError || result.errorMessage || result.stderr || "none";
+            const refBlock = result.outputArtifactRef
+              ? exactOutputBlock(result.outputArtifactRef)
+              : "";
             return {
               content: [
                 {
                   type: "text",
-                  text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}`,
+                  text: appendBlock(
+                    [
+                      `Chain stopped at step ${i + 1} (${step.agent}).`,
+                      `Parent outcome: ${formatWorkerOutcomeSummaryBoundary(outcomeSummary)}`,
+                      `Worker outcome: ${formatWorkerOutcomeBoundary(result)}`,
+                      `Diagnostic: ${diagnostic}`,
+                      `Worker output:\n${exactOutput || "(no output)"}`,
+                    ].join("\n"),
+                    refBlock
+                  ),
                 },
               ],
-              details: makeDetails("chain")(results),
+              details,
               isError: true,
             };
           }
-          previousRef = stepOutputRef;
+          previousRef = result.outputArtifactRef;
         }
         // Only the final step's text is returned inline. Every step's exact
         // output is an artifact, and the ID must reach the model here: it is
@@ -779,17 +819,26 @@ export default function (pi: ExtensionAPI) {
               ]
             : []
         );
+        const chainOutcomes = results
+          .map(
+            (result) =>
+              `step ${result.step ?? results.indexOf(result) + 1} (${result.agent}): ${formatWorkerOutcomeBoundary(result)}`
+          )
+          .join("\n");
+        const outcomeSummary = summarizeWorkerResults(results);
+        const details = makeDetails("chain")(results);
         return {
           content: [
             {
               type: "text",
               text: appendBlock(
-                getFinalOutput(results[results.length - 1].messages) || "(no output)",
+                `Parent outcome: ${formatWorkerOutcomeSummaryBoundary(outcomeSummary)}\nChain worker outcomes:\n${chainOutcomes}\n\nFinal worker output:\n${getFinalOutput(results[results.length - 1].messages) || "(no output)"}`,
                 exactOutputListBlock(chainRefs)
               ),
             },
           ],
-          details: makeDetails("chain")(results),
+          details,
+          ...(workerOutcomeSummaryHasError(outcomeSummary) ? { isError: true } : {}),
         };
       }
 
@@ -805,24 +854,42 @@ export default function (pi: ExtensionAPI) {
             details: makeDetails("parallel")([]),
           };
 
-        // Track all results for streaming updates.
-        const allResults = params.tasks.map((task) =>
-          createPendingSingleResult(task.agent, task.task)
-        );
+        // Required output delivery is pending from admission through owner persistence,
+        // so a final execution update cannot transiently claim end-to-end success.
+        const allResults = params.tasks.map((task) => {
+          const pending = createPendingSingleResult(task.agent, task.task);
+          pending.outputArtifactRequired = true;
+          pending.outputArtifactState = "pending";
+          return pending;
+        });
 
-        const emitParallelUpdate = () => {
-          if (onUpdate) {
-            const running = allResults.filter((r) => r.exitCode === -1).length;
-            const done = allResults.filter((r) => r.exitCode !== -1).length;
+        const emitParallelUpdate = (sourceIndex: number): void => {
+          if (!onUpdate) return;
+          const source = allResults[sourceIndex];
+          try {
+            const summary = summarizeWorkerResults(allResults);
+            const done = summary.completed + summary.cancelled + summary.failed;
             onUpdate({
               content: [
                 {
                   type: "text",
-                  text: `Parallel: ${done}/${allResults.length} done, ${running} running...`,
+                  text: `Parallel: ${done}/${allResults.length} execution terminal, ${summary.running} running...`,
                 },
               ],
               details: makeDetails("parallel")([...allResults]),
             });
+            if (source !== undefined && source.updateDeliveryState !== "failed") {
+              source.updateDeliveryState = "delivered";
+            }
+          } catch (error) {
+            if (source !== undefined) {
+              source.updateDeliveryState = "failed";
+              if (source.updateDeliveryError === undefined) {
+                const message = error instanceof Error ? error.message : String(error);
+                source.updateDeliveryError =
+                  message.slice(0, 240) || "streaming update callback failed";
+              }
+            }
           }
         };
 
@@ -842,57 +909,66 @@ export default function (pi: ExtensionAPI) {
               t.cwd,
               undefined,
               signal,
-              // Per-task update callback
-              (partial) => {
-                if (partial.details?.results[0]) {
-                  allResults[index] = partial.details.results[0];
-                  emitParallelUpdate();
-                }
-              },
+              // Per-task update callback; absent means streaming was not attempted.
+              onUpdate
+                ? (partial) => {
+                    const current = partial.details?.results[0];
+                    if (current) {
+                      current.outputArtifactRequired = true;
+                      current.outputArtifactState = "pending";
+                      allResults[index] = current;
+                      emitParallelUpdate(index);
+                    }
+                  }
+                : undefined,
               makeDetails("parallel"),
               resolveSkillContext(t.skillContext, ctx.cwd),
               undefined,
               t.model,
-              ownerEnvironment
+              ownerEnvironment,
+              childLifecycleScope
             );
+            result.outputArtifactRequired = true;
+            result.outputArtifactState = "pending";
             allResults[index] = result;
-            emitParallelUpdate();
+            emitParallelUpdate(index);
             return result;
           }
         );
 
-        const successCount = results.filter((r) => r.exitCode === 0).length;
-
         artifactRunId = `subagent-parallel:${randomUUID()}`;
-        try {
-          await attachOwnerArtifacts({
-            results,
-            runId: artifactRunId,
-            cwd: ctx.cwd,
-            upstreamRefsByIndex: taskHandoffs.map(
-              (handoff) => handoff?.input.artifacts.map((binding) => binding.ref) ?? []
-            ),
-          });
-        } catch (error) {
-          if (!(error instanceof ArtifactCommunicationError)) throw error;
-          return {
-            content: [{ type: "text", text: `Parallel communication failed. ${error.message}` }],
-            details: makeDetails("parallel")(results),
-            isError: true,
-          };
-        }
+        await attachOwnerArtifacts({
+          results,
+          runId: artifactRunId,
+          cwd: ctx.cwd,
+          upstreamRefsByIndex: taskHandoffs.map(
+            (handoff) => handoff?.input.artifacts.map((binding) => binding.ref) ?? []
+          ),
+        });
 
+        const outcomeSummary = summarizeWorkerResults(results);
         // The preview is 100 characters; the artifact is the output. Naming the
         // exact ID inline is what makes the preview a summary of something
         // readable rather than a prompt to re-run the agent.
-        const summaries = results.map((r) => {
-          const output = getFinalOutput(r.messages);
+        const summaries = results.map((result) => {
+          const output = getFinalOutput(result.messages);
           const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
-          const suffix = r.outputArtifactRef ? inlineArtifactMarker(r.outputArtifactRef) : "";
-          return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}${suffix}`;
+          const suffix = result.outputArtifactRef
+            ? inlineArtifactMarker(result.outputArtifactRef)
+            : "";
+          const diagnosticText = result.outputArtifactError || result.errorMessage;
+          const diagnostic = diagnosticText ? `; diagnostic=${diagnosticText}` : "";
+          return `[${result.agent}] ${formatWorkerOutcomeBoundary(result)}; preview=${preview || "(no output)"}${diagnostic}${suffix}`;
         });
-        const parallelText = `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`;
-        const anyParallelRef = results.some((r) => r.outputArtifactRef);
+        const parallelText =
+          `Parent outcome: ${formatWorkerOutcomeSummaryBoundary(outcomeSummary)}\n` +
+          `Parallel execution outcomes: ${outcomeSummary.completed} completed, ` +
+          `${outcomeSummary.cancelled} cancelled, ${outcomeSummary.failed} failed; ` +
+          `${outcomeSummary.succeeded} end-to-end succeeded, ` +
+          `${outcomeSummary.deliveryFailed} artifact delivery failed, ` +
+          `${outcomeSummary.streamingDeliveryFailed} optional streaming update failed\n\n${summaries.join("\n\n")}`;
+        const anyParallelRef = results.some((result) => result.outputArtifactRef);
+        const details = makeDetails("parallel")(results);
         return {
           content: [
             {
@@ -905,7 +981,8 @@ export default function (pi: ExtensionAPI) {
                 : parallelText,
             },
           ],
-          details: makeDetails("parallel")(results),
+          details,
+          ...(workerOutcomeSummaryHasError(outcomeSummary) ? { isError: true } : {}),
         };
       }
 
@@ -926,61 +1003,40 @@ export default function (pi: ExtensionAPI) {
           resolveSkillContext(params.skillContext, ctx.cwd),
           undefined,
           params.model,
-          ownerEnvironment
+          ownerEnvironment,
+          childLifecycleScope
         );
-        const isError =
-          result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-        if (isError) {
-          const errorMsg =
-            result.errorMessage ||
-            result.stderr ||
-            getFinalOutput(result.messages) ||
-            "(no output)";
-          return {
-            content: [
-              { type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` },
-            ],
-            details: makeDetails("single")([result]),
-            isError: true,
-          };
-        }
-
-        // Single-mode output is returned in full, but compaction can drop the
-        // inline copy later. The artifact keeps it recoverable by exact ref.
+        // Persist successful and failed partial output alike. Persistence is a
+        // separate delivery dimension and cannot rewrite terminal worker truth.
         artifactRunId = `subagent-single:${randomUUID()}`;
-        try {
-          await attachOwnerArtifacts({
-            results: [result],
-            runId: artifactRunId,
-            cwd: ctx.cwd,
-            upstreamRefsByIndex: [
-              singleHandoff?.input.artifacts.map((binding) => binding.ref) ?? [],
-            ],
-          });
-        } catch (error) {
-          if (!(error instanceof ArtifactCommunicationError)) throw error;
-          return {
-            content: [
-              { type: "text", text: `Single-agent communication failed. ${error.message}` },
-            ],
-            details: makeDetails("single")([result]),
-            isError: true,
-          };
-        }
+        await attachOwnerArtifacts({
+          results: [result],
+          runId: artifactRunId,
+          cwd: ctx.cwd,
+          upstreamRefsByIndex: [singleHandoff?.input.artifacts.map((binding) => binding.ref) ?? []],
+        });
 
+        const exactOutput = getFinalOutput(result.messages) || "(no output)";
+        const diagnostic = result.outputArtifactError || result.errorMessage || result.stderr;
+        const outcomeSummary = summarizeWorkerResults([result]);
+        const details = makeDetails("single")([result]);
+        const terminalText = [
+          `Parent outcome: ${formatWorkerOutcomeSummaryBoundary(outcomeSummary)}`,
+          `Worker outcome: ${formatWorkerOutcomeBoundary(result)}`,
+          ...(diagnostic ? [`Diagnostic: ${diagnostic}`] : []),
+          `Worker output:\n${exactOutput}`,
+        ].join("\n");
         return {
           content: [
             {
               type: "text",
               text: result.outputArtifactRef
-                ? appendBlock(
-                    getFinalOutput(result.messages) || "(no output)",
-                    exactOutputBlock(result.outputArtifactRef)
-                  )
-                : getFinalOutput(result.messages) || "(no output)",
+                ? appendBlock(terminalText, exactOutputBlock(result.outputArtifactRef))
+                : terminalText,
             },
           ],
-          details: makeDetails("single")([result]),
+          details,
+          ...(workerOutcomeSummaryHasError(outcomeSummary) ? { isError: true } : {}),
         };
       }
 
@@ -1073,18 +1129,38 @@ export default function (pi: ExtensionAPI) {
 
       if (details.mode === "single" && details.results.length === 1) {
         const r = details.results[0];
-        const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
-        const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+        const workerOutcome = classifyWorkerResult(r);
+        const summary = summarizeWorkerResults(details.results);
+        const parentHasError = workerOutcomeSummaryHasError(summary);
+        const icon =
+          summary.status === "running"
+            ? theme.fg("warning", "⏳")
+            : parentHasError
+              ? theme.fg("error", "✗")
+              : theme.fg("success", "✓");
         const displayItems = getDisplayItems(r.messages);
         const finalOutput = getFinalOutput(r.messages);
+        const terminalError = r.outputArtifactError || r.errorMessage;
+        const statusLabel = `[${summary.status}; worker=${workerOutcome.status}]`;
+        const statusText = parentHasError
+          ? theme.fg("error", statusLabel)
+          : theme.fg("muted", statusLabel);
 
         if (expanded) {
           const container = new Container();
-          let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
-          if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
+          const header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)} ${statusText}`;
           container.addChild(new Text(header, 0, 0));
-          if (isError && r.errorMessage)
-            container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
+          container.addChild(new Text(theme.fg("muted", formatWorkerOutcomeBoundary(r)), 0, 0));
+          if (parentHasError && terminalError)
+            container.addChild(new Text(theme.fg("error", `Error: ${terminalError}`), 0, 0));
+          if (r.updateDeliveryError)
+            container.addChild(
+              new Text(
+                theme.fg("warning", `Optional streaming update: ${r.updateDeliveryError}`),
+                0,
+                0
+              )
+            );
           container.addChild(new Spacer(1));
           container.addChild(new Text(theme.fg("muted", "─── Task ───"), 0, 0));
           container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
@@ -1117,10 +1193,13 @@ export default function (pi: ExtensionAPI) {
           return container;
         }
 
-        let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
-        if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
-        if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
-        else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+        let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)} ${statusText}`;
+        text += `\n${theme.fg("muted", formatWorkerOutcomeBoundary(r))}`;
+        if (parentHasError && terminalError)
+          text += `\n${theme.fg("error", `Error: ${terminalError}`)}`;
+        if (r.updateDeliveryError)
+          text += `\n${theme.fg("warning", `Optional streaming update: ${r.updateDeliveryError}`)}`;
+        if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
         else {
           text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
           if (displayItems.length > COLLAPSED_ITEM_COUNT)
@@ -1154,11 +1233,14 @@ export default function (pi: ExtensionAPI) {
       };
 
       if (details.mode === "chain") {
-        const successCount = details.results.filter((r) => r.exitCode === 0).length;
+        const summary = summarizeWorkerResults(details.results);
+        const successCount = summary.succeeded;
         const icon =
-          successCount === details.results.length
-            ? theme.fg("success", "✓")
-            : theme.fg("error", "✗");
+          summary.status === "running"
+            ? theme.fg("warning", "⏳")
+            : workerOutcomeSummaryHasError(summary)
+              ? theme.fg("error", "✗")
+              : theme.fg("success", "✓");
 
         if (expanded) {
           const container = new Container();
@@ -1167,14 +1249,23 @@ export default function (pi: ExtensionAPI) {
               icon +
                 " " +
                 theme.fg("toolTitle", theme.bold("chain ")) +
-                theme.fg("accent", `${successCount}/${details.results.length} steps`),
+                theme.fg(
+                  "accent",
+                  `${successCount}/${details.results.length} successful; ${summary.completed} execution completed; aggregate=${summary.status}`
+                ),
               0,
               0
             )
           );
 
           for (const r of details.results) {
-            const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+            const stepOutcome = classifyWorkerResult(r);
+            const rIcon =
+              stepOutcome.status === "running"
+                ? theme.fg("warning", "⏳")
+                : workerResultHasError(r)
+                  ? theme.fg("error", "✗")
+                  : theme.fg("success", "✓");
             const displayItems = getDisplayItems(r.messages);
             const finalOutput = getFinalOutput(r.messages);
 
@@ -1186,9 +1277,14 @@ export default function (pi: ExtensionAPI) {
                 0
               )
             );
+            container.addChild(new Text(theme.fg("muted", formatWorkerOutcomeBoundary(r)), 0, 0));
             container.addChild(
               new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0)
             );
+            const diagnostic = r.outputArtifactError || r.errorMessage;
+            if (workerResultHasError(r) && diagnostic) {
+              container.addChild(new Text(theme.fg("error", `Error: ${diagnostic}`), 0, 0));
+            }
 
             // Show tool calls
             for (const item of displayItems) {
@@ -1227,11 +1323,24 @@ export default function (pi: ExtensionAPI) {
           icon +
           " " +
           theme.fg("toolTitle", theme.bold("chain ")) +
-          theme.fg("accent", `${successCount}/${details.results.length} steps`);
+          theme.fg(
+            "accent",
+            `${successCount}/${details.results.length} successful; ${summary.completed} execution completed; aggregate=${summary.status}`
+          );
         for (const r of details.results) {
-          const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+          const stepOutcome = classifyWorkerResult(r);
+          const rIcon =
+            stepOutcome.status === "running"
+              ? theme.fg("warning", "⏳")
+              : workerResultHasError(r)
+                ? theme.fg("error", "✗")
+                : theme.fg("success", "✓");
           const displayItems = getDisplayItems(r.messages);
           text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
+          text += `\n${theme.fg("muted", formatWorkerOutcomeBoundary(r))}`;
+          const diagnostic = r.outputArtifactError || r.errorMessage;
+          if (workerResultHasError(r) && diagnostic)
+            text += `\n${theme.fg("error", `Error: ${diagnostic}`)}`;
           if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
           else text += `\n${renderDisplayItems(displayItems, 5)}`;
         }
@@ -1242,18 +1351,18 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (details.mode === "parallel") {
-        const running = details.results.filter((r) => r.exitCode === -1).length;
-        const successCount = details.results.filter((r) => r.exitCode === 0).length;
-        const failCount = details.results.filter((r) => r.exitCode > 0).length;
-        const isRunning = running > 0;
+        const summary = summarizeWorkerResults(details.results);
+        const isRunning = summary.status === "running";
         const icon = isRunning
           ? theme.fg("warning", "⏳")
-          : failCount > 0
+          : summary.status === "partial_failure"
             ? theme.fg("warning", "◐")
-            : theme.fg("success", "✓");
+            : workerOutcomeSummaryHasError(summary)
+              ? theme.fg("error", "✗")
+              : theme.fg("success", "✓");
         const status = isRunning
-          ? `${successCount + failCount}/${details.results.length} done, ${running} running`
-          : `${successCount}/${details.results.length} tasks`;
+          ? `${summary.completed + summary.cancelled + summary.failed}/${details.results.length} execution terminal, ${summary.running} running`
+          : `${summary.succeeded}/${summary.total} successful; ${summary.completed} execution completed, ${summary.cancelled} cancelled, ${summary.failed} failed; ${summary.deliveryFailed} artifact delivery failed; ${summary.streamingDeliveryFailed} optional streaming update failed; aggregate=${summary.status}`;
 
         if (expanded && !isRunning) {
           const container = new Container();
@@ -1266,7 +1375,13 @@ export default function (pi: ExtensionAPI) {
           );
 
           for (const r of details.results) {
-            const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+            const taskOutcome = classifyWorkerResult(r);
+            const rIcon =
+              taskOutcome.status === "running"
+                ? theme.fg("warning", "⏳")
+                : workerResultHasError(r)
+                  ? theme.fg("error", "✗")
+                  : theme.fg("success", "✓");
             const displayItems = getDisplayItems(r.messages);
             const finalOutput = getFinalOutput(r.messages);
 
@@ -1274,9 +1389,14 @@ export default function (pi: ExtensionAPI) {
             container.addChild(
               new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0)
             );
+            container.addChild(new Text(theme.fg("muted", formatWorkerOutcomeBoundary(r)), 0, 0));
             container.addChild(
               new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0)
             );
+            const diagnostic = r.outputArtifactError || r.errorMessage;
+            if (workerResultHasError(r) && diagnostic) {
+              container.addChild(new Text(theme.fg("error", `Error: ${diagnostic}`), 0, 0));
+            }
 
             // Show tool calls
             for (const item of displayItems) {
@@ -1313,16 +1433,21 @@ export default function (pi: ExtensionAPI) {
         // Collapsed view (or still running)
         let text = `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`;
         for (const r of details.results) {
+          const taskOutcome = classifyWorkerResult(r);
           const rIcon =
-            r.exitCode === -1
+            taskOutcome.status === "running"
               ? theme.fg("warning", "⏳")
-              : r.exitCode === 0
-                ? theme.fg("success", "✓")
-                : theme.fg("error", "✗");
+              : workerResultHasError(r)
+                ? theme.fg("error", "✗")
+                : theme.fg("success", "✓");
           const displayItems = getDisplayItems(r.messages);
           text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
+          text += `\n${theme.fg("muted", formatWorkerOutcomeBoundary(r))}`;
+          const diagnostic = r.outputArtifactError || r.errorMessage;
+          if (workerResultHasError(r) && diagnostic)
+            text += `\n${theme.fg("error", `Error: ${diagnostic}`)}`;
           if (displayItems.length === 0)
-            text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
+            text += `\n${theme.fg("muted", taskOutcome.status === "running" ? "(running...)" : "(no output)")}`;
           else text += `\n${renderDisplayItems(displayItems, 5)}`;
         }
         if (!isRunning) {

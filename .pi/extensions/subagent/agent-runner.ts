@@ -24,7 +24,19 @@ import {
   resolvePennyRuntimeState,
 } from "@penny/orchestration/source";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import {
+  createChildLifecycleScope,
+  type AgentChildProcess,
+  type ChildLifecycleResult,
+  type ChildLifecycleScope,
+  type ChildLifecycleTerminalState,
+} from "./child-lifecycle.js";
 import { captureToolResultForExecutionOwner } from "./execution-owner-capture.js";
+import {
+  sealWorkerTerminalOutcome,
+  type WorkerOutcomeSummary,
+  type WorkerTerminalEnvelope,
+} from "./worker-outcome.js";
 import type { ArtifactRef } from "../artifacts/owner-client.js";
 import { createLogger, getSessionId } from "../../lib/logger/logger.js";
 
@@ -488,6 +500,7 @@ export interface SingleResult {
   agent: string;
   agentSource: "user" | "project" | "unknown";
   task: string;
+  /** -1 is reserved for a worker that has not reached a terminal process state. */
   exitCode: number;
   messages: ObservedPiMessage[];
   stderr: string;
@@ -496,8 +509,25 @@ export interface SingleResult {
   stopReason?: string;
   errorMessage?: string;
   step?: number;
+  processState?: "pending" | "running" | ChildLifecycleTerminalState;
+  processExitObserved?: boolean;
+  processCloseObserved?: boolean;
+  wasAborted?: boolean;
+  terminationForceRequested?: boolean;
+  agentEndObserved?: boolean;
+  /** Immutable process/model truth, sealed before delivery work. */
+  terminalOutcome?: WorkerTerminalEnvelope;
+  /** Optional streaming callback state; never changes worker or parent terminal truth. */
+  updateDeliveryState?: "not_attempted" | "delivered" | "failed";
+  /** First bounded streaming callback diagnostic; never changes terminal truth. */
+  updateDeliveryError?: string;
+  /** Whether parent success requires exact output artifact delivery. */
+  outputArtifactRequired?: boolean;
   /** Exact execution-owner output ref when this invocation is artifact-captured. */
   outputArtifactRef?: ArtifactRef;
+  outputArtifactState?: "pending" | "persisted" | "failed";
+  /** Bounded owner-persistence diagnostic; no artifact reference is invented. */
+  outputArtifactError?: string;
 }
 
 export function createPendingSingleResult(agent: string, task: string): SingleResult {
@@ -507,6 +537,9 @@ export function createPendingSingleResult(agent: string, task: string): SingleRe
     task,
     exitCode: -1,
     messages: [],
+    processState: "pending",
+    agentEndObserved: false,
+    updateDeliveryState: "not_attempted",
     stderr: "",
     usage: {
       input: 0,
@@ -533,6 +566,8 @@ export interface SubagentDetails {
   agentScope: AgentScope;
   projectAgentsDir: string | null;
   results: SingleResult[];
+  /** Aggregate disposition derived from the shared worker classifier. */
+  outcome?: WorkerOutcomeSummary;
   /** Owner-generated run identity for direct chain artifacts. */
   artifactRunId?: string;
   /** Exact output refs in completed step order. */
@@ -962,7 +997,8 @@ export async function runSingleAgent(
   skillContextContent: string | undefined = undefined,
   progressEmitter?: ProgressEmitter,
   modelOverride?: string,
-  ownerEnvironment?: NodeJS.ProcessEnv
+  ownerEnvironment?: NodeJS.ProcessEnv,
+  lifecycleScope?: ChildLifecycleScope
 ): Promise<SingleResult> {
   const agent = agents.find((a) => a.name === agentName);
 
@@ -1085,8 +1121,10 @@ export async function runSingleAgent(
     agent: agentName,
     agentSource: agent.source,
     task,
-    exitCode: 0,
+    exitCode: -1,
     messages: [],
+    processState: "running",
+    agentEndObserved: false,
     stderr: "",
     usage: {
       input: 0,
@@ -1099,13 +1137,46 @@ export async function runSingleAgent(
     },
     model: modelOverride || agent.model,
     step,
+    updateDeliveryState: "not_attempted",
   };
 
-  const emitUpdate = () => {
-    if (onUpdate) {
+  const recordUpdateDeliveryFailure = (error: unknown): void => {
+    currentResult.updateDeliveryState = "failed";
+    if (currentResult.updateDeliveryError !== undefined) return;
+    const message = error instanceof Error ? error.message : String(error);
+    currentResult.updateDeliveryError = message.slice(0, 240) || "streaming update callback failed";
+    logger.warn("Subagent streaming update delivery failed", {
+      agent: agentName,
+      error: currentResult.updateDeliveryError,
+    });
+  };
+
+  const emitUpdate = (): void => {
+    if (!onUpdate) return;
+    try {
       onUpdate({
         content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
         details: makeDetails([currentResult]),
+      });
+      if (currentResult.updateDeliveryState !== "failed") {
+        currentResult.updateDeliveryState = "delivered";
+      }
+    } catch (error) {
+      recordUpdateDeliveryFailure(error);
+    }
+  };
+
+  let progressDeliveryFailed = false;
+  const emitProgress = (event: ProgressEvent): void => {
+    if (!progressEmitter) return;
+    try {
+      progressEmitter.markProgress(event);
+    } catch (error) {
+      if (progressDeliveryFailed) return;
+      progressDeliveryFailed = true;
+      logger.warn("Subagent progress event delivery failed", {
+        agent: agentName,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   };
@@ -1146,187 +1217,252 @@ export async function runSingleAgent(
     }
 
     args.push(`Task: ${task}`);
-    let wasAborted = false;
 
     let buffer = "";
     let eventCount = 0;
     let lastEventType = "";
-    let hasMessageEnd = false;
-    let _hasAgentEnd = false;
-    // _hasAgentEnd tracked for diagnostics; prefix _ per lint convention.
-    // Preserve tracking for future use (e.g., detecting agent_end without process exit).
+    let hasAssistantMessageEnd = false;
+    let hasAgentEnd = false;
 
-    const exitCode = await new Promise<number>((resolve) => {
-      let resolved = false;
-
-      const resolveOnce = (code: number) => {
-        if (resolved) return;
-        resolved = true;
-        resolve(code);
-      };
-
-      const invocation = getPiInvocation(args);
-      // stdin = "ignore" so Pi reads /dev/null (immediate EOF).
-      // Using "pipe" would keep a writable stream handle in the parent's
-      // event loop, preventing Pi's process from exiting cleanly.
-      //
-      // Pi's print mode exits when the event loop drains. Extensions must not
-      // leave referenced sockets, subprocesses, or timers behind.
-      //
-      // No hard timeout — Pi has internal safety (context limits, cost limits).
-      // The abort signal handles user-initiated cancellation.
-      const proc = spawn(invocation.command, invocation.args, {
+    const invocation = getPiInvocation(args);
+    // stdin = "ignore" so Pi reads /dev/null (immediate EOF).
+    // Using "pipe" would keep a writable stream handle in the parent's
+    // event loop, preventing Pi's process from exiting cleanly.
+    //
+    // Pi's print mode exits when the event loop drains. Extensions must not
+    // leave referenced sockets, subprocesses, or timers behind.
+    //
+    // There is no general worker timeout. Cancellation alone has a bounded
+    // graceful/forced termination lifecycle and waits for actual exit plus
+    // stream closure before settling.
+    let proc: AgentChildProcess;
+    try {
+      proc = spawn(invocation.command, invocation.args, {
         cwd: cwd ?? defaultCwd,
         env: workerEnvironment,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      currentResult.processState = "spawn_error";
+      currentResult.processExitObserved = false;
+      currentResult.processCloseObserved = false;
+      currentResult.exitCode = 1;
+      currentResult.stopReason = "error";
+      currentResult.errorMessage = `Agent process failed to spawn: ${message}`;
+      currentResult.stderr = currentResult.errorMessage;
+      sealWorkerTerminalOutcome(currentResult);
+      return currentResult;
+    }
 
-      const processLine = (line: string) => {
-        if (!line.trim()) return;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          return;
+    const processLine = (line: string) => {
+      if (!line.trim()) return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (!isRecord(parsed)) return;
+      const event = parsed;
+      const eventMessage = adaptPiJsonMessage(event.message);
+
+      eventCount++;
+      lastEventType = typeof event.type === "string" && event.type ? event.type : "unknown";
+
+      // Progress is observational. A listener failure cannot interrupt event
+      // parsing or replace the eventual terminal envelope.
+      if (event.type === "agent_start") {
+        emitProgress({ type: "agent_start", timestamp: Date.now() });
+      } else if (event.type === "message_end" && eventMessage?.role === "assistant") {
+        if (eventMessage.stopReason) {
+          emitProgress({ type: "message_end", timestamp: Date.now() });
         }
-        if (!isRecord(parsed)) return;
-        const event = parsed;
-        const eventMessage = adaptPiJsonMessage(event.message);
+      } else if (event.type === "tool_result_end" && eventMessage) {
+        emitProgress({
+          type: "tool_result",
+          timestamp: Date.now(),
+          detail: eventMessage.role === "toolResult" ? eventMessage.toolName : undefined,
+        });
+      } else if (event.type === "message" && eventMessage?.role === "toolResult") {
+        emitProgress({
+          type: "tool_result",
+          timestamp: Date.now(),
+          detail: eventMessage.toolName,
+        });
+      }
 
-        eventCount++;
-        lastEventType = typeof event.type === "string" && event.type ? event.type : "unknown";
+      if (event.type === "agent_end") {
+        hasAgentEnd = true;
+        currentResult.agentEndObserved = true;
+        // Pi's print mode sets process.exitCode and returns from main(). The
+        // process exits only after extension-owned event-loop handles drain.
+      }
 
-        // Emit progress events for heartbeat tracking
-        if (progressEmitter) {
-          if (event.type === "agent_start") {
-            progressEmitter.markProgress({ type: "agent_start", timestamp: Date.now() });
-          } else if (event.type === "message_end" && eventMessage?.role === "assistant") {
-            if (eventMessage.stopReason) {
-              progressEmitter.markProgress({ type: "message_end", timestamp: Date.now() });
-            }
-          } else if (event.type === "tool_result_end" && eventMessage) {
-            progressEmitter.markProgress({
-              type: "tool_result",
-              timestamp: Date.now(),
-              detail: eventMessage.role === "toolResult" ? eventMessage.toolName : undefined,
-            });
-          } else if (event.type === "message" && eventMessage?.role === "toolResult") {
-            progressEmitter.markProgress({
-              type: "tool_result",
-              timestamp: Date.now(),
-              detail: eventMessage.toolName,
-            });
+      if (event.type === "message_end" && eventMessage) {
+        currentResult.messages.push(eventMessage);
+
+        if (eventMessage.role === "assistant") {
+          hasAssistantMessageEnd = true;
+          currentResult.usage.turns++;
+          const usage = eventMessage.usage;
+          if (usage) {
+            currentResult.usage.input += usage.input || 0;
+            currentResult.usage.output += usage.output || 0;
+            currentResult.usage.cacheRead += usage.cacheRead || 0;
+            currentResult.usage.cacheWrite += usage.cacheWrite || 0;
+            currentResult.usage.cost += usage.cost?.total || 0;
+            currentResult.usage.contextTokens = usage.totalTokens || 0;
           }
-        }
-
-        if (event.type === "agent_end") {
-          _hasAgentEnd = true;
-          // Pi's print mode sets process.exitCode and returns from main(). The
-          // process exits only after extension-owned event-loop handles drain.
-        }
-
-        if (event.type === "message_end" && eventMessage) {
-          hasMessageEnd = true;
-          currentResult.messages.push(eventMessage);
-
-          if (eventMessage.role === "assistant") {
-            currentResult.usage.turns++;
-            const usage = eventMessage.usage;
-            if (usage) {
-              currentResult.usage.input += usage.input || 0;
-              currentResult.usage.output += usage.output || 0;
-              currentResult.usage.cacheRead += usage.cacheRead || 0;
-              currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-              currentResult.usage.cost += usage.cost?.total || 0;
-              currentResult.usage.contextTokens = usage.totalTokens || 0;
-            }
-            if (!currentResult.model && eventMessage.model) {
-              currentResult.model = eventMessage.model;
-            }
-            if (eventMessage.stopReason) currentResult.stopReason = eventMessage.stopReason;
-            if (eventMessage.errorMessage) currentResult.errorMessage = eventMessage.errorMessage;
+          if (!currentResult.model && eventMessage.model) {
+            currentResult.model = eventMessage.model;
           }
+          if (eventMessage.stopReason) currentResult.stopReason = eventMessage.stopReason;
+          if (eventMessage.errorMessage) currentResult.errorMessage = eventMessage.errorMessage;
+        }
+        emitUpdate();
+      }
+
+      if (event.type === "tool_result_end" && eventMessage) {
+        const captured = captureToolResultForExecutionOwner(eventMessage);
+        const capturedMessage = adaptPiJsonMessage(captured);
+        if (capturedMessage) {
+          currentResult.messages.push(capturedMessage);
           emitUpdate();
         }
-
-        if (event.type === "tool_result_end" && eventMessage) {
-          const captured = captureToolResultForExecutionOwner(eventMessage);
-          const capturedMessage = adaptPiJsonMessage(captured);
-          if (capturedMessage) {
-            currentResult.messages.push(capturedMessage);
-            emitUpdate();
-          }
-        }
-      };
-
-      proc.stdout.on("data", (data: Buffer) => {
-        buffer += data.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) processLine(line);
-      });
-
-      proc.stderr.on("data", (data: Buffer) => {
-        currentResult.stderr += data.toString();
-      });
-
-      proc.on("close", (code) => {
-        if (buffer.trim()) processLine(buffer);
-        resolveOnce(code ?? 0);
-      });
-
-      proc.on("error", (err) => {
-        logger.error(
-          "Agent spawn failed",
-          { agent: agentName, error: err.message },
-          Object.assign(err, { code: "AGENT_SPAWN_ERROR" as const })
-        );
-        resolveOnce(1);
-      });
-
-      if (signal) {
-        const killProc = () => {
-          wasAborted = true;
-          proc.kill("SIGTERM");
-          setTimeout(() => {
-            if (!proc.killed) proc.kill("SIGKILL");
-          }, 5000);
-        };
-        if (signal.aborted) killProc();
-        else signal.addEventListener("abort", killProc, { once: true });
       }
-    });
+    };
 
-    currentResult.exitCode = exitCode;
-    if (wasAborted) throw new Error("Agent was aborted");
+    let outputQueueClosed = false;
+    const flushOutputQueue = (): void => {
+      if (!buffer.trim()) {
+        buffer = "";
+        return;
+      }
+      const finalLine = buffer;
+      buffer = "";
+      processLine(finalLine);
+    };
+    const onStdoutData = (data: Buffer): void => {
+      if (outputQueueClosed) return;
+      buffer += data.toString();
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) processLine(line);
+    };
+    const onStderrData = (data: Buffer): void => {
+      if (!outputQueueClosed) currentResult.stderr += data.toString();
+    };
+    const onOutputQueueClose = (): void => {
+      if (outputQueueClosed) return;
+      outputQueueClosed = true;
+      flushOutputQueue();
+    };
 
-    if (!hasMessageEnd && eventCount > 0) {
+    const childScope = lifecycleScope ?? createChildLifecycleScope({ maxActiveChildren: 1 });
+    const begun = childScope.beginChild(proc, signal);
+    let lifecycle: ChildLifecycleResult;
+    if (!begun.accepted) {
+      lifecycle = await begun.finalizer.settled;
+    } else {
+      let stdoutAttached = false;
+      let stderrAttached = false;
+      let closeAttached = false;
+      try {
+        proc.stdout.on("data", onStdoutData);
+        stdoutAttached = true;
+        proc.stderr.on("data", onStderrData);
+        stderrAttached = true;
+        // This listener is registered before the finalizer's close listener can
+        // settle an already-wired child. It closes the parser queue atomically,
+        // so synthetic or buggy late stream events cannot rewrite terminal data.
+        proc.prependOnceListener("close", onOutputQueueClose);
+        closeAttached = true;
+        lifecycle = await begun.finalizer.settled;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        lifecycle = await begun.finalizer.finalize("setup_failed");
+        currentResult.stderr += `${currentResult.stderr ? "\n" : ""}Output listener setup failed: ${message}`;
+      } finally {
+        const removeOutputListener = (remove: () => void): void => {
+          try {
+            remove();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            currentResult.stderr += `${currentResult.stderr ? "\n" : ""}Output listener cleanup failed: ${message}`;
+          }
+        };
+        if (stdoutAttached) {
+          removeOutputListener(() => proc.stdout.removeListener("data", onStdoutData));
+        }
+        if (stderrAttached) {
+          removeOutputListener(() => proc.stderr.removeListener("data", onStderrData));
+        }
+        if (closeAttached) {
+          removeOutputListener(() => proc.removeListener("close", onOutputQueueClose));
+        }
+      }
+    }
+    if (!outputQueueClosed) {
+      outputQueueClosed = true;
+      flushOutputQueue();
+    }
+
+    currentResult.processState = lifecycle.state;
+    currentResult.processExitObserved = lifecycle.exitObserved;
+    currentResult.processCloseObserved = lifecycle.closeObserved;
+    currentResult.wasAborted = lifecycle.terminationRequested;
+    currentResult.terminationForceRequested = lifecycle.forceRequested;
+    currentResult.exitCode = lifecycle.exitCode ?? 1;
+
+    if (lifecycle.errorMessage !== undefined) {
+      currentResult.stderr += `${currentResult.stderr.endsWith("\n") || currentResult.stderr === "" ? "" : "\n"}${lifecycle.errorMessage}`;
+    }
+    if (lifecycle.state === "spawn_error") {
+      currentResult.errorMessage = lifecycle.errorMessage ?? "Agent process failed to spawn";
+      currentResult.stopReason = "error";
+      logger.error(
+        "Agent spawn failed",
+        { agent: agentName, error: currentResult.errorMessage },
+        Object.assign(new Error(currentResult.errorMessage), {
+          code: "AGENT_SPAWN_ERROR" as const,
+        })
+      );
+    } else if (lifecycle.state !== "closed") {
+      currentResult.errorMessage = lifecycle.errorMessage ?? `Agent process ${lifecycle.state}`;
+      currentResult.stopReason = "error";
+    } else if (lifecycle.terminationRequested) {
+      currentResult.stopReason = "aborted";
+      currentResult.errorMessage = currentResult.errorMessage ?? "Agent was aborted";
+    }
+
+    // A structured assistant message_end plus a clean process exit is the
+    // current success contract. agent_end remains diagnostic legacy metadata,
+    // not a required marker and never a text heuristic.
+    if (!hasAssistantMessageEnd) {
       logger.warn(
-        "Agent completed without message_end",
-        { agent: agentName, events: eventCount, lastType: lastEventType, exitCode },
-        Object.assign(new Error("Completed without message_end"), {
+        "Agent completed without an assistant terminal message",
+        {
+          agent: agentName,
+          events: eventCount,
+          lastType: lastEventType,
+          exitCode: currentResult.exitCode,
+          hasAgentEnd,
+        },
+        Object.assign(new Error("Completed without assistant message_end"), {
           code: "AGENT_INCOMPLETE" as const,
         })
       );
-      // Agent process exited cleanly (exitCode 0) but never emitted message_end.
-      // This happens when Pi's SSE stream is killed mid-generation (e.g., 5-min
-      // body timeout in undici before 0.70.3) or when the agent crashes without
-      // emitting its final message. We must propagate this as an error so the
-      // skill extension does NOT treat it as success.
       currentResult.errorMessage =
         currentResult.errorMessage ||
-        `Agent '${agentName}' completed without emitting message_end. ` +
-          `The agent may have been killed by a timeout or crashed. ` +
-          `Events received: ${eventCount}, last event: ${lastEventType}, exit code: ${exitCode}. ` +
-          `Check Pi logs for SSE timeout or process errors. ` +
-          `Common cause: Pi version < 0.70.3 had a 5-minute SSE body timeout.`;
+        `Agent '${agentName}' completed without an assistant message_end. ` +
+          `Events received: ${eventCount}, last event: ${lastEventType}, ` +
+          `process exit code: ${currentResult.exitCode}. Check Pi logs for provider or process errors.`;
       currentResult.stopReason = currentResult.stopReason || "incomplete";
-      if (currentResult.exitCode === 0) {
-        // Process exited cleanly but without a message — treat as failure
-        currentResult.exitCode = 1;
-      }
     }
+
+    sealWorkerTerminalOutcome(currentResult);
     if (currentResult.exitCode !== 0) {
       logger.warn("Agent process exited with non-zero code", {
         agent: agentName,
@@ -1337,9 +1473,28 @@ export async function runSingleAgent(
         agent: agentName,
         events: eventCount,
         exitCode: currentResult.exitCode,
+        terminalStatus: currentResult.terminalOutcome?.status,
       });
     }
 
+    return currentResult;
+  } catch (error) {
+    // Setup failures before a child is admitted still become typed terminal
+    // results. If terminal truth was already sealed, retain it and record only
+    // a bounded diagnostic rather than masking the primary outcome.
+    const message = error instanceof Error ? error.message : String(error);
+    if (currentResult.terminalOutcome === undefined) {
+      currentResult.processState = "setup_failed";
+      currentResult.processExitObserved = false;
+      currentResult.processCloseObserved = false;
+      currentResult.exitCode = 1;
+      currentResult.stopReason = "error";
+      currentResult.errorMessage = `Agent setup failed: ${message}`;
+      currentResult.stderr += `${currentResult.stderr ? "\n" : ""}${currentResult.errorMessage}`;
+      sealWorkerTerminalOutcome(currentResult);
+    } else {
+      currentResult.stderr += `${currentResult.stderr ? "\n" : ""}Post-terminal diagnostic: ${message.slice(0, 240)}`;
+    }
     return currentResult;
   } finally {
     try {

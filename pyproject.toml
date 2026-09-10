@@ -56,6 +56,7 @@ exclude = '''
     | dist
     | node_modules
     | audits
+    | backups
     | ideas
     | plans
     | research
@@ -82,6 +83,7 @@ exclude = [
     "\\.venv/",
     "node_modules/",
     "audits/",      # Historical audit snapshots are not project source.
+    "backups/",     # Operator-private rollback snapshots are not project source.
     "ideas/",       # Gitignored exploratory work is not project source.
     ".*/tests/",    # Pytest remains its own gate while legacy test helpers are typed incrementally.
     "\\.mempalace/",
@@ -102,3 +104,8 @@ filterwarnings = [
     "ignore::DeprecationWarning",
 ]
 pythonpath = ["scripts/system"]
+
+[tool.penny.compliance]
+allowed_pytest_skips = [
+    { node_id = "scripts/system/memory/tests/test_hub_service.py::test_real_371_hub_lease_and_signal_release_on_copied_palace", reason = "set MEMPALACE_371_PYTHON to an isolated 3.7.1 interpreter" },
+]

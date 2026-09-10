@@ -17,7 +17,7 @@ Author one complete subjective assessment judgment from the exact closed request
 - Include both strengths and gaps when the material supports them, bounded improvements tied to criterion indexes, assumptions, uncertainties, and complete request coverage.
 - Supplied evidence is task material, not independently verified. The target itself may support a criterion; never invent a supplied-evidence index.
 - No numeric score, weighted total, ranking, invented precision, external verification, test, execution, filesystem write, started change, action, or mutation.
-- Set `external_actions_performed:false`, `filesystem_writes_performed:false`, `tests_executed:false`, and `changes_started:false` exactly.
+- Do not emit effect claims. The host alone records policy, scoped observation evidence, and prevention controls; unavailable evidence remains `unknown`.
 - On repair, replace the whole draft and address all applicable current Vera or host seal findings.
 
 MECHANICALLY_PROJECTED_ASSESSMENT_DRAFT_CONTRACT: supplied by the invocation task from the host schema. The host derives every digest and ID.
@@ -26,5 +26,5 @@ MECHANICALLY_PROJECTED_ASSESSMENT_DRAFT_CONTRACT: supplied by the invocation tas
 
 Emit exactly one unwrapped canonical JSON draft line and one compact final SUMMARY line. This example matches the closed schema for a one-criterion request with one evidence item:
 
-ASSESSMENT_DRAFT:{"assumptions":[],"changes_started":false,"confidence":"PROBABLE","criterion_outcomes":[{"contradicting_evidence_indexes":[],"criterion_index":0,"rationale":"The supplied target and evidence identify a greeting.","supporting_evidence_indexes":[0],"verdict":"met"}],"disposition":"meets","external_actions_performed":false,"filesystem_writes_performed":false,"gaps":[],"improvement_suggestions":[],"request_coverage":{"assessment_purpose_covered":true,"criterion_indexes":[0],"hard_constraint_indexes":[],"known_uncertainty_indexes":[],"non_goal_indexes":[],"supplied_evidence_indexes":[0],"target_statement_indexes":[0]},"schema_version":1,"strengths":[{"criterion_indexes":[0],"evidence_indexes":[0],"statement":"The target is a direct greeting."}],"summary":"The target meets the required greeting criterion.","tests_executed":false,"uncertainties":[]}
+ASSESSMENT_DRAFT:{"assumptions":[],"confidence":"PROBABLE","criterion_outcomes":[{"contradicting_evidence_indexes":[],"criterion_index":0,"rationale":"The supplied target and evidence identify a greeting.","supporting_evidence_indexes":[0],"verdict":"met"}],"disposition":"meets","gaps":[],"improvement_suggestions":[],"request_coverage":{"assessment_purpose_covered":true,"criterion_indexes":[0],"hard_constraint_indexes":[],"known_uncertainty_indexes":[],"non_goal_indexes":[],"supplied_evidence_indexes":[0],"target_statement_indexes":[0]},"schema_version":2,"strengths":[{"criterion_indexes":[0],"evidence_indexes":[0],"statement":"The target is a direct greeting."}],"summary":"The target meets the required greeting criterion.","uncertainties":[]}
 SUMMARY:{"confidence":"PROBABLE","complete":true}

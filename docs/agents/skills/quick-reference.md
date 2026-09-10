@@ -34,7 +34,7 @@
 - [ ] Typed composition validates exact bytes and every required port before run creation.
 - [ ] Playbook registry and flow diagram agree; run `bun run --cwd apps/orchestration test -- tests/flow-diagrams.test.ts` and `bun .pi/extensions/playwright/scripts/validate-flow-html.ts`.
 - [ ] Skill directory contains no executable delegate.
-- [ ] Prompts contain exact handoff and no worker memory instruction.
+- [ ] Prompts contain exact handoff and no memory-write, room, or memory-handoff instruction.
 - [ ] Owner capture/ref verification precedes SUMMARY routing.
 - [ ] Payload bytes never enter RunContext.
 - [ ] Retry, clarification, restart, and partial fan recovery preserve selected refs.
@@ -47,7 +47,7 @@
 - Reintroducing `state_machine: true` or argv state.
 - Passing predecessor text inline instead of exact refs.
 - Treating a SUMMARY or model-authored locator as persistence proof.
-- Giving workers `memory_*` tools or room instructions.
+- Giving workers memory-write/logstream tools or using memory for workflow handoff. Bounded read-only recall comes only from agent YAML.
 - Requiring a room-manifest entry for a new skill.
 - Silently truncating artifact content instead of following `next_range`.
 

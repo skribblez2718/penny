@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { unrefPlaywrightCdpConnection } from "../../browser.js";
+import { ownedPlaywrightBrowserProcess, unrefPlaywrightCdpConnection } from "../../browser.js";
 
 describe("Playwright CDP transport boundary", () => {
   it("unrefs the private WebSocket with its receiver and accepts host extras", () => {
@@ -35,6 +35,35 @@ describe("Playwright CDP transport boundary", () => {
     ]) {
       expect(unrefPlaywrightCdpConnection(value)).toBe(false);
     }
+  });
+
+  it("extracts only a structurally validated owned Chromium process", () => {
+    const browserProcess = {
+      exitCode: null,
+      signalCode: null,
+      kill() {
+        return true;
+      },
+      once() {
+        return this;
+      },
+      unref() {},
+    };
+    const browserHost = {
+      _connection: {
+        toImpl() {
+          return { options: { browserProcess: { process: browserProcess } } };
+        },
+      },
+    };
+
+    expect(ownedPlaywrightBrowserProcess(browserHost)).toBe(browserProcess);
+    expect(ownedPlaywrightBrowserProcess({ _connection: { toImpl: "not-a-function" } })).toBeNull();
+    expect(
+      ownedPlaywrightBrowserProcess({
+        _connection: { toImpl: () => ({ options: { browserProcess: { process: {} } } }) },
+      })
+    ).toBeNull();
   });
 
   it("keeps private-member access and unref failures best-effort", () => {

@@ -30,7 +30,7 @@ This is a model-visible, registered universal package. Pi native discovery and P
 
 `skill({ skill_name: "produce", goal: "Purpose/problem statement", constraints: { schema_version: 1, output_name: "artifact.md", artifact_kind: "markdown", specification: [{ statement: "..." }], source_material: [{ statement: "...", source_label: "optional" }], acceptance_criteria: [{ statement: "..." }], hard_constraints: [], non_goals: [], known_uncertainties: [] } })`
 
-Produce V1 accepts no caller artifact inputs. Every request array is closed and bounded; `specification` and `acceptance_criteria` are nonempty.
+Produce accepts no caller artifact inputs. Every request array is closed and bounded; `specification` and `acceptance_criteria` are nonempty.
 
 ## Orchestrated Flow
 
@@ -39,7 +39,7 @@ intake (host canonical request)
   → exploring_artifact_approaches (Ida; unranked alternatives, no selection)
   → selecting_artifact_approach (Demetri; justified selection or unresolved)
   → materializing_artifact (Skribble; one complete draft)
-  → sealing_artifact (host canonical ProducedArtifactV1)
+  → sealing_artifact (host canonical ProducedArtifactV2 with required-only effect graph)
   → critiquing_artifact (Carren quality review)
   → verifying_artifact (Vera objective compliance and lineage)
   → admitting_artifact (host current-product receipts + integrity/envelope)
@@ -56,12 +56,12 @@ Normal-phase liveness permits at most 8 external calls per worker and 64 per run
 
 ## Output and Terminal Truth
 
-The selected terminal `output_artifact_ref` identifies canonical `penny.produced-artifact.v1` semantic-core bytes. The product embeds exact output identity, content and SHA-256, rationale, assumptions, uncertainties, full request coverage, the canonical request, Ida-alternative and Demetri-decision lineage, inline-source lineage, confidence, and literal `external_actions_performed:false`, `filesystem_writes_performed:false`, and `tests_executed:false`.
+The selected terminal `output_artifact_ref` identifies canonical `penny.produced-artifact.v2` semantic-core bytes. The product embeds exact output identity, content and SHA-256, rationale, assumptions, uncertainties, full request coverage, the canonical request, Ida-alternative and Demetri-decision lineage, inline-source lineage, confidence, and a host-authored versioned effect-evidence graph. Each of external action, filesystem write, test execution, and task change separately records the absence policy, worker/run/phase scope, observation status/coverage/result/evidence refs, and prevention control/scope. Unsupported facts are `unknown`; host artifact persistence is explicitly outside worker-effect assurance.
 
 For `json`, the host requires parseable canonical JSON content. Other kinds are not compiled, executed, or syntax-checked. `produced` requires nonempty content. `not_applicable` requires empty content and a truthful explanation. Host sealing—not a worker—derives `content_sha256` from the exact UTF-8 content.
 
-`complete/met:true` requires current-product Carren APPROVE and Vera PASS evidence, host-minted quality and validity receipts, deterministic integrity, an exact envelope, and CompletionGate v2 admission. It is not approval to write, publish, or execute the artifact.
+`complete/met:true` requires current-product Carren APPROVE and Vera PASS evidence, host-minted quality and validity receipts, deterministic integrity, an exact envelope, and CompletionGate v2 admission. An observed effect-policy violation blocks completion. Unknown effects may complete only with the terminal's explicit unknown-effect limitation. Even bounded no-violation evidence is scoped evidence, not full filesystem or process confinement. Completion is not approval to write, publish, or execute the artifact.
 
 ## Recovery and Consequence Boundary
 
-Recovery reuses the same exact selected refs and safely converges deterministic host sealing/admission. No state performs external reads, external actions, filesystem writes, tests, compilation, execution, deployment, publication, or direct approval.
+Recovery reuses the same exact selected refs and safely converges deterministic host sealing/admission. Active V1 effect checkpoints are refused rather than silently resealed as V2 evidence. The policy forbids external research, worker external actions, worker filesystem writes, tests, compilation, execution, deployment, publication, and direct approval; absent observation or prevention evidence remains unknown.

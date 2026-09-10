@@ -36,12 +36,12 @@ metadata:
 
 ## Content boundaries
 
-| SKILL.md                           | Domain Guidance                              | README/reference                                |
-| ---------------------------------- | -------------------------------------------- | ----------------------------------------------- |
-| Routing triggers and parameters    | Mission and domain criteria                  | Detailed FSM, contracts, failure modes          |
-| Artifact-first invocation contract | Exact input read + complete output + SUMMARY | Selected refs and recovery behavior             |
-| Terminal result shape              | Role-specific output fields                  | Diagnostics and tests                           |
-| Optional primary memory flag       | No memory instructions                       | Durable-memory boundary explanation if relevant |
+| SKILL.md                           | Domain Guidance                                | README/reference                                |
+| ---------------------------------- | ---------------------------------------------- | ----------------------------------------------- |
+| Routing triggers and parameters    | Mission and domain criteria                    | Detailed FSM, contracts, failure modes          |
+| Artifact-first invocation contract | Exact input read + complete output + SUMMARY   | Selected refs and recovery behavior             |
+| Terminal result shape              | Role-specific output fields                    | Diagnostics and tests                           |
+| Optional primary memory flag       | No memory-write, room, or handoff instructions | Durable-memory boundary explanation if relevant |
 
 SKILL.md is Project Index content, not the worker prompt. It must not instruct
 workers to use session rooms, duplicate checks, diaries, or KG links.
@@ -72,7 +72,7 @@ cannot affect workflow correctness.
       disable flag as `true`.
 - [ ] No legacy state-machine key.
 - [ ] Artifact handoff and terminal product ref are documented.
-- [ ] Memory is optional/primary-only and not workflow transport.
+- [ ] Memory is optional and not workflow transport; worker access is bounded read-only and all writes/lifecycle operations remain primary-owned.
 - [ ] All listed worker roles have prompts.
 
 ## Files

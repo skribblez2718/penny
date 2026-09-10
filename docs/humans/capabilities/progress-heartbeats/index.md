@@ -1,72 +1,63 @@
-# Progress Heartbeats
+# Direct-Subagent Progress and Fresh Sessions
 
-## What It Is
+## Current Behavior
 
-A mechanism that prevents Penny from killing agents that are actively making progress on long-running tasks. Instead of a fixed "kill after N minutes" timer, Penny watches the agent's output stream and resets the kill timer whenever the agent produces results.
+Penny does not currently apply a general heartbeat timeout to direct
+`subagent()` runs. The worker runner can recognize Pi start, message, and tool
+stdout events through an optional compatibility hook, but the production direct
+subagent path does not supply that hook. A direct worker is therefore not kept
+alive—or killed—by a documented three-tier heartbeat policy. Explicit
+cancellation instead follows a bounded graceful/forced shutdown process.
 
-## When It Matters
+Skill runs have a different progress surface. The orchestration engine reports
+phase starts, completed workers, and user/completion boundaries to the skill user
+interface. This is useful status output, but it is observational: it does not
+reset a direct-worker timeout, schedule background work, or transfer artifacts.
 
-- Agents running multi-step research, planning, or coding tasks
-- Long-running tools (e.g., `bash` commands that take minutes)
-- Any skill where agents chain multiple tool calls before completing
+## Starting a Fresh Session
 
-## How It Works
+In the pinned Pi runtime, the command is `/new`; `/clear` is the retired name.
+Starting a fresh session resets the conversation/session context. It does not
+purge Penny's independently persisted artifacts, orchestration checkpoints, or
+retained worker-session records.
 
-Pi agents emit JSON lines to stdout. Each of these events counts as a heartbeat:
+That distinction matters:
 
-- **Tool result** — agent executed a tool (read a file, ran bash, searched the web)
-- **Message end** — agent produced an assistant response
-- **Agent start** — agent process began
+- The new conversation does not automatically remember or receive the old chat.
+- An immutable artifact remains readable when its exact artifact ID is supplied.
+- A checkpointed workflow remains resumable through its normal run/session
+  identity and public resume operation.
+- Durable-store deletion and retention follow store policy, not the chat-reset
+  command.
 
-If progress events keep arriving, the agent stays alive. If the agent goes silent, a three-tier escalation kicks in.
-
-## Three-Tier Escalation
-
-| Phase          | Duration (default) | What Happens                                |
-| -------------- | ------------------ | ------------------------------------------- |
-| Warning        | 30 minutes         | Logged: "Agent slow but hasn't stalled yet" |
-| Staleness kill | 60 minutes         | Agent resolved with timeout result          |
-| Hard cap       | 90 minutes         | Agent killed regardless of last progress    |
-
-The thresholds are multipliers of the per-skill `agent_timeout_ms`:
-
-- Window = `agent_timeout_ms`
-- Staleness = `agent_timeout_ms × 2`
-- Hard cap = `agent_timeout_ms × 3`
-
-## Configuration
-
-| Environment Variable               | Effect                                 | Default            |
-| ---------------------------------- | -------------------------------------- | ------------------ |
-| `PENNY_AGENT_TIMEOUT`              | Base timeout per agent invocation (ms) | 1,800,000 (30 min) |
-| `PENNY_PROGRESS_WINDOW_MULTIPLIER` | (Reserved) Future multiplier override  | —                  |
-
-Per-skill timeouts are set via the `agent_timeout_ms` field in orchestrator actions. The skill extension passes this value to `withAgentTimeout`.
+So “start fresh” means fresh conversational context, not deletion of prior work.
+Do not rely on chat history as workflow state, and do not describe `/new` (or the
+historical `/clear` name) as clearing durable artifacts or checkpoints.
 
 ## Troubleshooting
 
-**Agent was killed despite making progress**
+**A direct subagent seems stuck**
 
-- Check if the agent's output format changed — progress detection relies on Pi JSON lines containing `tool_result_end`, `message_end`, or `agent_start`
-- Verify `agent_timeout_ms` isn't set too low for the task complexity
+- Do not assume a heartbeat monitor will terminate it.
+- Cancel explicitly when appropriate; the runner waits for bounded process exit
+  and stream closure.
+- Preserve any exact completed output artifact IDs before starting replacement
+  work.
 
-**Agent runs too long**
+**A skill stopped at a boundary**
 
-- Increase `agent_timeout_ms` in the orchestrator action
-- Check the logs at `WARN` level for "Agent slow but hasn't stalled yet" — this tells you the agent is still alive but approaching the threshold
+- Use the emitted run/session identity and the skill's public respond/resume
+  operation. UI progress text is not the checkpoint itself.
 
-**False staleness kills**
+**A new chat cannot see earlier work**
 
-- Some agents may produce bursts of output then go silent while computing. If this is normal for your workflow, increase the base timeout or adjust the orchestrator to emit periodic heartbeat messages.
-
-## Observability
-
-- **DEBUG**: Progress events are logged each time a heartbeat fires
-- **WARN**: Emitted when an agent crosses the progress window threshold
-- **ERROR**: Emitted on staleness kill or hard cap kill, including duration metrics
+- Supply the exact artifact ID or workflow identity needed now. A fresh session
+  intentionally does not inherit the old conversation, even though separate
+  durable stores remain intact.
 
 ## Learn More
 
-- Agent docs: `docs/agents/capabilities/progress-heartbeats/index.md`
-- Implementation: `.pi/extensions/skill/index.ts` (withAgentTimeout), `.pi/extensions/subagent/agent-runner.ts` (ProgressEmitter)
-- Tests: `.pi/extensions/skill/tests/unit/heartbeat.test.ts`, `.pi/extensions/skill/tests/integration/heartbeat.test.ts`
+- Agent reference: `docs/agents/capabilities/progress-heartbeats/index.md`
+- Direct worker lifecycle: `.pi/extensions/subagent/agent-runner.ts`
+- Skill progress mapping: `.pi/extensions/skill/index.ts`
+- Orchestration progress events: `apps/orchestration/src/worker.ts`

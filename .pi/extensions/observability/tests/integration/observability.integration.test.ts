@@ -59,10 +59,13 @@ describe("target-only observability extension", () => {
       "agent_start",
       "agent_end",
       "session_compact",
+      "tool_result",
     ]);
     expect(events.has("message_end")).toBe(false);
     expect(events.has("tool_execution_start")).toBe(false);
-    expect(events.has("tool_result")).toBe(false);
+    // The shared Pi tool-failure boundary observes final results only to repair
+    // machine error classification; it does not ingest transcript content.
+    expect(events.get("tool_result")).toHaveLength(1);
   });
 
   it("registers structured-log and direct-history tools", () => {

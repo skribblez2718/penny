@@ -117,8 +117,9 @@ describe("runtime role policy", () => {
     expect(names).not.toContain("memory_logstream_append");
     // No admin tools
     for (const forbidden of FORBIDDEN_MODEL_MEMORY_TOOLS) expect(names).not.toContain(forbidden);
-    // No lifecycle hooks (no auto-diary)
-    expect(recorder.handlers.size).toBe(0);
+    expect([...recorder.handlers.keys()].filter((event) => event.startsWith("session_"))).toEqual(
+      []
+    );
     // Read tools ARE present
     expect(names).toContain("memory_smart_search");
     expect(names).toContain("memory_get_drawer");
@@ -148,6 +149,23 @@ describe("runtime role policy", () => {
     expect(names).toContain("memory_diary_read");
     expect(recorder.handlers.has("session_shutdown")).toBe(true);
     await recorder.handlers.get("session_shutdown")?.[0]?.({ reason: "test" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps observe-only evaluation isolated without enabling durable writes", () => {
+    const recorder = piRecorder();
+    const fetchSpy = vi.fn();
+    createMemoryExtension({
+      env: extensionEnv({
+        PENNY_MEMORY_WRITE_MODE: undefined,
+        PENNY_MEMORY_AUTO_DIARY_MODE: "observe-only",
+      }),
+      fetch: fetchSpy as typeof fetch,
+    })(asMemoryExtensionApi(recorder.pi));
+    const names = recorder.tools.map((tool) => tool.name);
+    expect(names).toEqual(primaryMemoryToolNames({ writeEnabled: false }));
+    expect(names).not.toContain("memory_stage_diary_candidate");
+    expect(names).not.toContain("memory_diary_write");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -193,6 +211,27 @@ describe("hub-only configuration", () => {
     expect(() =>
       loadMemoryRuntimeConfig(extensionEnv({ PENNY_MEMORY_WRITE_MODE: "shadow" }))
     ).toThrow(/WRITE_MODE/);
+  });
+
+  it("defaults automatic diary retention off and validates observe/retain deadlines", () => {
+    expect(
+      loadMemoryRuntimeConfig(extensionEnv({ PENNY_MEMORY_AUTO_DIARY_MODE: undefined })).autoDiary
+    ).toEqual({ mode: "disabled", shutdownTimeoutMs: 2_000 });
+    expect(
+      loadMemoryRuntimeConfig(
+        extensionEnv({
+          PENNY_MEMORY_AUTO_DIARY_MODE: "observe-only",
+          PENNY_MEMORY_AUTO_DIARY_TIMEOUT_MS: "100",
+        })
+      ).autoDiary
+    ).toEqual({ mode: "observe-only", shutdownTimeoutMs: 100 });
+    expect(loadMemoryRuntimeConfig(extensionEnv()).autoDiary.mode).toBe("retain");
+    expect(() =>
+      loadMemoryRuntimeConfig(extensionEnv({ PENNY_MEMORY_AUTO_DIARY_MODE: "enabled" }))
+    ).toThrow(/AUTO_DIARY_MODE/);
+    expect(() =>
+      loadMemoryRuntimeConfig(extensionEnv({ PENNY_MEMORY_AUTO_DIARY_TIMEOUT_MS: "99" }))
+    ).toThrow(/AUTO_DIARY_TIMEOUT_MS/);
   });
 
   it("normalizes the configured endpoint to HTTP POST /mcp", () => {

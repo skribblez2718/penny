@@ -49,7 +49,7 @@ skill({
 });
 ```
 
-`target` is either one nonempty inline string or one to 64 `{ statement }` items. Assess V1 accepts no caller artifacts, including an empty artifact envelope.
+`target` is either one nonempty inline string or one to 64 `{ statement }` items. Assess accepts no caller artifacts, including an empty artifact envelope.
 
 ## Orchestrated Flow
 
@@ -57,7 +57,7 @@ skill({
 intake (host canonical request)
   → analyzing_assessment (Annie; no final judgment)
   → authoring_assessment (Carren; complete subjective assessment draft)
-  → sealing_assessment (host canonical AssessmentV1)
+  → sealing_assessment (host canonical AssessmentV2 with required-only effect graph)
   → verifying_assessment (Vera; objective contract/evidence/lineage verification)
   → admitting_assessment (host current-product validity receipt + integrity/envelope)
   → complete
@@ -73,10 +73,10 @@ Normal-phase liveness permits at most eight external calls per worker and 64 per
 
 ## Output and Terminal Truth
 
-The canonical semantic core is `penny.assessment.v1`. It has exactly one outcome for every criterion index; categorical verdicts and disposition; exact supplied-evidence indexes; summary; strengths; major/minor gaps; bounded advice-only improvements; assumptions; uncertainties; complete request coverage; exact source lineage; confidence; and literal false flags for external actions, filesystem writes, tests, and started changes.
+The canonical semantic core is `penny.assessment.v2`. It has exactly one outcome for every criterion index; categorical verdicts and disposition; exact supplied-evidence indexes; summary; strengths; major/minor gaps; bounded advice-only improvements; assumptions; uncertainties; complete request coverage; exact source lineage; confidence; and a host-authored versioned effect-evidence graph. Each of external action, filesystem write, test execution, and task change separately records the absence policy, worker/run/phase scope, observation status/coverage/result/evidence refs, and prevention control/scope. Unsupported facts are `unknown`; host artifact persistence is explicitly outside worker-effect assurance.
 
-`complete/met:true` means the latest exact assessment product passed Vera's objective checks and the host's deterministic current-product integrity/admission checks. It does not mean the target meets the criteria: all five valid dispositions may complete. Exhausted, stalled, malformed, stale, or missing-exact-input work terminates honestly as `incomplete`; cancellation is `cancelled`.
+`complete/met:true` means the latest exact assessment product passed Vera's objective checks and the host's deterministic current-product integrity/admission checks. It does not mean the target meets the criteria: all five valid dispositions may complete. An observed policy violation blocks completion. Unknown effects may complete only with the terminal's explicit unknown-effect limitation. Even bounded no-violation evidence is scoped evidence, not full filesystem or process confinement. Exhausted, stalled, malformed, stale, or missing-exact-input work terminates honestly as `incomplete`; cancellation is `cancelled`.
 
 ## Recovery and Consequence Boundary
 
-Host sealing and admission are idempotent, exact-run, and recovery-safe. Recovery reuses selected refs and never searches memory. No path performs external verification, numeric scoring, actions, writes, tests, changes, approval, executable registration or model discovery.
+Host sealing and admission are idempotent, exact-run, and recovery-safe. Recovery reuses selected refs and never searches memory. Active V1 effect checkpoints are refused rather than silently resealed as V2 evidence. The absence policy forbids external verification, numeric scoring, actions, worker writes, tests, changes, approval, executable registration, and model discovery; absent observation or prevention evidence remains unknown.

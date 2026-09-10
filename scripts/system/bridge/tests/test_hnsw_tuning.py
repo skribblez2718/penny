@@ -30,8 +30,46 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 chromadb = pytest.importorskip("chromadb")
 
+from chromadb.api.types import Documents, EmbeddingFunction, Embeddings  # noqa: E402
 from scripts.system.memory.hnsw import HNSW_TUNING  # noqa: E402
 import repair_palace  # noqa: E402
+
+
+class _HermeticEmbedding(EmbeddingFunction[Documents]):
+    """Small deterministic embedding function with no model, file, or network access."""
+
+    def __init__(self) -> None:
+        pass
+
+    def __call__(self, input: Documents) -> Embeddings:
+        return [[float(len(document)), 1.0] for document in input]
+
+    @staticmethod
+    def name() -> str:
+        return "penny-hnsw-test-hermetic"
+
+    @staticmethod
+    def build_from_config(config: dict) -> "_HermeticEmbedding":
+        return _HermeticEmbedding()
+
+    def get_config(self) -> dict:
+        return {}
+
+
+def _build(
+    destination: Path,
+    ids: list[str],
+    documents: list[str],
+    metadata: list[dict[str, str]],
+) -> None:
+    repair_palace._build(
+        destination,
+        "mempalace_drawers",
+        ids,
+        documents,
+        metadata,
+        embedding_function=_HermeticEmbedding(),
+    )
 
 
 def _stored_tuning(palace: Path) -> dict:
@@ -61,7 +99,7 @@ def test_repair_rebuild_persists_the_tuning(tmp_path):
     docs = [f"content {i}" for i in range(20)]
     metas = [{"wing": "penny", "room": "test"} for _ in ids]
 
-    repair_palace._build(dest, "mempalace_drawers", ids, docs, metas)
+    _build(dest, ids, docs, metas)
 
     stored = _stored_tuning(dest)
     for key, expected in HNSW_TUNING.items():
@@ -70,7 +108,7 @@ def test_repair_rebuild_persists_the_tuning(tmp_path):
 
 def test_verify_tuning_accepts_a_correctly_tuned_rebuild(tmp_path):
     dest = tmp_path / "tuned"
-    repair_palace._build(dest, "mempalace_drawers", ["a"], ["doc"], [{"wing": "w"}])
+    _build(dest, ["a"], ["doc"], [{"wing": "w"}])
     assert repair_palace._verify_tuning(dest, HNSW_TUNING) == dict(HNSW_TUNING)
 
 
@@ -81,7 +119,7 @@ def test_verify_tuning_rejects_a_palace_that_lost_the_settings(tmp_path):
     precisely what kept the crash recurring for months.
     """
     dest = tmp_path / "tuned"
-    repair_palace._build(dest, "mempalace_drawers", ["a"], ["doc"], [{"wing": "w"}])
+    _build(dest, ["a"], ["doc"], [{"wing": "w"}])
     with pytest.raises(RuntimeError, match="did not persist HNSW tuning"):
         repair_palace._verify_tuning(dest, {"hnsw:sync_threshold": 999999})
 
@@ -90,4 +128,11 @@ def test_chromadb_rejects_malformed_tuning_outright(tmp_path, monkeypatch):
     """Belt and braces: a non-integer threshold fails at creation, not silently."""
     monkeypatch.setattr(repair_palace, "_hnsw_tuning", lambda: {"hnsw:sync_threshold": "64"})
     with pytest.raises(Exception, match="hnsw parameters"):
-        repair_palace._build(tmp_path / "bad", "mempalace_drawers", ["a"], ["doc"], [{"wing": "w"}])
+        repair_palace._build(
+            tmp_path / "bad",
+            "mempalace_drawers",
+            ["a"],
+            ["doc"],
+            [{"wing": "w"}],
+            embedding_function=_HermeticEmbedding(),
+        )

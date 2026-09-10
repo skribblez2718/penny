@@ -21,6 +21,9 @@ Usage:
     python -m scripts.system.bridge.palace_doctor \\
       --offline-target /absolute/copied-palace \\
       --receipt /absolute/offline-receipt.json [--text]
+
+``open_authorized_recovery`` retains validated descriptors after delegating
+receipt semantics to ``authorize_offline_target``.
 """
 
 from __future__ import annotations
@@ -31,8 +34,17 @@ import sqlite3
 from pathlib import Path
 from typing import Sequence
 
-from scripts.system.bridge.fts5_integrity import probe_authorized_database
-from scripts.system.memory.offline_access import authorize_offline_target
+from scripts.system.bridge.fts5_integrity import (
+    materialize_sqlite_family,
+    probe_authorized_database,
+    sqlite_budget_guard,
+)
+from scripts.system.bridge.recovery_safety import (
+    RecoveryBudget,
+    assert_source_unchanged,
+    open_authorized_recovery,
+    snapshot_source_tree,
+)
 
 # Backlog sizes measured on the production palace, repeating each trial on
 # byte-identical input (see HNSW_TUNING in scripts/system/memory/hnsw.py):
@@ -45,7 +57,8 @@ WAL_CRITICAL = 150
 
 
 def _connect_ro(db: Path) -> sqlite3.Connection:
-    """Read-only connection — never mutates, never checkpoints the caller's WAL."""
+    """Open only an already private descriptor-rooted diagnostic copy."""
+
     return sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 
 
@@ -81,34 +94,38 @@ def _hnsw_tuning(conn: sqlite3.Connection) -> dict[str, int]:
         return {}
 
 
-def _read_state(db: Path) -> dict:
-    """Collect the raw numbers that describe palace health."""
+def _read_state(db: Path, budget: RecoveryBudget) -> dict:
+    """Collect raw health numbers from one private SQLite copy."""
+
     with _connect_ro(db) as conn:
-        vec_seq, meta_seq = _segment_seqs(conn)
-        tuning = _hnsw_tuning(conn)
-        return {
-            "drawers": _scalar(conn, "SELECT COUNT(*) FROM embeddings"),
-            "wal_backlog": _scalar(conn, "SELECT COUNT(*) FROM embeddings_queue"),
-            # ChromaDB persisted operation codes:
-            #   0 ADD, 1 UPDATE, 2 UPSERT, 3 DELETE
-            "wal_adds": _scalar(conn, "SELECT COUNT(*) FROM embeddings_queue WHERE operation = 0"),
-            "wal_updates": _scalar(
-                conn, "SELECT COUNT(*) FROM embeddings_queue WHERE operation = 1"
-            ),
-            "wal_upserts": _scalar(
-                conn, "SELECT COUNT(*) FROM embeddings_queue WHERE operation = 2"
-            ),
-            "wal_deletes": _scalar(
-                conn, "SELECT COUNT(*) FROM embeddings_queue WHERE operation = 3"
-            ),
-            "vector_segment_seq": vec_seq,
-            "metadata_segment_seq": meta_seq,
-            "segment_drift": (
-                meta_seq - vec_seq if vec_seq is not None and meta_seq is not None else None
-            ),
-            "hnsw_tuning": tuning,
-            "sync_threshold": tuning.get("hnsw:sync_threshold"),
-        }
+        with sqlite_budget_guard(conn, budget):
+            vec_seq, meta_seq = _segment_seqs(conn)
+            tuning = _hnsw_tuning(conn)
+            return {
+                "drawers": _scalar(conn, "SELECT COUNT(*) FROM embeddings"),
+                "wal_backlog": _scalar(conn, "SELECT COUNT(*) FROM embeddings_queue"),
+                # ChromaDB persisted operation codes:
+                #   0 ADD, 1 UPDATE, 2 UPSERT, 3 DELETE
+                "wal_adds": _scalar(
+                    conn, "SELECT COUNT(*) FROM embeddings_queue WHERE operation = 0"
+                ),
+                "wal_updates": _scalar(
+                    conn, "SELECT COUNT(*) FROM embeddings_queue WHERE operation = 1"
+                ),
+                "wal_upserts": _scalar(
+                    conn, "SELECT COUNT(*) FROM embeddings_queue WHERE operation = 2"
+                ),
+                "wal_deletes": _scalar(
+                    conn, "SELECT COUNT(*) FROM embeddings_queue WHERE operation = 3"
+                ),
+                "vector_segment_seq": vec_seq,
+                "metadata_segment_seq": meta_seq,
+                "segment_drift": (
+                    meta_seq - vec_seq if vec_seq is not None and meta_seq is not None else None
+                ),
+                "hnsw_tuning": tuning,
+                "sync_threshold": tuning.get("hnsw:sync_threshold"),
+            }
 
 
 def _observations(stats: dict) -> list[str]:
@@ -139,8 +156,9 @@ def _judge(stats: dict) -> tuple[bool, str, str | None, list[str]]:
         return (
             False,
             "Palace is running unbounded-WAL configuration — recurrence is guaranteed.",
-            "One-time migration: python scripts/system/bridge/repair_palace.py "
-            "(rebuilds the collection WITH bounded-WAL settings; drawer content preserved).",
+            "Inspect with python scripts/system/bridge/repair_palace.py. A full migration "
+            "separately requires --apply --allow-reembedding; exact-vector recovery uses "
+            "scripts.system.bridge.rebuild_from_disk and its independent metadata-trust gate.",
             [
                 "collection has NO hnsw:sync_threshold — it was created with the stock "
                 "default (1000). Under a short-lived per-call bridge, metadata-only update "
@@ -171,60 +189,69 @@ def _judge(stats: dict) -> tuple[bool, str, str | None, list[str]]:
 
 
 def diagnose(offline_target: Path, receipt: Path) -> dict:
-    authorization = authorize_offline_target(offline_target, receipt)
-    palace = authorization.target
-    collection = "mempalace_drawers"
-    db = palace / "chroma.sqlite3"
-    stats: dict = {
-        "palace": str(palace),
-        "collection": collection,
-        "offline_source_id": authorization.source_id,
-    }
+    with open_authorized_recovery(offline_target, receipt) as source:
+        palace = source.target
+        collection = "mempalace_drawers"
+        snapshot = snapshot_source_tree(source)
+        stats: dict = {
+            "palace": str(palace),
+            "collection": collection,
+            "offline_source_id": source.authorization.source_id,
+        }
+        has_database = any(
+            member.relative_path == "chroma.sqlite3" and member.kind == "file"
+            for member in snapshot.members
+        )
+        if not has_database:
+            return {
+                "ok": False,
+                "verdict": "No chroma.sqlite3 found — palace is missing or not initialized.",
+                "detail": [f"looked for {palace / 'chroma.sqlite3'}"],
+                "action": "Verify the explicit copied/offline target and its receipt.",
+                "stats": stats,
+            }
 
-    if not db.is_file():
+        integrity = probe_authorized_database(source, snapshot)
+        stats["sqlite_integrity"] = integrity.to_dict()
+        if not integrity.repair_safe:
+            return {
+                "ok": False,
+                "verdict": "Unclassified SQLite corruption detected — repair/rebuild is blocked.",
+                "detail": [
+                    "the integrity probe ran FTS5 and SQLite checks only on a temporary copy",
+                    "findings are typed and contain no database content",
+                ],
+                "action": "Preserve the copy and obtain classified offline recovery evidence.",
+                "stats": stats,
+            }
+        if integrity.corrupt_fts5_tables:
+            return {
+                "ok": False,
+                "verdict": "Classified FTS5 index corruption detected on the temporary probe copy.",
+                "detail": [
+                    "source database bytes were unchanged by the probe",
+                    "the FTS5 index is derived and eligible for receipt-gated offline rebuild",
+                ],
+                "action": "Run scripts.system.bridge.repair_palace with --fts5-only first; "
+                "add --apply only for the authorized copied target.",
+                "stats": stats,
+            }
+
+        with materialize_sqlite_family(
+            source.root,
+            expected_snapshot=snapshot,
+            account_as_input=True,
+        ) as copied_database:
+            stats.update(_read_state(copied_database, source.budget))
+        assert_source_unchanged(source, snapshot)
+        ok, verdict, action, extra = _judge(stats)
         return {
-            "ok": False,
-            "verdict": "No chroma.sqlite3 found — palace is missing or not initialized.",
-            "detail": [f"looked for {db}"],
-            "action": "Verify the explicit copied/offline target and its receipt.",
+            "ok": ok,
+            "verdict": verdict,
+            "detail": _observations(stats) + extra,
+            "action": action,
             "stats": stats,
         }
-
-    integrity = probe_authorized_database(authorization)
-    stats["sqlite_integrity"] = integrity.to_dict()
-    if not integrity.repair_safe:
-        return {
-            "ok": False,
-            "verdict": "Unclassified SQLite corruption detected — repair/rebuild is blocked.",
-            "detail": [
-                "the integrity probe ran FTS5 and SQLite checks only on a temporary copy",
-                "findings are typed and contain no database content",
-            ],
-            "action": "Preserve the copied target and obtain classified offline recovery evidence.",
-            "stats": stats,
-        }
-    if integrity.corrupt_fts5_tables:
-        return {
-            "ok": False,
-            "verdict": "Classified FTS5 index corruption detected on the temporary probe copy.",
-            "detail": [
-                "source database bytes were unchanged by the probe",
-                "the FTS5 index is derived and eligible for receipt-gated offline rebuild",
-            ],
-            "action": "Run scripts.system.bridge.repair_palace with --fts5-only first; "
-            "add --apply only for the authorized copied target.",
-            "stats": stats,
-        }
-
-    stats.update(_read_state(db))
-    ok, verdict, action, extra = _judge(stats)
-    return {
-        "ok": ok,
-        "verdict": verdict,
-        "detail": _observations(stats) + extra,
-        "action": action,
-        "stats": stats,
-    }
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -96,6 +96,7 @@ export * from "./skill-contracts/assess.js";
 export * from "./skill-contracts/decide.js";
 export * from "./skill-contracts/diagnose.js";
 export * from "./skill-contracts/evidence-admission.js";
+export * from "./skill-contracts/effects.js";
 export * from "./skill-contracts/plan.js";
 export * from "./skill-contracts/produce.js";
 export * from "./skill-contracts/review.js";

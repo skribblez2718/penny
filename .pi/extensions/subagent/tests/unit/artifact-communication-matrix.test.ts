@@ -115,6 +115,10 @@ function singleResult(
     agentSource: "project",
     task,
     exitCode: 0,
+    processState: "closed",
+    processExitObserved: true,
+    processCloseObserved: true,
+    agentEndObserved: true,
     messages: [message],
     stderr: "",
     usage: {

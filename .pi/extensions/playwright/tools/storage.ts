@@ -116,7 +116,7 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
           content: [
             {
               type: "text",
-              text: `Storage operation failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Storage operation failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -197,7 +197,7 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
           content: [
             {
               type: "text",
-              text: `Storage failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Storage failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -282,7 +282,7 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
           content: [
             {
               type: "text",
-              text: `Cookie operation failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Cookie operation failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,

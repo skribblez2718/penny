@@ -70,6 +70,13 @@ export default function playwrightExtension(pi: ExtensionAPI) {
   // registrars retain this holder, so it must keep a stable, mutable identity;
   // loadConfig itself intentionally returns immutable snapshots.
   config = { ...loadConfig(process.cwd()) };
+  // Capture the process ceiling before any tool can create a browser context.
+  // Registrars retain the same stable manager facade and mutable non-policy
+  // config holder for the lifetime of the extension.
+  const browserManager = BrowserManager.getBrowser(config);
+  // Captured while createAgentSession is inside the host-owned carrier. This also
+  // proves the extension saw the binding before any tool can create a page.
+  const browserScope = browserManager.captureCurrentScope();
   registerCoreTools(pi, config);
   registerNavigationTools(pi, config);
   registerClickTools(pi, config);
@@ -90,7 +97,13 @@ export default function playwrightExtension(pi: ExtensionAPI) {
   // --------------------------------------
   pi.on("session_start", async (_event: unknown, ctx: SessionStartContext) => {
     sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
-    Object.assign(config, loadConfig(ctx.cwd));
+    const refreshedConfig = loadConfig(ctx.cwd);
+    browserManager.assertProcessCeilingUnchanged(refreshedConfig.networkAllowlist);
+    Object.assign(config, {
+      ...refreshedConfig,
+      networkAllowlist: config.networkAllowlist,
+    });
+    browserManager.setDefaultOwnerScope(sessionId || "process-default");
 
     logger.info("Playwright extension initialized", {
       sessionId,
@@ -121,6 +134,12 @@ export default function playwrightExtension(pi: ExtensionAPI) {
   // --------------------------------------
   pi.on("session_shutdown", async () => {
     logger.info("Playwright extension shutting down", { sessionId });
-    await BrowserManager.getBrowser().cleanup();
+    if (browserScope.invocationPolicyPresent) {
+      await browserManager.cleanupCapturedScope(browserScope);
+    } else {
+      // Preserve ordinary process-shared behavior without allowing an
+      // unregistered session shutdown to close concurrent restricted scopes.
+      await browserManager.cleanupOrdinaryScopes();
+    }
   });
 }

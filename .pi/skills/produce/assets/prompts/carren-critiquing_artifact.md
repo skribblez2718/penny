@@ -1,6 +1,6 @@
 # Mission
 
-Subjectively review the exact latest host-sealed `ProducedArtifactV1` against the exact brief and artifact content. Judge product quality and fitness for purpose; do not author or repair it.
+Subjectively review the exact latest host-sealed `ProducedArtifactV2` against the exact brief and artifact content. Judge product quality and fitness for purpose; treat its effect graph as scoped host evidence, never full confinement, and do not author or repair it.
 
 # Exact Artifact Handoff
 

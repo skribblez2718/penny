@@ -2,10 +2,15 @@
 
 ## Scope
 
-The temporal KG is a primary-runtime durable-memory capability. Workers and
-skill drivers do not receive KG tools. Every write passes the extension's
-predicate allowlist before HTTP dispatch and remains subject to hub-side schema
-validation.
+The temporal KG is a primary-owned durable-memory capability. The unmarked
+primary runtime owns every mutation and temporal lifecycle operation. Catalog
+workers may receive a bounded read-only memory bundle when their owner-materialized
+active tool list includes YAML-declared memory reads; that bundle can include KG
+query, timeline, and
+statistics tools, but never KG writes, logstream access, or artifact/workflow
+handoff. Skill-driver runtimes receive no memory tools. Every write passes the
+extension's predicate allowlist before HTTP dispatch and remains subject to
+hub-side schema validation.
 
 ## Value gate
 
@@ -55,7 +60,7 @@ this document, `kg-policy.ts`, hub policy, and tests.
 
 ## Verification
 
-- [ ] Write came from the unmarked primary runtime.
+- [ ] Any write or temporal lifecycle change came from the unmarked primary runtime.
 - [ ] Relationship passed the future-query value gate.
 - [ ] Predicate is in schema v1.
 - [ ] Entity identifiers are stable and provenance is present.

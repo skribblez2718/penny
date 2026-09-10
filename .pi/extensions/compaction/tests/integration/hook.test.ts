@@ -8,6 +8,7 @@
  * - Budget overflow degrades (tightens caps) instead of abandoning
  */
 
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -93,13 +94,55 @@ function skillCall(goal: string, id: string, skill = "plan") {
   };
 }
 
-function skillResult(sessionId: string, toolCallId: string, success = true, runId?: string) {
-  const details = { success, session_id: sessionId, ...(runId ? { run_id: runId } : {}) };
+function outputRef(runId: string) {
+  const identity = {
+    branch_id: null,
+    kind: "agent-output",
+    operation_id: "final-1",
+    phase: "finalizing",
+    run_id: runId,
+    version: 1,
+  };
+  const digest = "a".repeat(64);
+  return {
+    schema_version: 2,
+    artifact_id: `art_${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`,
+    ...identity,
+    producer: "agent:fixture",
+    media_type: "text/markdown; charset=utf-8",
+    byte_length: 12,
+    content_digest: digest,
+    store_ref: `artifact://sha256/${digest}`,
+  };
+}
+
+function skillResult(
+  sessionId: string,
+  toolCallId: string,
+  success = true,
+  runId?: string,
+  skill = "plan"
+) {
+  const ref = runId ? outputRef(runId) : undefined;
+  const details = {
+    success,
+    session_id: sessionId,
+    skill_name: skill,
+    state: success ? "complete" : "error",
+    steps_total: 1,
+    agents_invoked: ["fixture-agent"],
+    errors: success ? [] : ["skill failed"],
+    result: {
+      met: success,
+      ...(ref ? { output_artifact_ref: ref } : {}),
+    },
+    ...(ref ? { output_artifact_ref: ref } : {}),
+  };
   return {
     role: "toolResult",
     toolName: "skill",
     toolCallId,
-    content: JSON.stringify(details),
+    content: success ? "Skill completed successfully" : "Skill failed",
     details,
   };
 }
@@ -111,7 +154,7 @@ describe("compactionExtension", () => {
     expect(pi.handlers).toHaveLength(1);
   });
 
-  it("emits a valid v2 artifact on a clean session", async () => {
+  it("emits a valid v3.1 artifact on a clean session", async () => {
     engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockCompactionPi({ cwd: projectRoot });
     compactionExtension(pi.api);
@@ -126,7 +169,7 @@ describe("compactionExtension", () => {
     expect(result.compaction.firstKeptEntryId).toBe("fkid-1");
     expect(result.compaction.tokensBefore).toBe(15000);
     expect(result.compaction.details).toBeDefined();
-    expect(result.compaction.details.schema_version).toBe("3.0.0");
+    expect(result.compaction.details.schema_version).toBe("3.1.0");
     expect(result.compaction.details.files.read).toContain("/tmp/read.md");
     expect(result.compaction.details.files.modified).toContain("/tmp/written.md");
     expect(result.compaction.details.files.modified).toContain("/tmp/edited.md");
@@ -162,7 +205,7 @@ describe("compactionExtension", () => {
         fileOps: { read: new Set(), written: new Set(), edited: new Set() },
         messagesToSummarize: [
           skillCall("Migrate research skill onto engine", "tc-1", "code"),
-          skillResult("code-1751700000000", "tc-1", true, "code-a1b2c3"),
+          skillResult("code-1751700000000", "tc-1", true, "code-a1b2c3", "code"),
         ],
       },
     });
@@ -321,21 +364,24 @@ describe("compactionExtension", () => {
         messagesToSummarize: [
           skillCall("Design a scoring system", "tc-1"),
           skillResult("plan-1", "tc-1", true),
-          { role: "user", content: "Now build the goal-recency compaction fix end to end" },
+          { role: "user", content: "F04" },
         ],
       },
     });
     const result = await pi.emitRequired(event);
 
-    expect(result.compaction.details.goal).toBe(
-      "Now build the goal-recency compaction fix end to end"
-    );
+    expect(result.compaction.details.goal).toBe("F04");
     const dominantSkill = result.compaction.details.dominant_skill;
     expect(dominantSkill).toBeDefined();
     if (!dominantSkill) throw new Error("dominant skill metadata was not emitted");
-    expect(dominantSkill.superseded).toBe(true);
-    // The skill stays listed under Active Skill even though it no longer sets Goal.
-    expect(result.compaction.summary).toContain("## Active Skill");
+    expect(dominantSkill).toMatchObject({
+      session_id: "plan-1",
+      completed: true,
+      result_status: "success",
+      superseded: true,
+    });
+    // The completed skill remains continuity metadata but no longer sets Goal.
+    expect(result.compaction.summary).toContain("## Skill Continuity");
     expect(result.compaction.summary).toContain("superseded by a newer request");
   });
 

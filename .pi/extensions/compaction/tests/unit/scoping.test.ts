@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,22 +10,80 @@ import {
   parsePriorRunIds,
   parseResumeRefs,
 } from "../../index.js";
+import type { SessionMessage } from "../../pi-messages.js";
 
-function skillResult(details: Record<string, unknown>) {
+function artifactRef(runId: string, operationId: string) {
+  const identity = {
+    branch_id: null,
+    kind: "agent-output",
+    operation_id: operationId,
+    phase: "finalizing",
+    run_id: runId,
+    version: 1,
+  };
+  const digest = "a".repeat(64);
   return {
-    role: "toolResult",
-    toolName: "skill",
-    content: JSON.stringify(details),
-    details,
+    schema_version: 2,
+    artifact_id: `art_${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`,
+    ...identity,
+    producer: "agent:fixture",
+    media_type: "text/markdown; charset=utf-8",
+    byte_length: 12,
+    content_digest: digest,
+    store_ref: `artifact://sha256/${digest}`,
   };
 }
 
+function skillExchange(id: string, overrides: Record<string, unknown> = {}): SessionMessage[] {
+  const details = {
+    success: true,
+    session_id: `session-${id}`,
+    skill_name: "code",
+    state: "complete",
+    steps_total: 1,
+    agents_invoked: ["fixture-agent"],
+    errors: [],
+    ...overrides,
+  };
+  return [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id,
+          name: "skill",
+          arguments: { skill_name: "code", goal: `Goal ${id}` },
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "skill",
+      toolCallId: id,
+      content: "Structured skill result",
+      details,
+    },
+  ];
+}
+
 describe("exact run-id collection", () => {
-  it("collects only explicit run IDs from named skill-result fields", () => {
+  it("collects only explicit run IDs from validated, exactly paired skill fields", () => {
+    const firstRef = artifactRef("run-one", "final-1");
+    const secondRef = artifactRef("run-two", "partial-1");
     const ids = collectExplicitRunIds([
-      skillResult({ run_id: "run-one", session_id: "not-a-run" }),
-      skillResult({
-        result: { output_artifact_ref: { run_id: "run-two" } },
+      ...skillExchange("tc-1", {
+        result: {
+          met: true,
+          output_artifact_ref: firstRef,
+          best_partial_artifact_refs: [secondRef],
+        },
+        output_artifact_ref: firstRef,
+        best_partial_artifact_refs: [secondRef],
+      }),
+      ...skillExchange("tc-2", {
+        success: false,
+        state: "awaiting_clarification",
         escalation: { questions: [{ approval_run_id: "run-three" }] },
       }),
       {
@@ -35,11 +95,27 @@ describe("exact run-id collection", () => {
     expect(ids.sort()).toEqual(["run-one", "run-three", "run-two"]);
   });
 
-  it("does not infer a run from session IDs or malformed content", () => {
+  it("does not infer a run from session IDs or malformed prose", () => {
     expect(
       collectExplicitRunIds([
-        skillResult({ session_id: "session-only" }),
-        { role: "toolResult", toolName: "skill", content: "not json" },
+        ...skillExchange("tc-1"),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-2",
+              name: "skill",
+              arguments: { skill_name: "code", goal: "Malformed result" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolName: "skill",
+          toolCallId: "tc-2",
+          content: JSON.stringify({ run_id: "prose-only-run" }),
+        },
       ])
     ).toEqual([]);
   });
@@ -56,10 +132,16 @@ describe("exact run-id collection", () => {
     ].join("\n");
     expect(parsePriorRunIds(prior)).toEqual(["run-prior"]);
     expect(parsePriorMemoryIds(prior)).toEqual(["drawer-explicit-1"]);
-    expect(collectExactRunIds([skillResult({ run_id: "run-new" })], prior).sort()).toEqual([
-      "run-new",
-      "run-prior",
-    ]);
+    const currentRef = artifactRef("run-new", "final-current");
+    expect(
+      collectExactRunIds(
+        skillExchange("tc-current", {
+          result: { met: true, output_artifact_ref: currentRef },
+          output_artifact_ref: currentRef,
+        }),
+        prior
+      ).sort()
+    ).toEqual(["run-new", "run-prior"]);
   });
 });
 

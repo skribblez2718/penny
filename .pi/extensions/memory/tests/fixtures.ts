@@ -24,7 +24,9 @@ export interface RegisteredMemoryTool {
   execute(
     toolCallId: string,
     params: Record<string, unknown>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onUpdate?: unknown,
+    context?: unknown
   ): Promise<TextToolResult>;
 }
 
@@ -34,6 +36,10 @@ export interface MemoryExtensionApiFake {
   registerTool(tool: RegisteredMemoryTool): void;
   registerCommand: (...args: unknown[]) => unknown;
   on(event: string, handler: MemoryExtensionHandler): void;
+  sendMessage?: ExtensionAPI["sendMessage"];
+  appendEntry?(customType: string, data: unknown): void;
+  getActiveTools?: ExtensionAPI["getActiveTools"];
+  setActiveTools?: ExtensionAPI["setActiveTools"];
 }
 
 function isRegisteredMemoryTool(value: unknown): value is RegisteredMemoryTool {
@@ -49,7 +55,7 @@ function isRegisteredMemoryTool(value: unknown): value is RegisteredMemoryTool {
 
 /** Build a complete typed host while exposing only narrowed registration values. */
 export function asMemoryExtensionApi(fake: MemoryExtensionApiFake): ExtensionAPI {
-  return createTestExtensionApi({
+  const base = createTestExtensionApi({
     onRegisterTool(tool) {
       if (!isRegisteredMemoryTool(tool)) {
         throw new Error("memory extension registered an invalid tool fixture");
@@ -57,13 +63,22 @@ export function asMemoryExtensionApi(fake: MemoryExtensionApiFake): ExtensionAPI
       fake.registerTool(tool);
     },
     onRegisterCommand: (name, options) => fake.registerCommand(name, options),
+    onAppendEntry: (customType, data) => fake.appendEntry?.(customType, data),
     onEvent(event, handler) {
       fake.on(
         event,
         requireFunction(handler, `memory extension registered an invalid ${event} handler`)
       );
     },
+    getActiveTools: () => fake.getActiveTools?.() ?? [],
+    onSetActiveTools: (names) => fake.setActiveTools?.(names),
   });
+  return {
+    ...base,
+    sendMessage(message, options) {
+      fake.sendMessage?.(message, options);
+    },
+  };
 }
 
 /** Fail a test with a useful invariant when an expected fixture value is absent. */
@@ -99,6 +114,7 @@ export function testConfig(overrides: TestConfigOverrides = {}): MemoryRuntimeCo
   return {
     mode: "hub",
     writeEnabled: true,
+    autoDiary: { mode: "retain", shutdownTimeoutMs: 2_000 },
     logstream: { mode: "disabled", stream: null, rooms: [] },
     platformConfig: {
       contractVersion: 1,
@@ -208,6 +224,7 @@ export function extensionEnv(
   return {
     PENNY_MEMORY_MODE: "hub",
     PENNY_MEMORY_WRITE_MODE: "enabled",
+    PENNY_MEMORY_AUTO_DIARY_MODE: "retain",
     PENNY_MEMORY_TRUST_MODE: "isolated",
     PENNY_MEMORY_PRINCIPAL_ID: "penny-primary",
     PENNY_MEMORY_MCP_ENDPOINT: "http://127.0.0.1:8765",

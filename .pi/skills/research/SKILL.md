@@ -2,7 +2,7 @@
 name: research
 description: Structured research workflow with Quick, Standard, and Deep modes. Use when a task requires investigating an unfamiliar topic or gathering authoritative external evidence. Do not use for simple lookups, analysis of already-supplied material, or implementation when sufficient evidence exists.
 metadata:
-  version: "3.0.0"
+  version: "3.0.1"
   penny:
     engine: orchestration
     mempalace: false
@@ -81,7 +81,9 @@ Every cognitive directive carries exact `input_artifacts` plus an owner output c
 
 Typed `prior_grounded_synthesis` imports require canonical `penny.grounded-synthesis.v1` bytes in a matching `semantic-core` artifact. Untyped historical `agent-output` inputs remain accepted through `legacy_context`. Envelope, render, or receipt substitution fails before model work.
 
-Owner-resolved context persists only `ContextSourceRefV1` metadata envelopes. Approved-KB content must already be approved and pre-resolved; research performs no KB query, ingestion, promotion, approval, or write. Private KB bodies never enter checkpoints, generic artifacts, receipts, renders, envelopes, or telemetry. Context never changes YAML tools.
+Resolver-v2 admissions persist metadata-only `ContextSourceRefV2` envelopes. Admission-only compatibility may create exact V1 envelopes, and exact V1 bytes remain readable, but neither can dispatch external context without resolver-v2 revalidation. Every external use requires a resolver-v2 response containing the exact current source/revision/approval identity, bytes, freshness, provider eligibility, and conflict state. The owner validates that one snapshot immediately before each worker/model-client dispatch, including retries, restart, and queued branches. `valid_from` is inclusive and `valid_through` is exclusive, so equality is expired; missing, unavailable, future-dated, stale, revoked, ineligible, conflicted, drifted, or admission-only resolution fails before model input. An exact V1 envelope can proceed only after resolver-v2 revalidation and is never rewritten.
+
+Caller-supplied output-shape context remains fixed to its originally admitted bytes across restart and receives no invented external approval. Approved-KB content must already be approved and pre-resolved; research performs no KB query, ingestion, promotion, approval, or write. Private KB bodies never enter checkpoints, generic artifacts, receipts, renders, envelopes, or telemetry. Context never changes YAML tools. Eligibility is a bounded dispatch-time snapshot: revocation after validation and before or during the model call remains the unavoidable residual race, not a continuous-monitoring guarantee.
 
 ## Agent and Host Flow
 

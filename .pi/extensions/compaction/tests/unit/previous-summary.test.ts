@@ -71,7 +71,13 @@ describe("carry-forward precedence in extractSessionState", () => {
   it("never overrides an incomplete active skill with carry-forward", () => {
     const state = extractSessionState(
       [],
-      { skill_name: "code", session_id: "code-1", goal: "Skill-driven goal", completed: false },
+      {
+        skill_name: "code",
+        session_id: "code-1",
+        goal: "Skill-driven goal",
+        completed: false,
+        result_status: "incomplete",
+      },
       undefined,
       priorGoal
     );

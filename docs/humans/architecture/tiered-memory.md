@@ -2,13 +2,13 @@
 
 ## The tiers
 
-| Tier | Content                                                                       | Access                            |
-| ---- | ----------------------------------------------------------------------------- | --------------------------------- |
-| T0   | Stable frame and identity                                                     | Always present.                   |
-| T1   | Current conversation, compact run state, selected artifact refs               | Current context/checkpointer.     |
-| T2   | Recent primary diary and warm classified data                                 | Explicit relevant primary recall. |
-| T3   | Curated decisions, architecture, preferences, reusable knowledge, temporal KG | Explicit primary recall.          |
-| T4   | Cold archive and legacy corpus                                                | Manual offline recovery only.     |
+| Tier | Content                                                                       | Access                                              |
+| ---- | ----------------------------------------------------------------------------- | --------------------------------------------------- |
+| T0   | Stable frame and identity                                                     | Always present.                                     |
+| T1   | Current conversation, compact run state, selected artifact refs               | Current context/checkpointer.                       |
+| T2   | Recent primary diary and warm classified data                                 | Explicit relevant primary or granted-worker recall. |
+| T3   | Curated decisions, architecture, preferences, reusable knowledge, temporal KG | Explicit primary or granted-worker read.            |
+| T4   | Cold archive and legacy corpus                                                | Manual offline recovery only.                       |
 
 Exact workflow stage output is not memory: it lives in immutable owner artifacts.
 Workers read exact grants with `artifact_read`; the checkpointer retains refs.

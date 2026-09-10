@@ -1,5 +1,5 @@
 ---
-description: Fetch a YouTube video transcript and save it as transcription.md in the specified directory
+description: Fetch a YouTube video transcript and save it as transcript.md in the specified directory
 argument-hint: "<youtube-url> <save-dir>"
 ---
 

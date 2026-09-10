@@ -11,6 +11,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Dialog, ConsoleMessage, Request, Response } from "playwright";
 import { BrowserManager } from "../browser.js";
+import { describeBrowserDestination } from "../network-policy.js";
 import type { PlaywrightConfig } from "../types.js";
 
 export function registerDialogNetworkTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
@@ -108,7 +109,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
           content: [
             {
               type: "text",
-              text: `Dialog handling failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Dialog handling failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -195,7 +196,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
           content: [
             {
               type: "text",
-              text: `Console capture failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Console capture failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -242,6 +243,8 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
       const page = await browser.getPage();
       const types = params.resourceTypes;
       const limit = params.limit ?? 50;
+      const restricted = browser.getPolicyStatus().mode !== "unrestricted";
+      const safeUrl = (url: string): string => (restricted ? describeBrowserDestination(url) : url);
 
       try {
         const requests: Array<{
@@ -255,7 +258,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
           const resourceType = request.resourceType();
           if (!types || types.some((type) => type === resourceType)) {
             requests.push({
-              url: request.url(),
+              url: safeUrl(request.url()),
               method: request.method(),
               resourceType,
               status: 0, // Not yet available at request time
@@ -264,7 +267,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
         };
 
         const responseHandler = (response: Response) => {
-          const url = response.url();
+          const url = safeUrl(response.url());
           const existing = requests.find((r) => r.url === url);
           if (existing) {
             existing.status = response.status();
@@ -302,7 +305,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
           content: [
             {
               type: "text",
-              text: `Network capture failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Network capture failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -328,6 +331,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
       const urlPattern = params.urlPattern;
+      const restricted = browser.getPolicyStatus().mode !== "unrestricted";
 
       try {
         const details = await page.evaluate((pattern) => {
@@ -367,21 +371,24 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
           };
         }
 
+        const safeDetails = restricted
+          ? { ...details, url: describeBrowserDestination(details.url) }
+          : details;
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(details, null, 2),
+              text: JSON.stringify(safeDetails, null, 2),
             },
           ],
-          details,
+          details: safeDetails,
         };
       } catch (err) {
         return {
           content: [
             {
               type: "text",
-              text: `Network request details failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Network request details failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,

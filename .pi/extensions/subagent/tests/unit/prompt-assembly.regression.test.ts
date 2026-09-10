@@ -111,25 +111,18 @@ function restoreEnv(
   else process.env[name] = value;
 }
 
-function createMockProcess(): {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  on: (event: string, callback: (...args: unknown[]) => void) => unknown;
-  kill: ReturnType<typeof vi.fn>;
-  killed: boolean;
-} {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
-  const proc = {
+function createMockProcess() {
+  const stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+  const stderr = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+  const proc = Object.assign(new EventEmitter(), {
     stdout,
     stderr,
-    killed: false,
-    kill: vi.fn(),
-    on: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
-      if (event === "close") queueMicrotask(() => callback(0));
-      return proc;
-    }),
-  };
+    kill: vi.fn(() => true),
+  });
+  queueMicrotask(() => {
+    proc.emit("exit", 0, null);
+    proc.emit("close", 0, null);
+  });
   return proc;
 }
 

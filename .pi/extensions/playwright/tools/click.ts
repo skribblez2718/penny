@@ -80,7 +80,7 @@ export function registerClickTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Click failed: ${err instanceof Error ? err.message : String(err)}\n\nTry playwright_snapshot first to verify the element exists and is visible.`,
+              text: `Click failed: ${browser.safeErrorMessage(err)}\n\nTry playwright_snapshot first to verify the element exists and is visible.`,
             },
           ],
           isError: true,
@@ -130,7 +130,7 @@ export function registerClickTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Double-click failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Double-click failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -180,7 +180,7 @@ export function registerClickTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Hover failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Hover failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -234,7 +234,7 @@ export function registerClickTools(pi: ExtensionAPI, _config: PlaywrightConfig) 
           content: [
             {
               type: "text",
-              text: `Drag failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Drag failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,

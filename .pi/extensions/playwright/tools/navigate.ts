@@ -72,7 +72,7 @@ export function registerNavigationTools(pi: ExtensionAPI, _config: PlaywrightCon
           content: [
             {
               type: "text",
-              text: `Error: Cannot go back — no previous page in history. ${err instanceof Error ? err.message : String(err)}`,
+              text: `Error: Cannot go back — no previous page in history. ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -119,7 +119,7 @@ export function registerNavigationTools(pi: ExtensionAPI, _config: PlaywrightCon
           content: [
             {
               type: "text",
-              text: `Error: Cannot go forward — no forward page in history. ${err instanceof Error ? err.message : String(err)}`,
+              text: `Error: Cannot go forward — no forward page in history. ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -159,7 +159,14 @@ export function registerNavigationTools(pi: ExtensionAPI, _config: PlaywrightCon
     parameters: Type.Object({}),
     async execute(_toolCallId, _params) {
       const page = await browser.getPage();
-      await page.reload({ timeout: 30000, waitUntil: "domcontentloaded" });
+      try {
+        await page.reload({ timeout: 30000, waitUntil: "domcontentloaded" });
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Reload failed: ${browser.safeErrorMessage(err)}` }],
+          isError: true,
+        };
+      }
 
       const snapshot = await browser.snapshot();
       return {

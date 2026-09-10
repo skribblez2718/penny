@@ -53,8 +53,10 @@ and unresolved issues.]
   when the package must be hidden; never declare redundant `false`.
 - Do not add a top-level `license`; Penny's repository-level license governs tracked skills.
 - Do not add a room-manifest requirement.
-- Do not add worker memory tools/instructions, session rooms, duplicate
-  prechecks, routine KG links, or a claim that full output lives in memory.
+- Do not add worker memory tools in a skill manifest. Bounded read-only recall is
+  declared only by agent YAML; never add memory-write/logstream, session-room, or
+  memory-handoff instructions, duplicate prechecks, routine KG links, or a claim
+  that full output lives in memory.
 - Keep complete stage output distinct from routing SUMMARY data.
 
 ## Verification

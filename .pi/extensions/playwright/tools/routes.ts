@@ -22,7 +22,7 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
     name: "playwright_route",
     label: "Route Intercept",
     description:
-      "Intercept and modify network requests matching a URL pattern. Can abort, fulfill with custom response, or continue.",
+      "Intercept and modify network requests matching a URL pattern. Can abort or fulfill with a custom response. Refused in restricted network-policy scopes because page routes take precedence over context policy routes.",
     promptSnippet: "Intercept network requests by URL pattern",
     parameters: Type.Object({
       urlPattern: Type.String({
@@ -44,11 +44,19 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
       ),
     }),
     async execute(_toolCallId, params) {
-      const page = await browser.getPage();
+      const denial = browser.restrictedOperationDenial("page-request-routing");
+      if (denial !== null) {
+        return {
+          content: [{ type: "text", text: `${denial.code}: ${denial.message}` }],
+          details: { reasonCode: denial.code, operation: "page-request-routing" },
+          isError: true,
+        };
+      }
       const pattern = params.urlPattern;
       const action = params.action;
 
       try {
+        const page = await browser.getPage();
         if (action === "abort") {
           await page.route(pattern, (route) => route.abort());
         } else {
@@ -75,7 +83,7 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
           content: [
             {
               type: "text",
-              text: `Route failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Route failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -91,7 +99,7 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
     name: "playwright_unroute",
     label: "Remove Routes",
     description:
-      "Remove previously set route intercepts. Call with urlPattern to remove specific route, or omit to remove all.",
+      "Remove previously set page route intercepts. Refused in restricted network-policy scopes.",
     promptSnippet: "Remove network route intercepts",
     parameters: Type.Object({
       urlPattern: Type.Optional(
@@ -101,9 +109,17 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
       ),
     }),
     async execute(_toolCallId, params) {
-      const page = await browser.getPage();
+      const denial = browser.restrictedOperationDenial("page-request-routing");
+      if (denial !== null) {
+        return {
+          content: [{ type: "text", text: `${denial.code}: ${denial.message}` }],
+          details: { reasonCode: denial.code, operation: "page-request-routing" },
+          isError: true,
+        };
+      }
 
       try {
+        const page = await browser.getPage();
         await page.unroute(params.urlPattern ?? "**/*");
 
         return {
@@ -123,7 +139,7 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
           content: [
             {
               type: "text",
-              text: `Unroute failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Unroute failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -172,7 +188,7 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
           content: [
             {
               type: "text",
-              text: `Fill form failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Fill form failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -240,7 +256,7 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
           content: [
             {
               type: "text",
-              text: `Upload failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Upload failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,
@@ -301,7 +317,7 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
           content: [
             {
               type: "text",
-              text: `Drop failed: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Drop failed: ${browser.safeErrorMessage(err)}`,
             },
           ],
           isError: true,

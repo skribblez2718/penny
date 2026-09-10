@@ -2,13 +2,13 @@
 
 ## Tier map
 
-| Tier | Content                                                                       | Access                                                 |
-| ---- | ----------------------------------------------------------------------------- | ------------------------------------------------------ |
-| T0   | Cognitive Frame and stable identity                                           | Always in prompt.                                      |
-| T1   | Current conversation, compact run state, selected artifact refs               | Active context/checkpointer.                           |
-| T2   | Recent primary diary and explicitly classified warm data                      | Bounded primary recall when relevant.                  |
-| T3   | Curated architecture, decisions, preferences, reusable knowledge, temporal KG | Explicit primary retrieval.                            |
-| T4   | Cold archived legacy/scratch corpus                                           | Offline/manual recovery; never automatic prompt input. |
+| Tier | Content                                                                       | Access                                                  |
+| ---- | ----------------------------------------------------------------------------- | ------------------------------------------------------- |
+| T0   | Cognitive Frame and stable identity                                           | Always in prompt.                                       |
+| T1   | Current conversation, compact run state, selected artifact refs               | Active context/checkpointer.                            |
+| T2   | Recent primary diary and explicitly classified warm data                      | Bounded primary or granted-worker recall when relevant. |
+| T3   | Curated architecture, decisions, preferences, reusable knowledge, temporal KG | Explicit primary or granted-worker read.                |
+| T4   | Cold archived legacy/scratch corpus                                           | Offline/manual recovery; never automatic prompt input.  |
 
 Exact workflow stage bytes are not a memory tier. They live in the immutable
 artifact plane; `RunContext` stores only compact refs and routing state.

@@ -2,19 +2,22 @@
 
 ## Runtime ownership
 
-The unmarked primary runtime alone exposes durable-memory tools. Worker and
-skill-driver processes expose none. Active workflow handoff uses immutable
-owner artifacts, and orchestration state uses the checkpointer.
+The unmarked primary runtime owns the full durable-memory surface, including all
+writes and lifecycle hooks. Catalog workers may receive an owner-granted,
+YAML-declared bounded read-only recall/KG bundle; they receive no write,
+advisory-log, or lifecycle capabilities. Skill-driver processes expose no memory
+tools. Active workflow handoff uses immutable owner artifacts, and orchestration
+state uses the checkpointer.
 
 ## Tiers
 
-| Tier | Content                                   | Retrieval                        |
-| ---- | ----------------------------------------- | -------------------------------- |
-| T0   | Stable frame/identity                     | Always present.                  |
-| T1   | Conversation + compact run state/refs     | Current context/checkpointer.    |
-| T2   | Primary diary and warm classified data    | Bounded relevant primary recall. |
-| T3   | Curated durable knowledge and temporal KG | Explicit primary recall.         |
-| T4   | Cold archive / legacy corpus              | Manual offline recovery only.    |
+| Tier | Content                                   | Retrieval                                          |
+| ---- | ----------------------------------------- | -------------------------------------------------- |
+| T0   | Stable frame/identity                     | Always present.                                    |
+| T1   | Conversation + compact run state/refs     | Current context/checkpointer.                      |
+| T2   | Primary diary and warm classified data    | Bounded relevant primary or granted-worker recall. |
+| T3   | Curated durable knowledge and temporal KG | Explicit primary or granted-worker read.           |
+| T4   | Cold archive / legacy corpus              | Manual offline recovery only.                      |
 
 ## Operational rules
 
@@ -27,13 +30,13 @@ owner artifacts, and orchestration state uses the checkpointer.
 - Treat old skill rooms as legacy corpus, never active handoff or deletion authority.
 - Use one authenticated supervised MemPalace 3.7.1 HTTP hub; no production/admin raw fallback.
 - Keep the optional advisory logstream default-off and primary-only. It is bounded, strictly self-addressed append/list/wait/ack and rejects raw upstream broadcasts. Dedicated artifact/patch endpoints and refs are absent; free-form advisory body text is non-authoritative by policy and is never consumed as artifact handoff, workflow state, a persistence receipt, or recovery input.
-- Keep generic `platform-memory` logstream denial and worker memory/tool scrubbing unchanged.
+- Keep generic `platform-memory` logstream denial; worker access remains the exact read-only bundle with no writes or lifecycle hooks.
 - Keep uninstall data-preserving.
 
 ## Verification
 
 - [ ] No retrieved memory appears in worker directives.
-- [ ] No worker memory/logstream tool or lifecycle hook exists.
+- [ ] Workers receive only the owner-granted read-only memory bundle; no worker write/logstream tool or lifecycle hook exists.
 - [ ] Artifact continuation is complete and exact for workflow inputs.
 - [ ] Advisory list/wait enforces requested filters, anchor exclusion, unique IDs, and strict positive sequence order.
 - [ ] Advisory ack proves configured stream/principal/correlation under bounded reads.
@@ -45,5 +48,5 @@ owner artifacts, and orchestration state uses the checkpointer.
 | File                                        | Purpose                     |
 | ------------------------------------------- | --------------------------- |
 | `docs/agents/architecture/tiered-memory.md` | Full architecture           |
-| `docs/agents/memory/integration.md`         | HTTP and primary policy     |
+| `docs/agents/memory/integration.md`         | HTTP and role-scoped policy |
 | `docs/agents/memory/schema.md`              | Retention and legacy corpus |

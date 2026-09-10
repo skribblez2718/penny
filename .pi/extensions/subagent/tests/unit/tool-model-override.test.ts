@@ -36,7 +36,17 @@ const mockRunSingleAgent = vi.fn<RunSingleAgent>(() =>
     agentSource: "project" as const,
     task: "test",
     exitCode: 0,
-    messages: [],
+    processState: "closed" as const,
+    processExitObserved: true,
+    processCloseObserved: true,
+    agentEndObserved: true,
+    messages: [
+      {
+        role: "assistant" as const,
+        content: [],
+        stopReason: "stop",
+      },
+    ],
     stderr: "",
     usage: {
       input: 0,
@@ -45,7 +55,7 @@ const mockRunSingleAgent = vi.fn<RunSingleAgent>(() =>
       cacheWrite: 0,
       cost: 0,
       contextTokens: 0,
-      turns: 0,
+      turns: 1,
     },
   })
 );
@@ -351,7 +361,7 @@ describe("subagent tool model override", () => {
     }
   });
 
-  it("returns a communication error when mandatory output persistence fails", async () => {
+  it("returns a failure when mandatory output persistence fails", async () => {
     mockPersistDirectChainOutput.mockRejectedValueOnce(new Error("manifest write failed"));
     const mod = await import("../../index.js");
     const pi = createMockPi();
@@ -364,7 +374,9 @@ describe("subagent tool model override", () => {
       { cwd: process.cwd(), hasUI: false }
     );
     expect(response.isError).toBe(true);
-    expect(response.content[0].text).toContain("communication failed");
+    expect(response.content[0].text).toContain("Parent outcome: aggregate=failed");
+    expect(response.content[0].text).toContain("terminal=completed");
+    expect(response.content[0].text).toContain("output_delivery=failed");
     expect(response.content[0].text).toContain("ARTIFACT_PERSIST_FAILED");
   });
 

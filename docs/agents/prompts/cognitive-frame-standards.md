@@ -30,16 +30,18 @@ The authored frame. Every subsection is lean, universal policy and carries **no 
 | **Work Policy**            | Task authority (stated request is the goal), assumption/clarification balance, simplest-sufficient path, state inspection, conditional retrieval, freshness handling, evidence-status discipline |
 | **Completion**             | Success criteria at smallest useful scope, evidence-backed completion claims, failures as evidence, honest partial results, independent evidence preference                                      |
 | **Memory and Improvement** | Value-conditional memory retrieval and storage; the capability ratchet (outcomes over implementations, remove scaffolding that stops earning its cost)                                           |
-| **Files and Delivery**     | Requested changes in the project tree; scratch in `/tmp/`/mempalace; answer-first delivery                                                                                                       |
+| **Files and Delivery**     | Requested changes in the project tree; incidental scratch in `/tmp/` or an approved ignored staging directory; answer-first delivery                                                             |
 | **On-Demand Protocols**    | Parent-only routing (lowest-complexity path), clarification trigger, compaction-resume trigger, KG-linking trigger (names each; paths resolve via the index)                                     |
 
 Sections consolidate over time — the invariant is not a fixed list but that every subsection is universal policy with no reference paths. This table describes the canonical structure as of its last update; the frame file is authoritative.
 
-**The `# On-Demand Protocols` heading is a wire format.** The agent runner strips exactly that section before passing the frame to subagents. Parent-only guidance must live under that exact heading; renaming it is an implementation-breaking change unless the runner and tests change with it.
+**The `# On-Demand Protocols` heading is a wire format.** The agent runner derives a worker base prompt from `.pi/SYSTEM.md`, substitutes its date/environment values, replaces the Penny persona name with the worker's display name, and strips exactly that parent-only section. Parent-only guidance must live under that exact heading; renaming it is an implementation-breaking change unless the runner and tests change with it.
 
 ### 4. Tool and boundary content
 
-The frame names capabilities by trigger, not by inventory. Detailed tool-usage tactics and Pi documentation references are NOT in the frame — they live in `docs/penny/tool-usage.md` and the root `AGENTS.md`, resolved on demand through the index chain. (As of the pinned Pi version, Pi does not inject tool definitions when a custom prompt is present; treat that as version-specific behavior to regression-test on Pi upgrades, not a permanent guarantee.)
+The frame names capabilities by trigger, not by inventory. Detailed tool-usage tactics and Pi documentation references are NOT in the frame — they live in `docs/penny/tool-usage.md` and the root `AGENTS.md`, resolved on demand through the index chain.
+
+Worker semantics have two separate inputs: the transformed cognitive frame and the resolved role/state prompt describe behavior, while invocation-time tool allowlists and owner-materialized capability grants determine actual access. Never infer a worker's tool inventory from the primary frame, a role prompt, or model-emitted text. (As of the pinned Pi version, Pi does not inject tool definitions when a custom prompt is present; treat that as version-specific behavior to regression-test on Pi upgrades, not a permanent guarantee.)
 
 ## What Belongs in the Cognitive Frame
 
@@ -148,7 +150,7 @@ Before modifying SYSTEM.md, verify every item:
 - [ ] Work Policy present (task authority, assumption/clarification balance, simplest-sufficient path, conditional retrieval, freshness, evidence-status discipline)
 - [ ] Completion present (criteria at smallest useful scope, evidence-backed claims, failures as evidence, independent-evidence preference)
 - [ ] Memory and Improvement present (value-conditional retrieval/storage; capability ratchet)
-- [ ] Files and Delivery present (requested changes in tree; scratch in `/tmp/`/mempalace; answer-first)
+- [ ] Files and Delivery present (requested changes in tree; incidental scratch in `/tmp/` or an approved ignored staging directory; answer-first)
 - [ ] On-Demand Protocols present under the exact `# On-Demand Protocols` heading (runner wire format), containing parent-only routing, clarification trigger, compaction-resume trigger, KG-linking trigger — protocols named by trigger, NO file paths
 - [ ] Routing is lowest-complexity-sufficient — no delegate-first mandate
 - [ ] **No file paths anywhere in `<system_context>`** — knowledge references live in the AGENTS.md index chain

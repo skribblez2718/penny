@@ -15,6 +15,14 @@ import {
   assertUnique,
   validateSkillSchema,
 } from "./common.js";
+import {
+  ASSESS_EFFECT_PHASES,
+  EffectEvidenceGraphV1Schema,
+  effectEvidenceSha256,
+  legacyUnverifiedEffectEvidence,
+  validateEffectEvidenceGraph,
+  type EffectEvidenceGraphV1,
+} from "./effects.js";
 
 const MAX_REQUEST_ITEMS = 64;
 const MAX_ASSESSMENT_ITEMS = 32;
@@ -1203,4 +1211,742 @@ export function validateAssessmentProductEnvelope(value: unknown): AssessmentPro
   const { envelope_id: envelopeId, ...body } = envelope;
   assertDerived(envelopeId, "asenv_", body, "AssessmentProductEnvelopeV1");
   return envelope;
+}
+
+// ---------------------------------------------------------------------------
+// V2 effect-evidence contracts. V1 declarations above are immutable compatibility
+// contracts: their literal-false fields are historical assertions, not evidence.
+// ---------------------------------------------------------------------------
+
+const {
+  schema_version: _assessmentV1Version,
+  external_actions_performed: _assessmentV1External,
+  filesystem_writes_performed: _assessmentV1Writes,
+  tests_executed: _assessmentV1Tests,
+  changes_started: _assessmentV1Changes,
+  ...AssessmentCoreV2Properties
+} = AssessmentCoreProperties;
+
+export const AssessmentDraftV2Schema = Type.Object(
+  { schema_version: Type.Literal(2), ...AssessmentCoreV2Properties },
+  { additionalProperties: false }
+);
+export type AssessmentDraftV2 = Readonly<Static<typeof AssessmentDraftV2Schema>>;
+
+export const AssessmentV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.assessment.v2"),
+    schema_version: Type.Literal(2),
+    ...AssessmentCoreV2Properties,
+    request: AssessmentRequestV1Schema,
+    request_sha256: Sha256Schema,
+    source_lineage: AssessmentSourceLineageV1Schema,
+    effect_evidence: EffectEvidenceGraphV1Schema,
+  },
+  { additionalProperties: false }
+);
+export type AssessmentV2 = Readonly<Static<typeof AssessmentV2Schema>>;
+
+export const AssessmentValidityReceiptV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.assessment-validity-receipt.v2"),
+    schema_version: Type.Literal(2),
+    receipt_id: Type.String({ pattern: "^asvr_[a-f0-9]{64}$" }),
+    run_id: OpaqueIdSchema,
+    verdict: Type.Literal("PASS"),
+    reviewer: Type.Literal("vera"),
+    request_ref: ArtifactRefSchema,
+    analysis_ref: ArtifactRefSchema,
+    draft_ref: ArtifactRefSchema,
+    assessment_ref: ArtifactRefSchema,
+    vera_report_ref: ArtifactRefSchema,
+    execution_receipt_id: OpaqueIdSchema,
+    execution_result_sha256: Sha256Schema,
+    created_at: Rfc3339UtcSchema,
+    effect_evidence: EffectEvidenceGraphV1Schema,
+    minted_by: Type.Literal("host:assessment-validity-authority"),
+  },
+  { additionalProperties: false }
+);
+export type AssessmentValidityReceiptV2 = Readonly<
+  Static<typeof AssessmentValidityReceiptV2Schema>
+>;
+
+const ASSESSMENT_INTEGRITY_CHECKS_V2 = [
+  "canonical_assessment",
+  "exact_criterion_coverage",
+  "exact_evidence_indexes",
+  "disposition_invariants",
+  "exact_source_lineage",
+  "latest_vera_pass",
+  "signed_worker_evidence",
+  "current_product_receipt",
+  "effect_evidence_consistency",
+] as const;
+
+export const AssessmentProductIntegrityV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.assessment-product-integrity.v2"),
+    schema_version: Type.Literal(2),
+    integrity_id: Type.String({ pattern: "^asir_[a-f0-9]{64}$" }),
+    status: Type.Literal("PASS"),
+    request_ref: ArtifactRefSchema,
+    analysis_ref: ArtifactRefSchema,
+    draft_ref: ArtifactRefSchema,
+    assessment_ref: ArtifactRefSchema,
+    vera_report_ref: ArtifactRefSchema,
+    validity_receipt_ref: ArtifactRefSchema,
+    execution_receipt_ids: Type.Array(OpaqueIdSchema, {
+      minItems: 3,
+      maxItems: 12,
+      uniqueItems: true,
+    }),
+    checks: Type.Array(
+      Type.Union([
+        Type.Literal("canonical_assessment"),
+        Type.Literal("exact_criterion_coverage"),
+        Type.Literal("exact_evidence_indexes"),
+        Type.Literal("disposition_invariants"),
+        Type.Literal("exact_source_lineage"),
+        Type.Literal("latest_vera_pass"),
+        Type.Literal("signed_worker_evidence"),
+        Type.Literal("current_product_receipt"),
+        Type.Literal("effect_evidence_consistency"),
+      ]),
+      { minItems: 9, maxItems: 9, uniqueItems: true }
+    ),
+    product_effect_evidence_sha256: Sha256Schema,
+    effect_evidence: EffectEvidenceGraphV1Schema,
+  },
+  { additionalProperties: false }
+);
+export type AssessmentProductIntegrityV2 = Readonly<
+  Static<typeof AssessmentProductIntegrityV2Schema>
+>;
+
+export const AssessmentProductEnvelopeV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.assessment-product-envelope.v2"),
+    schema_version: Type.Literal(2),
+    envelope_id: Type.String({ pattern: "^asenv_[a-f0-9]{64}$" }),
+    run_id: OpaqueIdSchema,
+    status: Type.Literal("complete"),
+    request_ref: ArtifactRefSchema,
+    analysis_ref: ArtifactRefSchema,
+    draft_ref: ArtifactRefSchema,
+    assessment_ref: ArtifactRefSchema,
+    vera_report_ref: ArtifactRefSchema,
+    validity_receipt_ref: ArtifactRefSchema,
+    integrity_ref: ArtifactRefSchema,
+    effect_evidence: EffectEvidenceGraphV1Schema,
+  },
+  { additionalProperties: false }
+);
+export type AssessmentProductEnvelopeV2 = Readonly<
+  Static<typeof AssessmentProductEnvelopeV2Schema>
+>;
+
+function assessmentDraftV2AsV1(draft: AssessmentDraftV2): AssessmentDraftV1 {
+  return {
+    ...draft,
+    schema_version: 1,
+    external_actions_performed: false,
+    filesystem_writes_performed: false,
+    tests_executed: false,
+    changes_started: false,
+  };
+}
+
+export function validateAssessmentDraftV2(
+  value: unknown,
+  input: { readonly request: unknown }
+): AssessmentDraftV2 {
+  const request = validateAssessmentRequest(input.request);
+  let draft: AssessmentDraftV2;
+  try {
+    draft = validateSkillSchema(AssessmentDraftV2Schema, value, "AssessmentDraftV2");
+    validateText(draft.summary, "AssessmentDraftV2.summary", 16_384);
+    for (const outcome of draft.criterion_outcomes) {
+      validateText(outcome.rationale, "AssessmentDraftV2 criterion rationale", 8_192);
+    }
+    for (const strength of draft.strengths) {
+      validateText(strength.statement, "AssessmentDraftV2 strength", 8_192);
+    }
+    for (const gap of draft.gaps) validateText(gap.statement, "AssessmentDraftV2 gap", 8_192);
+    for (const improvement of draft.improvement_suggestions) {
+      validateText(improvement.suggestion, "AssessmentDraftV2 improvement", 8_192);
+    }
+    for (const statement of [...draft.assumptions, ...draft.uncertainties]) {
+      validateText(statement, "AssessmentDraftV2 assumption or uncertainty", 8_192);
+    }
+  } catch (error) {
+    const issues =
+      error instanceof SkillSchemaValidationError
+        ? sanitizeIssues(error.issues)
+        : sanitizeIssues([
+            error instanceof Error ? error.message : "closed schema validation failed",
+          ]);
+    throw new AssessmentDraftValidationError("SCHEMA_INVALID", issues);
+  }
+  const issues = draftSemanticIssues(assessmentDraftV2AsV1(draft), request);
+  if (issues.length > 0) throw new AssessmentDraftValidationError("SEMANTIC_INVALID", issues);
+  return draft;
+}
+
+export function parsePersistedAssessmentDraftV2(
+  bytes: Uint8Array,
+  input: { readonly request: unknown }
+): { readonly draft: AssessmentDraftV2; readonly summary: AssessmentRoutingSummaryV1 } {
+  const body = Buffer.from(bytes);
+  if (body.length === 0 || body.length > MAX_PERSISTED_ASSESSMENT_DRAFT_BYTES) {
+    throw new AssessmentDraftValidationError("FRAMING_INVALID", [
+      `AssessmentDraftV2 output must be 1..${MAX_PERSISTED_ASSESSMENT_DRAFT_BYTES} bytes`,
+    ]);
+  }
+  if ((body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf) || body.includes(0)) {
+    throw new AssessmentDraftValidationError("FRAMING_INVALID", [
+      "AssessmentDraftV2 forbids BOM and NUL",
+    ]);
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body);
+  } catch {
+    throw new AssessmentDraftValidationError("FRAMING_INVALID", [
+      "AssessmentDraftV2 is not strict UTF-8",
+    ]);
+  }
+  if (text.includes("\ufeff") || text.includes("\r")) {
+    throw new AssessmentDraftValidationError("FRAMING_INVALID", [
+      "AssessmentDraftV2 forbids BOM and CR",
+    ]);
+  }
+  const framed = text.endsWith("\n") ? text.slice(0, -1) : text;
+  const lines = framed.split("\n");
+  if (
+    framed.endsWith("\n") ||
+    lines.length !== 2 ||
+    !lines[0]?.startsWith(DRAFT_PREFIX) ||
+    !lines[1]?.startsWith(SUMMARY_PREFIX) ||
+    lines.some((line) => line.trim() !== line || line.includes("`"))
+  ) {
+    throw new AssessmentDraftValidationError("FRAMING_INVALID", [
+      "AssessmentDraftV2 requires exactly one unwrapped draft line and one compact SUMMARY line",
+    ]);
+  }
+  const draftText = lines[0].slice(DRAFT_PREFIX.length);
+  const summary = parseExactSummary(lines[1].slice(SUMMARY_PREFIX.length));
+  if (draftText.length === 0 || summary === undefined) {
+    throw new AssessmentDraftValidationError("FRAMING_INVALID", [
+      "AssessmentDraftV2 draft or SUMMARY framing is invalid",
+    ]);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(draftText);
+  } catch {
+    throw new AssessmentDraftValidationError("JSON_INVALID", ["AssessmentDraftV2 is not JSON"]);
+  }
+  const draft = validateAssessmentDraftV2(parsed, input);
+  if (canonicalJson(draft) !== draftText) {
+    throw new AssessmentDraftValidationError("FRAMING_INVALID", [
+      "AssessmentDraftV2 must be canonical JSON",
+    ]);
+  }
+  if (draft.confidence !== summary.confidence) {
+    throw new AssessmentDraftValidationError("SEMANTIC_INVALID", [
+      "AssessmentDraftV2 confidence must equal SUMMARY confidence",
+    ]);
+  }
+  return { draft, summary };
+}
+
+export function assessmentDraftPromptContractV2(): string {
+  return canonicalJson({
+    schema: AssessmentDraftV2Schema,
+    transport: {
+      encoding: "strict UTF-8",
+      maximum_output_bytes: MAX_PERSISTED_ASSESSMENT_DRAFT_BYTES,
+      canonical_framing:
+        "exactly ASSESSMENT_DRAFT:<canonical-single-line-JSON> then SUMMARY:<compact-JSON>",
+      digest_and_id_authorship: "host only; the worker never calculates SHA-256 or IDs",
+    },
+    criterion_outcomes:
+      "exactly one ascending outcome for every zero-based request criterion index; evidence indexes refer only to supplied_evidence",
+    dispositions: {
+      meets: "every required criterion met and no major gap",
+      does_not_meet: "at least one required criterion not_met",
+      partially_meets:
+        "at least one required partially_met, all required assessable, and no required not_met",
+      inconclusive:
+        "at least one required not_assessable, no required not_met, and explicit uncertainty",
+      not_applicable:
+        "all criteria not_assessable because the target/criteria make assessment inapplicable, with explicit uncertainty and no strengths",
+    },
+    scoring: "numeric scores are forbidden",
+    coverage: "every coverage array equals the complete ascending exact request index set",
+    effect_evidence_authorship:
+      "host only; the worker makes no absence, observation, prevention, or confinement claim",
+  });
+}
+
+function assertAssessmentSealRefsV2(input: {
+  readonly requestRef: ArtifactRef;
+  readonly analysisRef: ArtifactRef;
+  readonly draftRef: ArtifactRef;
+}): void {
+  const refs = [input.requestRef, input.analysisRef, input.draftRef];
+  if (
+    input.requestRef.kind !== "assessment-request" ||
+    input.requestRef.phase !== "intake" ||
+    input.requestRef.branch_id !== null ||
+    input.requestRef.producer !== "host:request-admission" ||
+    input.analysisRef.kind !== "agent-output" ||
+    input.analysisRef.phase !== "analyzing_assessment" ||
+    input.analysisRef.branch_id !== null ||
+    input.analysisRef.producer !== "agent:annie" ||
+    input.draftRef.kind !== "assessment-draft" ||
+    input.draftRef.phase !== "authoring_assessment" ||
+    input.draftRef.branch_id !== null ||
+    input.draftRef.producer !== "agent:carren" ||
+    input.draftRef.content_schema?.schema_id !== "penny.assessment-draft.v2" ||
+    input.draftRef.content_schema.schema_version !== 2 ||
+    new Set(refs.map((ref) => ref.artifact_id)).size !== refs.length ||
+    new Set(refs.map((ref) => ref.run_id)).size !== 1
+  ) {
+    throw new Error("AssessmentV2 sealing refs have invalid, stale, or cross-run roles");
+  }
+}
+
+export function sealAssessmentDraftV2(input: {
+  readonly request: unknown;
+  readonly draft: unknown;
+  readonly requestRef: ArtifactRef;
+  readonly analysisRef: ArtifactRef;
+  readonly draftRef: ArtifactRef;
+  readonly effectEvidence: unknown;
+}): AssessmentV2 {
+  const request = validateAssessmentRequest(input.request);
+  const draft = validateAssessmentDraftV2(input.draft, { request });
+  assertAssessmentSealRefsV2(input);
+  const effectEvidence = validateEffectEvidenceGraph(input.effectEvidence);
+  if (effectEvidence.run_id !== input.requestRef.run_id) {
+    throw new Error("AssessmentV2 effect evidence run disagrees");
+  }
+  const lineage: AssessmentSourceLineagePreimageV1 = {
+    request_artifact_id: input.requestRef.artifact_id,
+    request_artifact_sha256: input.requestRef.content_digest,
+    analysis_artifact_id: input.analysisRef.artifact_id,
+    analysis_artifact_sha256: input.analysisRef.content_digest,
+    draft_artifact_id: input.draftRef.artifact_id,
+    draft_artifact_sha256: input.draftRef.content_digest,
+    draft_sha256: sha256(canonicalJson(draft)),
+    target_statements: targetLineage(request),
+    criteria: criterionLineage(request),
+    supplied_evidence: suppliedEvidenceLineage(request),
+  };
+  return validateAssessmentV2({
+    schema_id: "penny.assessment.v2",
+    ...draft,
+    request,
+    request_sha256: assessmentRequestSha256(request),
+    source_lineage: { ...lineage, lineage_sha256: assessmentSourceLineageSha256(lineage) },
+    effect_evidence: effectEvidence,
+  });
+}
+
+function projectDraftV2Unchecked(assessment: AssessmentV2): AssessmentDraftV2 {
+  return {
+    schema_version: 2,
+    disposition: assessment.disposition,
+    criterion_outcomes: assessment.criterion_outcomes,
+    summary: assessment.summary,
+    strengths: assessment.strengths,
+    gaps: assessment.gaps,
+    improvement_suggestions: assessment.improvement_suggestions,
+    assumptions: assessment.assumptions,
+    uncertainties: assessment.uncertainties,
+    request_coverage: assessment.request_coverage,
+    confidence: assessment.confidence,
+  };
+}
+
+export function validateAssessmentV2(value: unknown): AssessmentV2 {
+  const assessment = validateSkillSchema(AssessmentV2Schema, value, "AssessmentV2");
+  const request = validateAssessmentRequest(assessment.request);
+  if (assessment.request_sha256 !== assessmentRequestSha256(request)) {
+    throw new Error("AssessmentV2 request digest drifted");
+  }
+  const draft = validateAssessmentDraftV2(projectDraftV2Unchecked(assessment), { request });
+  const lineage: AssessmentSourceLineagePreimageV1 = {
+    request_artifact_id: assessment.source_lineage.request_artifact_id,
+    request_artifact_sha256: assessment.source_lineage.request_artifact_sha256,
+    analysis_artifact_id: assessment.source_lineage.analysis_artifact_id,
+    analysis_artifact_sha256: assessment.source_lineage.analysis_artifact_sha256,
+    draft_artifact_id: assessment.source_lineage.draft_artifact_id,
+    draft_artifact_sha256: assessment.source_lineage.draft_artifact_sha256,
+    draft_sha256: assessment.source_lineage.draft_sha256,
+    target_statements: assessment.source_lineage.target_statements,
+    criteria: assessment.source_lineage.criteria,
+    supplied_evidence: assessment.source_lineage.supplied_evidence,
+  };
+  if (assessment.source_lineage.lineage_sha256 !== assessmentSourceLineageSha256(lineage)) {
+    throw new Error("AssessmentV2 source lineage digest drifted");
+  }
+  assertUnique(
+    [lineage.request_artifact_id, lineage.analysis_artifact_id, lineage.draft_artifact_id],
+    "AssessmentV2 source lineage artifact IDs"
+  );
+  if (
+    lineage.draft_sha256 !== sha256(canonicalJson(draft)) ||
+    canonicalJson(lineage.target_statements) !== canonicalJson(targetLineage(request)) ||
+    canonicalJson(lineage.criteria) !== canonicalJson(criterionLineage(request)) ||
+    canonicalJson(lineage.supplied_evidence) !== canonicalJson(suppliedEvidenceLineage(request))
+  ) {
+    throw new Error("AssessmentV2 draft, target, criterion, or supplied-evidence lineage drifted");
+  }
+  validateEffectEvidenceGraph(assessment.effect_evidence, {
+    runId: assessment.effect_evidence.run_id,
+    phases: ASSESS_EFFECT_PHASES,
+  });
+  return assessment;
+}
+
+export function assertAssessmentLineageV2(input: {
+  readonly assessment: unknown;
+  readonly request: unknown;
+  readonly draft: unknown;
+  readonly requestRef: ArtifactRef;
+  readonly analysisRef: ArtifactRef;
+  readonly draftRef: ArtifactRef;
+  readonly effectEvidence: unknown;
+}): AssessmentV2 {
+  const expected = sealAssessmentDraftV2(input);
+  const assessment = validateAssessmentV2(input.assessment);
+  if (canonicalJson(assessment) !== canonicalJson(expected)) {
+    throw new Error(
+      "AssessmentV2 exact request, analysis, draft, source, or effect lineage diverged"
+    );
+  }
+  return assessment;
+}
+
+export function validateCanonicalAssessmentV2Bytes(
+  bytes: Uint8Array,
+  ref: ArtifactRef
+): AssessmentV2 {
+  const body = Buffer.from(bytes);
+  if (
+    ref.kind !== "semantic-core" ||
+    ref.phase !== "sealing_assessment" ||
+    ref.branch_id !== null ||
+    ref.producer !== "host:assessment-sealer" ||
+    ref.media_type !== "application/json" ||
+    ref.content_schema?.schema_id !== "penny.assessment.v2" ||
+    ref.content_schema.schema_version !== 2 ||
+    ref.byte_length !== body.length ||
+    ref.content_digest !== sha256(body) ||
+    ref.store_ref !== `artifact://sha256/${ref.content_digest}`
+  ) {
+    throw new Error("AssessmentV2 ref is stale or has the wrong semantic identity");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(body.toString("utf8"));
+  } catch {
+    throw new Error("AssessmentV2 artifact is not JSON");
+  }
+  const assessment = validateAssessmentV2(value);
+  if (canonicalJson(assessment) !== body.toString("utf8")) {
+    throw new Error("AssessmentV2 artifact bytes are not canonical JSON");
+  }
+  return assessment;
+}
+
+function assertCurrentSubjectRefsV2(input: {
+  readonly runId: string;
+  readonly requestRef: ArtifactRef;
+  readonly analysisRef: ArtifactRef;
+  readonly draftRef: ArtifactRef;
+  readonly assessmentRef: ArtifactRef;
+}): void {
+  const refs = [input.requestRef, input.analysisRef, input.draftRef, input.assessmentRef];
+  if (
+    refs.some((ref) => ref.run_id !== input.runId || ref.branch_id !== null) ||
+    input.requestRef.kind !== "assessment-request" ||
+    input.requestRef.phase !== "intake" ||
+    input.requestRef.producer !== "host:request-admission" ||
+    input.analysisRef.kind !== "agent-output" ||
+    input.analysisRef.phase !== "analyzing_assessment" ||
+    input.analysisRef.producer !== "agent:annie" ||
+    input.draftRef.kind !== "assessment-draft" ||
+    input.draftRef.phase !== "authoring_assessment" ||
+    input.draftRef.producer !== "agent:carren" ||
+    input.draftRef.content_schema?.schema_id !== "penny.assessment-draft.v2" ||
+    input.draftRef.content_schema.schema_version !== 2 ||
+    input.assessmentRef.kind !== "semantic-core" ||
+    input.assessmentRef.phase !== "sealing_assessment" ||
+    input.assessmentRef.producer !== "host:assessment-sealer" ||
+    input.assessmentRef.content_schema?.schema_id !== "penny.assessment.v2" ||
+    input.assessmentRef.content_schema.schema_version !== 2 ||
+    new Set(refs.map((ref) => ref.artifact_id)).size !== refs.length
+  ) {
+    throw new Error("AssessmentV2 current-product subject refs disagree");
+  }
+}
+
+export function assessmentValidityReceiptIdV2(
+  body: Omit<AssessmentValidityReceiptV2, "receipt_id">
+): `asvr_${string}` {
+  return `asvr_${sha256(canonicalJson(body))}`;
+}
+
+export function validateAssessmentValidityReceiptV2(value: unknown): AssessmentValidityReceiptV2 {
+  const receipt = validateSkillSchema(
+    AssessmentValidityReceiptV2Schema,
+    value,
+    "AssessmentValidityReceiptV2"
+  );
+  assertOpaqueId(receipt.run_id, "AssessmentValidityReceiptV2.run_id");
+  assertRfc3339Utc(receipt.created_at, "AssessmentValidityReceiptV2.created_at");
+  assertCurrentSubjectRefsV2({
+    runId: receipt.run_id,
+    requestRef: receipt.request_ref,
+    analysisRef: receipt.analysis_ref,
+    draftRef: receipt.draft_ref,
+    assessmentRef: receipt.assessment_ref,
+  });
+  if (
+    receipt.vera_report_ref.run_id !== receipt.run_id ||
+    receipt.vera_report_ref.kind !== "agent-output" ||
+    receipt.vera_report_ref.phase !== "verifying_assessment" ||
+    receipt.vera_report_ref.producer !== "agent:vera" ||
+    receipt.vera_report_ref.branch_id !== null
+  ) {
+    throw new Error("AssessmentValidityReceiptV2 Vera report role disagrees");
+  }
+  validateEffectEvidenceGraph(receipt.effect_evidence, {
+    runId: receipt.run_id,
+    phases: ASSESS_EFFECT_PHASES,
+  });
+  const { receipt_id: receiptId, ...body } = receipt;
+  assertDerived(receiptId, "asvr_", body, "AssessmentValidityReceiptV2");
+  return receipt;
+}
+
+export function assessmentProductIntegrityIdV2(
+  body: Omit<AssessmentProductIntegrityV2, "integrity_id">
+): `asir_${string}` {
+  return `asir_${sha256(canonicalJson(body))}`;
+}
+
+export function validateAssessmentProductIntegrityV2(value: unknown): AssessmentProductIntegrityV2 {
+  const integrity = validateSkillSchema(
+    AssessmentProductIntegrityV2Schema,
+    value,
+    "AssessmentProductIntegrityV2"
+  );
+  if (canonicalJson(integrity.checks) !== canonicalJson(ASSESSMENT_INTEGRITY_CHECKS_V2)) {
+    throw new Error("AssessmentProductIntegrityV2 checks are incomplete or reordered");
+  }
+  const runId = integrity.assessment_ref.run_id;
+  assertCurrentSubjectRefsV2({
+    runId,
+    requestRef: integrity.request_ref,
+    analysisRef: integrity.analysis_ref,
+    draftRef: integrity.draft_ref,
+    assessmentRef: integrity.assessment_ref,
+  });
+  const refs = [
+    integrity.request_ref,
+    integrity.analysis_ref,
+    integrity.draft_ref,
+    integrity.assessment_ref,
+    integrity.vera_report_ref,
+    integrity.validity_receipt_ref,
+  ];
+  if (
+    refs.some((ref) => ref.run_id !== runId) ||
+    new Set(refs.map((ref) => ref.artifact_id)).size !== refs.length ||
+    integrity.vera_report_ref.kind !== "agent-output" ||
+    integrity.vera_report_ref.phase !== "verifying_assessment" ||
+    integrity.vera_report_ref.producer !== "agent:vera" ||
+    integrity.vera_report_ref.branch_id !== null ||
+    integrity.validity_receipt_ref.kind !== "assessment-validity-receipt" ||
+    integrity.validity_receipt_ref.phase !== "admitting_assessment" ||
+    integrity.validity_receipt_ref.branch_id !== "validity" ||
+    integrity.validity_receipt_ref.producer !== "host:assessment-validity-authority"
+  ) {
+    throw new Error("AssessmentProductIntegrityV2 exact artifact roles disagree");
+  }
+  validateEffectEvidenceGraph(integrity.effect_evidence, {
+    runId,
+    phases: ASSESS_EFFECT_PHASES,
+  });
+  const { integrity_id: integrityId, ...body } = integrity;
+  assertDerived(integrityId, "asir_", body, "AssessmentProductIntegrityV2");
+  return integrity;
+}
+
+export function assessmentProductEnvelopeIdV2(
+  body: Omit<AssessmentProductEnvelopeV2, "envelope_id">
+): `asenv_${string}` {
+  return `asenv_${sha256(canonicalJson(body))}`;
+}
+
+export function validateAssessmentProductEnvelopeV2(value: unknown): AssessmentProductEnvelopeV2 {
+  const envelope = validateSkillSchema(
+    AssessmentProductEnvelopeV2Schema,
+    value,
+    "AssessmentProductEnvelopeV2"
+  );
+  assertOpaqueId(envelope.run_id, "AssessmentProductEnvelopeV2.run_id");
+  assertCurrentSubjectRefsV2({
+    runId: envelope.run_id,
+    requestRef: envelope.request_ref,
+    analysisRef: envelope.analysis_ref,
+    draftRef: envelope.draft_ref,
+    assessmentRef: envelope.assessment_ref,
+  });
+  const refs = [
+    envelope.request_ref,
+    envelope.analysis_ref,
+    envelope.draft_ref,
+    envelope.assessment_ref,
+    envelope.vera_report_ref,
+    envelope.validity_receipt_ref,
+    envelope.integrity_ref,
+  ];
+  if (
+    refs.some((ref) => ref.run_id !== envelope.run_id) ||
+    new Set(refs.map((ref) => ref.artifact_id)).size !== refs.length ||
+    envelope.vera_report_ref.kind !== "agent-output" ||
+    envelope.vera_report_ref.phase !== "verifying_assessment" ||
+    envelope.vera_report_ref.producer !== "agent:vera" ||
+    envelope.validity_receipt_ref.kind !== "assessment-validity-receipt" ||
+    envelope.validity_receipt_ref.phase !== "admitting_assessment" ||
+    envelope.validity_receipt_ref.branch_id !== "validity" ||
+    envelope.integrity_ref.kind !== "assessment-product-integrity" ||
+    envelope.integrity_ref.phase !== "admitting_assessment" ||
+    envelope.integrity_ref.branch_id !== "integrity" ||
+    envelope.integrity_ref.producer !== "host:assessment-product-validator"
+  ) {
+    throw new Error("AssessmentProductEnvelopeV2 exact artifact roles disagree");
+  }
+  validateEffectEvidenceGraph(envelope.effect_evidence, {
+    runId: envelope.run_id,
+    phases: ASSESS_EFFECT_PHASES,
+  });
+  const { envelope_id: envelopeId, ...body } = envelope;
+  assertDerived(envelopeId, "asenv_", body, "AssessmentProductEnvelopeV2");
+  return envelope;
+}
+
+function schemaIdentity(value: unknown): {
+  readonly schema_id?: unknown;
+  readonly schema_version?: unknown;
+} {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as { readonly schema_id?: unknown; readonly schema_version?: unknown })
+    : {};
+}
+
+export type AssessmentCompatibilityView =
+  | {
+      readonly contract_version: 1;
+      readonly interpretation: "legacy_unverified_assertion";
+      readonly value: AssessmentV1;
+      readonly effect_evidence: EffectEvidenceGraphV1;
+    }
+  | {
+      readonly contract_version: 2;
+      readonly interpretation: "effect_evidence_v1";
+      readonly value: AssessmentV2;
+      readonly effect_evidence: EffectEvidenceGraphV1;
+    };
+
+export function readAssessmentProduct(
+  value: unknown,
+  input: { readonly runId: string; readonly phases: readonly string[] }
+): AssessmentCompatibilityView {
+  if (canonicalJson(input.phases) !== canonicalJson(ASSESS_EFFECT_PHASES)) {
+    throw new Error("ASSESSMENT_SCOPE_UNSUPPORTED: phase scope does not match the contract");
+  }
+  const identity = schemaIdentity(value);
+  if (identity.schema_id === "penny.assessment.v1" && identity.schema_version === 1) {
+    const legacy = legacyUnverifiedEffectEvidence(input);
+    return {
+      contract_version: 1,
+      interpretation: legacy.interpretation,
+      value: validateAssessment(value),
+      effect_evidence: legacy.effect_evidence,
+    };
+  }
+  if (identity.schema_id === "penny.assessment.v2" && identity.schema_version === 2) {
+    const assessment = validateAssessmentV2(value);
+    return {
+      contract_version: 2,
+      interpretation: "effect_evidence_v1",
+      value: assessment,
+      effect_evidence: assessment.effect_evidence,
+    };
+  }
+  throw new Error(
+    "ASSESSMENT_VERSION_UNSUPPORTED: refusing unknown or mismatched assessment version"
+  );
+}
+
+export function validateAssessmentEvidenceBundle(input: {
+  readonly runId: string;
+  readonly phases: readonly string[];
+  readonly assessment: unknown;
+  readonly validityReceipt: unknown;
+  readonly integrity: unknown;
+  readonly envelope: unknown;
+}): { readonly contract_version: 1 | 2; readonly effect_evidence: EffectEvidenceGraphV1 } {
+  const versions = [
+    schemaIdentity(input.assessment).schema_version,
+    schemaIdentity(input.validityReceipt).schema_version,
+    schemaIdentity(input.integrity).schema_version,
+    schemaIdentity(input.envelope).schema_version,
+  ];
+  if (versions.every((version) => version === 1)) {
+    validateAssessment(input.assessment);
+    validateAssessmentValidityReceipt(input.validityReceipt);
+    validateAssessmentProductIntegrity(input.integrity);
+    validateAssessmentProductEnvelope(input.envelope);
+    return {
+      contract_version: 1,
+      effect_evidence: legacyUnverifiedEffectEvidence(input).effect_evidence,
+    };
+  }
+  if (!versions.every((version) => version === 2)) {
+    throw new Error(
+      "ASSESSMENT_VERSION_PAIRING_UNSUPPORTED: old/new evidence artifacts cannot be mixed"
+    );
+  }
+  const assessment = validateAssessmentV2(input.assessment);
+  const validity = validateAssessmentValidityReceiptV2(input.validityReceipt);
+  const integrity = validateAssessmentProductIntegrityV2(input.integrity);
+  const envelope = validateAssessmentProductEnvelopeV2(input.envelope);
+  const graphJson = canonicalJson(validity.effect_evidence);
+  if (
+    assessment.effect_evidence.assurance === "policy_violation" ||
+    validity.effect_evidence.assurance === "policy_violation" ||
+    canonicalJson(integrity.effect_evidence) !== graphJson ||
+    canonicalJson(envelope.effect_evidence) !== graphJson ||
+    integrity.product_effect_evidence_sha256 !== effectEvidenceSha256(assessment.effect_evidence)
+  ) {
+    throw new Error(
+      "AssessmentV2 effect-evidence lineage diverged across receipt/integrity/envelope"
+    );
+  }
+  if (canonicalJson(input.phases) !== canonicalJson(ASSESS_EFFECT_PHASES)) {
+    throw new Error("AssessmentV2 compatibility scope does not match the active phase contract");
+  }
+  validateEffectEvidenceGraph(validity.effect_evidence, {
+    runId: input.runId,
+    phases: ASSESS_EFFECT_PHASES,
+  });
+  return { contract_version: 2, effect_evidence: validity.effect_evidence };
 }

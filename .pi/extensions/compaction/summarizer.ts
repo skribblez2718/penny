@@ -53,12 +53,25 @@ export interface GroundedDigestInput {
   pending: PendingState | null;
   readFiles: string[];
   modifiedFiles: string[];
+  skill?: {
+    name: string;
+    status: "success" | "failure" | "incomplete" | "paused" | "cancelled" | "unknown";
+    goal: string;
+    superseded: boolean;
+  };
 }
 
 /** Render only exact checkpoint-backed state the model may cite. */
 export function renderGroundedDigest(input: GroundedDigestInput): string {
   const lines: string[] = [];
 
+  if (input.skill) {
+    lines.push(
+      `skill result (validated structured details): ${input.skill.name} ` +
+        `${input.skill.status}${input.skill.superseded ? " [superseded]" : ""} — ` +
+        input.skill.goal.slice(0, 200)
+    );
+  }
   if (input.runs.length > 0) {
     lines.push("in-flight runs (exact checkpointer IDs):");
     for (const run of input.runs) {
@@ -100,7 +113,7 @@ export function renderGroundedDigest(input: GroundedDigestInput): string {
 
 const OUTPUT_CONTRACT_SECTIONS = [
   "## Goal",
-  "## Active Skill",
+  "## Skill Continuity",
   "## Current Work",
   "## In-Flight Orchestration Runs",
   "## Pending",
@@ -142,9 +155,11 @@ export function buildSummarizerMessages(input: BuildPromptInput): SummarizerMess
   );
   parts.push(
     "Constraints:\n" +
-      "- ## Goal is the user's LATEST substantive intent in the conversation. A " +
-      "goal named in an older skill call or an in-flight run must NOT override a " +
-      "newer user pivot.\n" +
+      "- ## Goal is the user's LATEST textual intent in the conversation, including " +
+      "a short pivot. A goal named in an older skill call or in-flight run must NOT " +
+      "override a newer user turn.\n" +
+      "- Skill status comes only from the validated structured skill result in " +
+      "GROUNDED STATE. Never infer success or unfinished work from prose.\n" +
       "- Carry unresolved errors and blockers forward with enough detail to act on.\n" +
       "- You may cite facts from GROUNDED STATE (exact run/artifact refs) but " +
       "NEVER invent identifiers or addresses — exact pointers are appended " +

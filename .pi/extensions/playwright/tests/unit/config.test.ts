@@ -76,10 +76,21 @@ describe("Config", () => {
       expect(config.timeout).toBe(60000);
     });
 
-    it("should parse comma-separated allowlist", () => {
-      process.env.PLAYWRIGHT_NETWORK_ALLOWLIST = "api.example.com,*.trusted.org";
+    it("should parse, canonicalize, and freeze a comma-separated allowlist", () => {
+      process.env.PLAYWRIGHT_NETWORK_ALLOWLIST =
+        "api.example.com,HTTPS://Trusted.ORG,*.trusted.org";
       const config = loadConfig("/tmp/test");
-      expect(config.networkAllowlist).toEqual(["api.example.com", "*.trusted.org"]);
+      expect(config.networkAllowlist).toEqual([
+        "*.trusted.org",
+        "api.example.com",
+        "https://trusted.org:443",
+      ]);
+      expect(Object.isFrozen(config.networkAllowlist)).toBe(true);
+    });
+
+    it("should fail closed on malformed allowlist configuration", () => {
+      process.env.PLAYWRIGHT_NETWORK_ALLOWLIST = "https://example.com/private";
+      expect(() => loadConfig("/tmp/test")).toThrow(/PLAYWRIGHT_NETWORK_ALLOWLIST entry 1/);
     });
 
     it("should resolve download and output dirs", () => {

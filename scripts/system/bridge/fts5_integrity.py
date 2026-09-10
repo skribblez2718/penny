@@ -1,24 +1,40 @@
-"""Receipt-gated SQLite/FTS5 integrity inspection on a disposable copy.
+"""Receipt-gated SQLite/FTS5 integrity inspection on a bounded private copy.
 
-The SQLite connection used for schema enumeration, ``PRAGMA quick_check``, and
-FTS5 ``integrity-check`` commands is opened only against a temporary physical
-copy.  The authorized source database is read as bytes for copying and hashing;
-it is never opened by SQLite and is never mutated by this probe.
+The authorized source directory and every SQLite-family source file are accessed
+through descriptors retained from authorization.  SQLite itself opens only a
+fresh private descriptor-rooted scratch copy; it never opens or mutates the
+receipt-authorized database.  ``open_authorized_recovery`` retains the
+validated descriptors while delegating receipt semantics to
+``authorize_offline_target``.
 """
 
 from __future__ import annotations
 
-import hashlib
 import re
-import shutil
 import sqlite3
-import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from scripts.system.memory.offline_access import OfflineAuthorization, authorize_offline_target
+from scripts.system.bridge.recovery_safety import (
+    FileIdentity,
+    HeldDirectory,
+    RecoveryBudget,
+    RecoveryRefusal,
+    RecoverySource,
+    SourceSnapshot,
+    account_staging_tree,
+    assert_source_unchanged,
+    copy_named_regular_files,
+    hold_private_regular_file,
+    open_authorized_recovery,
+    private_scratch_directory,
+    snapshot_source_tree,
+)
+from scripts.system.memory.common import ValidationError
 
 DATABASE_NAME = "chroma.sqlite3"
 SQLITE_SIDECAR_SUFFIXES = ("", "-wal", "-shm")
@@ -117,6 +133,8 @@ class IntegrityReport:
             "fts5_tables": list(self.fts5_tables),
             "findings": [finding.to_dict() for finding in self.findings],
             "source_bytes_unchanged": self.source_bytes_unchanged,
+            "diagnostic_scratch": "fresh-private-descriptor-rooted-sqlite-copy",
+            "diagnostic_scratch_retained": False,
             "content_included": False,
         }
 
@@ -131,35 +149,85 @@ def _is_corruption_error(error: sqlite3.Error) -> bool:
     return isinstance(code, int) and code & 0xFF == sqlite3.SQLITE_CORRUPT
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _source_snapshot(database: Path) -> dict[str, str]:
-    snapshot: dict[str, str] = {}
-    for suffix in SQLITE_SIDECAR_SUFFIXES:
-        candidate = database.with_name(database.name + suffix)
-        if not candidate.exists():
+def _snapshot_family_identities(snapshot: SourceSnapshot) -> dict[str, FileIdentity]:
+    family_names = {DATABASE_NAME + suffix for suffix in SQLITE_SIDECAR_SUFFIXES}
+    identities: dict[str, FileIdentity] = {}
+    for member in snapshot.members:
+        if member.relative_path not in family_names:
             continue
-        if candidate.is_symlink() or not candidate.is_file():
-            raise OSError(f"SQLite source member is not a regular file: {candidate.name}")
-        snapshot[candidate.name] = _sha256(candidate)
-    return snapshot
+        if member.kind != "file":
+            raise ValidationError("SQLite source family contains a non-file member")
+        identities[member.relative_path] = FileIdentity(
+            member.device,
+            member.inode,
+            member.mode,
+            member.size,
+            member.modified_ns,
+            member.changed_ns,
+        )
+    return identities
 
 
-def _copy_sqlite_family(database: Path, destination: Path) -> None:
-    destination.mkdir(mode=0o700, exist_ok=True)
-    for suffix in SQLITE_SIDECAR_SUFFIXES:
-        source = database.with_name(database.name + suffix)
-        if not source.exists():
-            continue
-        if source.is_symlink() or not source.is_file():
-            raise OSError(f"SQLite source member is not a regular file: {source.name}")
-        shutil.copy2(source, destination / source.name, follow_symlinks=False)
+@contextmanager
+def materialize_sqlite_family(
+    directory: HeldDirectory,
+    *,
+    expected_snapshot: SourceSnapshot | None = None,
+    account_as_input: bool,
+) -> Iterator[Path]:
+    """Yield a stable path to a private copy made from held source file fds."""
+
+    names = tuple(DATABASE_NAME + suffix for suffix in SQLITE_SIDECAR_SUFFIXES)
+    expected = (
+        _snapshot_family_identities(expected_snapshot) if expected_snapshot is not None else None
+    )
+    with private_scratch_directory(directory.budget, prefix="fts5-integrity") as scratch:
+        copied = copy_named_regular_files(
+            directory,
+            scratch.handle,
+            names,
+            account_as_input=account_as_input,
+            expected=expected,
+        )
+        if DATABASE_NAME not in copied:
+            raise FileNotFoundError(DATABASE_NAME)
+        account_staging_tree(scratch.handle)
+        with hold_private_regular_file(scratch.handle, DATABASE_NAME) as database_descriptor:
+            yield Path("/proc/self/fd") / str(database_descriptor)
+            directory.budget.checkpoint()
+        account_staging_tree(scratch.handle)
+
+
+@contextmanager
+def sqlite_budget_guard(
+    connection: sqlite3.Connection,
+    budget: RecoveryBudget,
+) -> Iterator[None]:
+    """Interrupt SQLite VM work when the total deadline/cancellation fires."""
+
+    refusal: list[RecoveryRefusal] = []
+
+    def progress() -> int:
+        try:
+            budget.checkpoint()
+        except RecoveryRefusal as exc:
+            refusal.append(exc)
+            return 1
+        return 0
+
+    budget.checkpoint()
+    connection.set_progress_handler(progress, 1_000)
+    try:
+        yield
+    except sqlite3.Error:
+        if refusal:
+            raise refusal[0]
+        raise
+    finally:
+        connection.set_progress_handler(None, 0)
+    if refusal:
+        raise refusal[0]
+    budget.checkpoint()
 
 
 def _quote_identifier(identifier: str) -> str:
@@ -172,7 +240,7 @@ def _quote_identifier(identifier: str) -> str:
 
 def _enumerate_fts5_tables(connection: sqlite3.Connection) -> tuple[str, ...]:
     rows = connection.execute(
-        "SELECT name, sql FROM sqlite_master " "WHERE type = ? AND sql IS NOT NULL ORDER BY name",
+        "SELECT name, sql FROM sqlite_master WHERE type = ? AND sql IS NOT NULL ORDER BY name",
         ("table",),
     ).fetchall()
     return tuple(
@@ -216,73 +284,86 @@ def _known_fts5_quick_check_error(message: str, corrupt_tables: set[str]) -> boo
     )
 
 
-def _probe_temporary_database(database: Path) -> tuple[tuple[str, ...], list[IntegrityFinding]]:
+def _quick_check_findings(
+    connection: sqlite3.Connection,
+    corrupt_tables: set[str],
+) -> list[IntegrityFinding]:
     findings: list[IntegrityFinding] = []
-    with sqlite3.connect(database, isolation_level=None) as connection:
-        tables = _enumerate_fts5_tables(connection)
-        for table in tables:
-            finding = _fts5_finding(connection, table)
-            if finding is not None:
-                findings.append(finding)
-
-        corrupt_tables = {
-            finding.table
-            for finding in findings
-            if finding.code is FindingCode.FTS5_INDEX_CORRUPT and finding.table is not None
-        }
-        try:
-            quick_check_rows = connection.execute("PRAGMA quick_check").fetchall()
-        except sqlite3.Error as error:
-            findings.append(
-                IntegrityFinding(
-                    code=FindingCode.SQLITE_CORRUPTION_UNCLASSIFIED,
-                    classification=FindingClass.UNCLASSIFIED,
-                    sqlite_error_name=_sqlite_error_name(error),
-                )
+    try:
+        rows = connection.execute("PRAGMA quick_check").fetchall()
+    except sqlite3.Error as error:
+        return [
+            IntegrityFinding(
+                code=FindingCode.SQLITE_CORRUPTION_UNCLASSIFIED,
+                classification=FindingClass.UNCLASSIFIED,
+                sqlite_error_name=_sqlite_error_name(error),
             )
-        else:
-            for row in quick_check_rows:
-                message = str(row[0]) if row else ""
-                if message.lower() == "ok":
-                    continue
-                if _known_fts5_quick_check_error(message, corrupt_tables):
-                    continue
-                findings.append(
-                    IntegrityFinding(
-                        code=FindingCode.SQLITE_CORRUPTION_UNCLASSIFIED,
-                        classification=FindingClass.UNCLASSIFIED,
-                    )
-                )
+        ]
+    for row in rows:
+        message = str(row[0]) if row else ""
+        if message.lower() == "ok" or _known_fts5_quick_check_error(message, corrupt_tables):
+            continue
+        findings.append(
+            IntegrityFinding(
+                code=FindingCode.SQLITE_CORRUPTION_UNCLASSIFIED,
+                classification=FindingClass.UNCLASSIFIED,
+            )
+        )
+    return findings
+
+
+def _probe_temporary_database(
+    database: Path,
+    budget: RecoveryBudget,
+) -> tuple[tuple[str, ...], list[IntegrityFinding]]:
+    findings: list[IntegrityFinding] = []
+    budget.checkpoint()
+    with sqlite3.connect(database, isolation_level=None) as connection:
+        with sqlite_budget_guard(connection, budget):
+            tables = _enumerate_fts5_tables(connection)
+            for table in tables:
+                budget.checkpoint()
+                finding = _fts5_finding(connection, table)
+                if finding is not None:
+                    findings.append(finding)
+            corrupt_tables = {
+                finding.table
+                for finding in findings
+                if finding.code is FindingCode.FTS5_INDEX_CORRUPT and finding.table is not None
+            }
+            findings.extend(_quick_check_findings(connection, corrupt_tables))
     return tables, findings
 
 
-def probe_authorized_database(authorization: OfflineAuthorization) -> IntegrityReport:
-    """Inspect the receipt-authorized SQLite database only through a temp copy."""
+def _missing_report() -> IntegrityReport:
+    finding = IntegrityFinding(
+        code=FindingCode.DATABASE_MISSING,
+        classification=FindingClass.UNCLASSIFIED,
+    )
+    return IntegrityReport(sqlite3.sqlite_version, (), (finding,), True)
 
-    database = authorization.target / DATABASE_NAME
-    if not database.exists():
-        finding = IntegrityFinding(
-            code=FindingCode.DATABASE_MISSING,
-            classification=FindingClass.UNCLASSIFIED,
-        )
-        return IntegrityReport(sqlite3.sqlite_version, (), (finding,), True)
 
-    try:
-        before = _source_snapshot(database)
-    except OSError:
-        finding = IntegrityFinding(
-            code=FindingCode.PROBE_UNAVAILABLE,
-            classification=FindingClass.UNCLASSIFIED,
-        )
-        return IntegrityReport(sqlite3.sqlite_version, (), (finding,), False)
+def probe_database_directory(
+    directory: HeldDirectory,
+    *,
+    expected_snapshot: SourceSnapshot | None = None,
+    account_as_input: bool = False,
+) -> IntegrityReport:
+    """Probe one held directory only through a bounded private SQLite copy."""
 
     tables: tuple[str, ...] = ()
     findings: list[IntegrityFinding] = []
     try:
-        with tempfile.TemporaryDirectory(prefix="penny-fts5-integrity-") as temporary:
-            temporary_root = Path(temporary)
-            _copy_sqlite_family(database, temporary_root)
-            tables, findings = _probe_temporary_database(temporary_root / DATABASE_NAME)
+        with materialize_sqlite_family(
+            directory,
+            expected_snapshot=expected_snapshot,
+            account_as_input=account_as_input,
+        ) as copied_database:
+            tables, findings = _probe_temporary_database(copied_database, directory.budget)
+    except FileNotFoundError:
+        return _missing_report()
+    except RecoveryRefusal:
+        raise
     except sqlite3.Error as error:
         findings.append(
             IntegrityFinding(
@@ -291,22 +372,10 @@ def probe_authorized_database(authorization: OfflineAuthorization) -> IntegrityR
                 sqlite_error_name=_sqlite_error_name(error),
             )
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError, ValidationError):
         findings.append(
             IntegrityFinding(
                 code=FindingCode.PROBE_UNAVAILABLE,
-                classification=FindingClass.UNCLASSIFIED,
-            )
-        )
-
-    try:
-        unchanged = before == _source_snapshot(database)
-    except OSError:
-        unchanged = False
-    if not unchanged:
-        findings.append(
-            IntegrityFinding(
-                code=FindingCode.SOURCE_CHANGED,
                 classification=FindingClass.UNCLASSIFIED,
             )
         )
@@ -314,12 +383,42 @@ def probe_authorized_database(authorization: OfflineAuthorization) -> IntegrityR
         sqlite_version=sqlite3.sqlite_version,
         fts5_tables=tables,
         findings=tuple(findings),
-        source_bytes_unchanged=unchanged,
+        source_bytes_unchanged=True,
     )
 
 
-def probe_offline_database(offline_target: Path, receipt: Path) -> IntegrityReport:
-    """Authorize one copied target, then run the temporary-copy integrity probe."""
+def probe_authorized_database(
+    source: RecoverySource,
+    snapshot: SourceSnapshot,
+) -> IntegrityReport:
+    """Inspect an authorized source while retaining its original descriptors."""
 
-    authorization = authorize_offline_target(offline_target, receipt)
-    return probe_authorized_database(authorization)
+    report = probe_database_directory(
+        source.root,
+        expected_snapshot=snapshot,
+        account_as_input=True,
+    )
+    try:
+        assert_source_unchanged(source, snapshot)
+    except RecoveryRefusal:
+        raise
+    except ValidationError:
+        changed = IntegrityFinding(
+            code=FindingCode.SOURCE_CHANGED,
+            classification=FindingClass.UNCLASSIFIED,
+        )
+        return IntegrityReport(
+            report.sqlite_version,
+            report.fts5_tables,
+            report.findings + (changed,),
+            False,
+        )
+    return report
+
+
+def probe_offline_database(offline_target: Path, receipt: Path) -> IntegrityReport:
+    """Authorize one copied target and run the descriptor-bound integrity probe."""
+
+    with open_authorized_recovery(offline_target, receipt) as source:
+        snapshot = snapshot_source_tree(source)
+        return probe_authorized_database(source, snapshot)

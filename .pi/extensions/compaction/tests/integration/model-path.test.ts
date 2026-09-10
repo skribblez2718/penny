@@ -105,8 +105,66 @@ describe("model-owned prose path", () => {
     expect(result.compaction.details.summary_source).toBe("model");
     expect(result.compaction.details.summary_model).toBe("anthropic/claude-x");
     expect(result.compaction.details.prose_summary).toContain("## Goal");
-    // artifact.goal is kept consistent with the model's brief.
-    expect(result.compaction.details.goal).toBe("Refactor the token estimator");
+    // Code-owned recency keeps the exact user goal authoritative over model paraphrase.
+    expect(result.compaction.details.goal).toBe("Refactor the token estimator module please");
+    expect(result.compaction.summary).toContain(
+      "## Goal\nRefactor the token estimator module please"
+    );
+  });
+
+  it("keeps a short post-skill pivot and validated status through the real hook", async () => {
+    generateModelSummaryMock.mockResolvedValueOnce({
+      prose: ["## Goal", "Old completed skill", "## Active Skill", "- code is still running"].join(
+        "\n"
+      ),
+      model: "anthropic/claude-x",
+    });
+    const event = mockEvent();
+    event.preparation.messagesToSummarize = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "skill-1",
+            name: "skill",
+            arguments: { skill_name: "code", goal: "Old completed skill" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "skill",
+        toolCallId: "skill-1",
+        content: "Completed",
+        details: {
+          success: true,
+          session_id: "code-session-1",
+          skill_name: "code",
+          state: "complete",
+          steps_total: 1,
+          agents_invoked: ["coder"],
+          errors: [],
+          result: { met: true },
+        },
+      },
+      { role: "user", content: "F04" },
+    ];
+
+    const pi = createMockCompactionPi();
+    compactionExtension(pi.api);
+    const result = await pi.emitRequired(event, ctx());
+
+    expect(result.compaction.details.goal).toBe("F04");
+    expect(result.compaction.details.dominant_skill).toMatchObject({
+      result_status: "success",
+      superseded: true,
+    });
+    expect(result.compaction.summary).toContain("## Goal\nF04");
+    expect(result.compaction.summary).toContain(
+      "**code** (success, superseded by a newer request)"
+    );
+    expect(result.compaction.summary).not.toContain("still running");
   });
 
   it("bounds a giant multibyte envelope through the registered compaction hook", async () => {

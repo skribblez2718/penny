@@ -203,10 +203,8 @@ def test_doctor_never_opens_the_copy_read_write(
     assert opened
     source = str(palace / "chroma.sqlite3")
     source_opens = [(args, kwargs) for args, kwargs in opened if args and source in str(args[0])]
-    assert source_opens
-    for args, kwargs in source_opens:
-        assert kwargs.get("uri") is True
-        assert "mode=ro" in str(args[0])
+    assert source_opens == []
+    assert all("/proc/self/fd/" in str(args[0]) for args, _kwargs in opened if args)
 
 
 def test_main_reports_gate_failure_without_touching_a_default(

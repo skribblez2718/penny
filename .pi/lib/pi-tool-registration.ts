@@ -18,9 +18,34 @@ import type { Static, TSchema } from "typebox";
  */
 export type ProjectToolResult<TDetails = unknown> = Omit<AgentToolResult<TDetails>, "details"> & {
   details?: TDetails;
-  /** Legacy Penny error marker preserved for existing text-only result contracts. */
+  /** An explicit project-level failure marker translated at registration time. */
   isError?: boolean;
 };
+
+interface RegistrationState {
+  readonly failedToolCallIds: Set<string>;
+}
+
+const registrationStates = new WeakMap<ExtensionAPI, RegistrationState>();
+
+/**
+ * Pi 0.85 treats a resolved tool execution as successful even when the returned
+ * object carries an unknown `isError` property. Its supported `tool_result`
+ * middleware can authoritatively replace the error flag without replacing the
+ * result content or details, so install one bridge per extension API.
+ */
+function registrationState(pi: ExtensionAPI): RegistrationState {
+  const existing = registrationStates.get(pi);
+  if (existing !== undefined) return existing;
+
+  const state: RegistrationState = { failedToolCallIds: new Set<string>() };
+  registrationStates.set(pi, state);
+  pi.on("tool_result", (event) => {
+    if (!state.failedToolCallIds.delete(event.toolCallId)) return undefined;
+    return { isError: true };
+  });
+  return state;
+}
 
 export type ProjectToolDefinition<
   TParams extends TSchema,
@@ -46,11 +71,13 @@ export function registerTool<TParams extends TSchema, TDetails = unknown, TState
   pi: ExtensionAPI,
   tool: ProjectToolDefinition<TParams, TDetails, TState>
 ): void {
+  const state = registrationState(pi);
   const { execute, ...definition } = tool;
   pi.registerTool<TParams, TDetails | undefined, TState>({
     ...definition,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const result = await execute(toolCallId, params, signal, onUpdate, ctx);
+      if (result.isError === true) state.failedToolCallIds.add(toolCallId);
       return { ...result, details: result.details };
     },
   });
