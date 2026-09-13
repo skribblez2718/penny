@@ -8,3 +8,4 @@ export * from "./observability-store.js";
 export * from "./paths.js";
 export * from "./reconciliation.js";
 export * from "./setup.js";
+export * from "./upgrade.js";

@@ -199,6 +199,7 @@ export const LivenessTerminalReasonSchema = Type.Union([
   Type.Literal("external_request_budget_exhausted"),
   Type.Literal("worker_wall_clock_exhausted"),
   Type.Literal("run_wall_clock_exhausted"),
+  Type.Literal("worker_inactivity_lease_expired"),
   Type.Literal("routing_repair_binding_invalid"),
 ]);
 export type LivenessTerminalReason = Static<typeof LivenessTerminalReasonSchema>;
@@ -237,6 +238,76 @@ export const LivenessPolicyV1Schema = Type.Object(
   { additionalProperties: false }
 );
 export type LivenessPolicyV1 = Static<typeof LivenessPolicyV1Schema>;
+
+/**
+ * New ordinary-work policy. Counters remain observable, but ordinary phase/model/tool/external
+ * counts are deliberately absent: they are not termination authority. Routing-only repair and
+ * malformed/protocol protections remain bounded separately.
+ */
+export const LivenessPolicyV2Schema = Type.Object(
+  {
+    schema_version: Type.Literal(2),
+    scope: Type.String({ pattern: "^[a-z][a-z0-9-]*$", maxLength: 128 }),
+    preset: Type.String({ minLength: 1, maxLength: 32 }),
+    worker_active_work_budget_ms: Type.Integer({ minimum: 1 }),
+    run_active_work_budget_ms: Type.Integer({ minimum: 1 }),
+    malformed_results_per_state_branch: Type.Literal(2),
+    identical_malformed_digest_limit: Type.Literal(2),
+    protocol_errors_per_worker: Type.Literal(4),
+    identical_protocol_digest_limit: Type.Literal(2),
+    routing_repair: LivenessRepairPolicySchema,
+  },
+  { additionalProperties: false }
+);
+export type LivenessPolicyV2 = Static<typeof LivenessPolicyV2Schema>;
+
+const LivenessRepairPolicyV3Schema = Type.Object(
+  {
+    max_invocations_per_state_branch: Type.Literal(1),
+    model_turns_per_worker: Type.Literal(4),
+    tool_calls_per_worker: Type.Literal(2),
+    external_calls_per_worker: Type.Literal(0),
+  },
+  { additionalProperties: false }
+);
+
+/**
+ * Progress-lease policy for new ordinary work. It binds one immutable profile registry and
+ * conservative unknown-provider fallbacks. It carries no total elapsed-work or run-duration
+ * budget; exact provider/model lease bindings are persisted when the runtime resolves a model.
+ */
+export const LivenessPolicyV3Schema = Type.Object(
+  {
+    schema_version: Type.Literal(3),
+    scope: Type.String({ pattern: "^[a-z][a-z0-9-]*$", maxLength: 128 }),
+    preset: Type.String({ minLength: 1, maxLength: 32 }),
+    lease_registry_id: Id,
+    lease_registry_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    calibration_id: Id,
+    calibration_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    unknown_provider_phase_inactivity_ms: Type.Integer({ minimum: 1, maximum: 2_592_000_000 }),
+    unknown_provider_routing_repair_inactivity_ms: Type.Integer({
+      minimum: 1,
+      maximum: 2_592_000_000,
+    }),
+    renewal_policy: Type.Literal("trusted_host_activity_or_convergence_v1"),
+    malformed_results_per_state_branch: Type.Literal(2),
+    identical_malformed_digest_limit: Type.Literal(2),
+    protocol_errors_per_worker: Type.Literal(4),
+    identical_protocol_digest_limit: Type.Literal(2),
+    routing_repair: LivenessRepairPolicyV3Schema,
+  },
+  { additionalProperties: false }
+);
+export type LivenessPolicyV3 = Static<typeof LivenessPolicyV3Schema>;
+
+/** Durable policy reader: V1/V2 records retain exact historical behavior; new runs bind V3. */
+export const LivenessPolicySchema = Type.Union([
+  LivenessPolicyV1Schema,
+  LivenessPolicyV2Schema,
+  LivenessPolicyV3Schema,
+]);
+export type LivenessPolicy = Static<typeof LivenessPolicySchema>;
 
 export const LivenessSnapshotV1Schema = Type.Object(
   {
@@ -416,6 +487,34 @@ export const ChildWorkflowBudgetAllocationV1Schema = Type.Object(
 );
 export type ChildWorkflowBudgetAllocationV1 = Static<typeof ChildWorkflowBudgetAllocationV1Schema>;
 
+/**
+ * Exact, content-free binding selected by the trusted host for one new child execution.
+ * It is a lease *identity* and inactivity interval, not a total-duration budget.
+ */
+export const ChildWorkflowProgressLeaseBindingV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    profile_id: Id,
+    profile_version: Type.Integer({ minimum: 1 }),
+    profile_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    calibration_id: Id,
+    calibration_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    provider_id: Id,
+    model_id: Id,
+    operation_class: Type.Union([
+      Type.Literal("worker"),
+      Type.Literal("host_tool"),
+      Type.Literal("child_execution"),
+    ]),
+    inactivity_interval_ms: Type.Integer({ minimum: 1, maximum: 2_592_000_000 }),
+    renewal_policy: Type.Literal("trusted_host_activity_or_convergence_v1"),
+  },
+  { additionalProperties: false }
+);
+export type ChildWorkflowProgressLeaseBindingV1 = Static<
+  typeof ChildWorkflowProgressLeaseBindingV1Schema
+>;
+
 /** Exact semantic product the parent is prepared to consume. */
 export const ChildWorkflowOutputContractV1Schema = Type.Object(
   {
@@ -442,6 +541,32 @@ export const ChildWorkflowPolicyBindingV1Schema = Type.Object(
   { additionalProperties: false }
 );
 export type ChildWorkflowPolicyBindingV1 = Static<typeof ChildWorkflowPolicyBindingV1Schema>;
+
+/**
+ * Lease-bound new-call directive. The legacy schema-version-2 directive remains separately
+ * parseable for exact historical replay. New calls intentionally carry no guessed model-turn,
+ * tool-call, step, or aggregate budget: registered workflow controls, authority boundaries, and
+ * renewable inactivity determine execution.
+ */
+export const LeaseBoundInvokeChildWorkflowDirectiveV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(3),
+    action: Type.Literal("invoke_child_workflow"),
+    identity: RunIdentitySchema,
+    state_id: Id,
+    call_key: Id,
+    child_name: Id,
+    request_ref: ArtifactRefSchema,
+    input_artifacts: InputArtifactsSchema,
+    expected_output: ChildWorkflowOutputContractV1Schema,
+    policy_binding: ChildWorkflowPolicyBindingV1Schema,
+    progress_lease: ChildWorkflowProgressLeaseBindingV1Schema,
+  },
+  { additionalProperties: false }
+);
+export type LeaseBoundInvokeChildWorkflowDirectiveV1 = Static<
+  typeof LeaseBoundInvokeChildWorkflowDirectiveV1Schema
+>;
 
 const ChildWorkflowResumeV1Schema = Type.Object(
   {
@@ -717,6 +842,7 @@ export const DirectiveSchema = Type.Union([
   InvokeAgentDirectiveSchema,
   InvokeParallelDirectiveSchema,
   InvokeChildWorkflowDirectiveSchema,
+  LeaseBoundInvokeChildWorkflowDirectiveV1Schema,
   UserGateDirectiveSchema,
   TerminalDirectiveSchema,
   PausedDirectiveSchema,

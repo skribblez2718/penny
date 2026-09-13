@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Checkpointer } from "../src/checkpointer.js";
 import type { RunIdentity } from "../src/contracts.js";
@@ -11,7 +11,10 @@ import { OrchestrationEngine } from "../src/engine.js";
 import {
   LivenessController,
   LivenessExhaustedError,
+  activeWorkLivenessPolicy,
+  legacyResearchLivenessPolicy,
   malformedErrorDigest,
+  researchLivenessPolicy,
   researchThinkingLevelForLivenessPreset,
 } from "../src/liveness.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
@@ -82,9 +85,10 @@ describe("research liveness inference effort", () => {
 });
 
 describe("durable liveness budgets", () => {
-  it("projects the Quick worker budget without charging and denies a ninth same-worker external call", () => {
+  it("projects the Quick inactivity lease and accepts past former worker external-call counts", () => {
     const root = temporaryDirectory();
-    const { checkpointer, liveness, engine } = runtime(root, () => 750);
+    let now = 750;
+    const { checkpointer, liveness, engine } = runtime(root, () => now);
     start(engine, root, "worker-prompt-budget-run");
     liveness.admitInvocation({
       runId: "worker-prompt-budget-run",
@@ -102,13 +106,15 @@ describe("durable liveness budgets", () => {
     });
 
     const eventsBeforeProjection = checkpointer.events("worker-prompt-budget-run");
-    expect(liveness.workerPromptBudget("worker-prompt-budget-run", "worker-1")).toEqual({
-      schema_version: 1,
+    expect(liveness.workerPromptBudget("worker-prompt-budget-run", "worker-1")).toMatchObject({
+      schema_version: 3,
       preset: "quick",
       purpose: "phase",
-      model_turns: { worker_remaining: 16, run_remaining: 48, effective_remaining: 16 },
-      tool_calls: { worker_remaining: 20, run_remaining: 64, effective_remaining: 20 },
-      external_requests: { worker_remaining: 8, run_remaining: 12, effective_remaining: 8 },
+      inactivity_lease: {
+        interval_ms: 10 * 60_000,
+        remaining_ms: 10 * 60_000,
+        accepted_progress_signals: 0,
+      },
     });
     expect(checkpointer.events("worker-prompt-budget-run")).toEqual(eventsBeforeProjection);
 
@@ -117,44 +123,203 @@ describe("durable liveness budgets", () => {
       workerId: "worker-1",
       stateId: "researching",
     });
-    for (let index = 0; index < 7; index += 1) {
+    // 20 crosses former per-worker tool (20) and external (8) ceilings.
+    for (let index = 0; index < 20; index += 1)
       first({ kind: "tool_call", tool_name: "web_fetch" });
-    }
-    expect(
-      liveness.workerPromptBudget("worker-prompt-budget-run", "worker-1").external_requests
-    ).toEqual({ worker_remaining: 1, run_remaining: 5, effective_remaining: 1 });
-    first({ kind: "tool_call", tool_name: "bash" });
-    expect(() => first({ kind: "tool_call", tool_name: "playwright_navigate" })).toThrowError(
-      new LivenessExhaustedError("external_request_budget_exhausted")
-    );
+    expect(liveness.snapshot("worker-prompt-budget-run").external_calls).toBe(20);
+    now += 1;
+    expect(liveness.workerPromptBudget("worker-prompt-budget-run", "worker-1")).toMatchObject({
+      schema_version: 3,
+      inactivity_lease: { remaining_ms: 10 * 60_000 - 1 },
+    });
     liveness.endWorker("worker-prompt-budget-run", "worker-1", "complete");
+    checkpointer.close();
+  });
 
+  it("lets slow productive work exceed the former fixed worker duration", () => {
+    const root = temporaryDirectory();
+    let now = 0;
+    const { checkpointer, liveness, engine } = runtime(root, () => now);
+    start(engine, root, "slow-productive-run");
     liveness.admitInvocation({
-      runId: "worker-prompt-budget-run",
+      runId: "slow-productive-run",
       stateId: "researching",
-      branchId: "sq2",
+      branchId: null,
       attempt: 1,
       purpose: "phase",
     });
     liveness.startWorker({
-      runId: "worker-prompt-budget-run",
-      workerId: "worker-2",
+      runId: "slow-productive-run",
+      workerId: "worker-slow",
       stateId: "researching",
-      branchId: "sq2",
+      branchId: null,
       purpose: "phase",
     });
-    expect(
-      liveness.workerPromptBudget("worker-prompt-budget-run", "worker-2").external_requests
-    ).toEqual({ worker_remaining: 8, run_remaining: 4, effective_remaining: 4 });
-    expect(
-      checkpointer
-        .events("worker-prompt-budget-run")
-        .filter((event) => event.eventType === "liveness_tool_call_charged")
-    ).toHaveLength(8);
+    liveness.bindWorkerProgressLease({
+      runId: "slow-productive-run",
+      workerId: "worker-slow",
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+    });
+    const sink = liveness.sessionSink({
+      runId: "slow-productive-run",
+      workerId: "worker-slow",
+      stateId: "researching",
+    });
+    for (let index = 0; index < 3; index += 1) {
+      now += 5 * 60_000;
+      sink({
+        kind: "activity",
+        activity_class: "assistant_thinking_delta",
+        observed_units: 1,
+      });
+    }
+    expect(now).toBe(15 * 60_000);
+    expect(liveness.workerPromptBudget("slow-productive-run", "worker-slow")).toMatchObject({
+      schema_version: 3,
+      inactivity_lease: {
+        interval_ms: 6 * 60_000,
+        remaining_ms: 6 * 60_000,
+        accepted_progress_signals: 3,
+      },
+    });
+    liveness.endWorker("slow-productive-run", "worker-slow", "complete");
     checkpointer.close();
   });
 
-  it("charges before admission, survives controller restart, and denies a thirteenth quick external call", () => {
+  it("does not replay the full durable history for every streaming progress delta", () => {
+    const root = temporaryDirectory();
+    const { checkpointer, liveness, engine } = runtime(root, () => 1_000);
+    start(engine, root, "streaming-progress-run");
+    liveness.admitInvocation({
+      runId: "streaming-progress-run",
+      stateId: "researching",
+      branchId: null,
+      attempt: 1,
+      purpose: "phase",
+    });
+    liveness.startWorker({
+      runId: "streaming-progress-run",
+      workerId: "worker-streaming",
+      stateId: "researching",
+      branchId: null,
+      purpose: "phase",
+    });
+    liveness.bindWorkerProgressLease({
+      runId: "streaming-progress-run",
+      workerId: "worker-streaming",
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+    });
+
+    const initialEventCount = checkpointer.events("streaming-progress-run").length;
+    const suffixReads = vi.spyOn(checkpointer, "eventsAfter");
+    const restarted = new LivenessController(checkpointer, () => 1_000);
+    const sink = restarted.sessionSink({
+      runId: "streaming-progress-run",
+      workerId: "worker-streaming",
+      stateId: "researching",
+    });
+    for (let index = 0; index < 256; index += 1) {
+      sink({ kind: "activity", activity_class: "assistant_text_delta", observed_units: 1 });
+      restarted.workerInactivityLease("streaming-progress-run", "worker-streaming");
+    }
+
+    expect(
+      restarted.workerPromptBudget("streaming-progress-run", "worker-streaming")
+    ).toMatchObject({
+      schema_version: 3,
+      inactivity_lease: { accepted_progress_signals: 256 },
+    });
+    const cursors = suffixReads.mock.calls.map(([, sequence]) => sequence);
+    expect(cursors.filter((sequence) => sequence === 0)).toHaveLength(1);
+    let previousCursor = 0;
+    for (const sequence of cursors) {
+      expect(sequence).toBeGreaterThanOrEqual(previousCursor);
+      previousCursor = sequence;
+    }
+    expect(
+      suffixReads.mock.results.reduce(
+        (count, result) => count + (result.type === "return" ? result.value.length : 0),
+        0
+      )
+    ).toBe(initialEventCount + 256);
+    suffixReads.mockRestore();
+    expect(
+      checkpointer
+        .events("streaming-progress-run")
+        .filter((event) => event.eventType === "liveness_progress_observed")
+    ).toHaveLength(256);
+    const recovered = new LivenessController(checkpointer, () => 1_000);
+    expect(
+      recovered.workerPromptBudget("streaming-progress-run", "worker-streaming")
+    ).toMatchObject({
+      schema_version: 3,
+      inactivity_lease: { accepted_progress_signals: 256 },
+    });
+    checkpointer.close();
+  });
+
+  it("incrementally observes workflow events appended outside the liveness controller", () => {
+    const root = temporaryDirectory();
+    const { checkpointer, liveness, engine } = runtime(root, () => 1_000);
+    start(engine, root, "external-event-run");
+    expect(liveness.snapshot("external-event-run").terminal_reason).toBeNull();
+
+    const context = checkpointer.loadRunById("external-event-run");
+    if (context === undefined) throw new Error("external-event-run was not persisted");
+    checkpointer.saveRun(context, "fixture_terminal_reason", {
+      terminal_reason: "worker_wall_clock_exhausted",
+    });
+
+    expect(liveness.snapshot("external-event-run").terminal_reason).toBe(
+      "worker_wall_clock_exhausted"
+    );
+    checkpointer.close();
+  });
+
+  it("expires a stalled V3 worker at the exact inactivity boundary", () => {
+    const root = temporaryDirectory();
+    let now = 0;
+    const { checkpointer, liveness, engine } = runtime(root, () => now);
+    start(engine, root, "stalled-lease-run");
+    liveness.admitInvocation({
+      runId: "stalled-lease-run",
+      stateId: "researching",
+      branchId: null,
+      attempt: 1,
+      purpose: "phase",
+    });
+    liveness.startWorker({
+      runId: "stalled-lease-run",
+      workerId: "worker-stalled",
+      stateId: "researching",
+      branchId: null,
+      purpose: "phase",
+    });
+    liveness.bindWorkerProgressLease({
+      runId: "stalled-lease-run",
+      workerId: "worker-stalled",
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+    });
+    now = 6 * 60_000;
+    expect(() =>
+      liveness.sessionSink({
+        runId: "stalled-lease-run",
+        workerId: "worker-stalled",
+        stateId: "researching",
+      })({ kind: "activity", activity_class: "assistant_text_delta", observed_units: 1 })
+    ).toThrowError(new LivenessExhaustedError("worker_inactivity_lease_expired"));
+    expect(
+      checkpointer
+        .events("stalled-lease-run")
+        .filter((event) => event.eventType === "liveness_progress_observed")
+    ).toHaveLength(0);
+    checkpointer.close();
+  });
+
+  it("retains external-call telemetry past the former run ceiling across restart", () => {
     const root = temporaryDirectory();
     let now = 1_000;
     const { checkpointer, liveness, engine } = runtime(root, () => now);
@@ -179,7 +344,7 @@ describe("durable liveness budgets", () => {
       workerId: "worker-1",
       stateId: "researching",
     });
-    for (let index = 0; index < 8; index += 1)
+    for (let index = 0; index < 20; index += 1)
       first({ kind: "tool_call", tool_name: "web_search" });
     liveness.endWorker("external-run", "worker-1", "complete");
 
@@ -202,23 +367,17 @@ describe("durable liveness budgets", () => {
       workerId: "worker-2",
       stateId: "researching",
     });
-    for (let index = 0; index < 4; index += 1) second({ kind: "tool_call", tool_name: "bash" });
+    for (let index = 0; index < 40; index += 1)
+      second({ kind: "tool_call", tool_name: "web_fetch" });
     const before = checkpointer
       .events("external-run")
       .filter((event) => event.eventType === "liveness_tool_call_charged").length;
-    expect(before).toBe(12);
-    expect(() => second({ kind: "tool_call", tool_name: "web_fetch" })).toThrowError(
-      new LivenessExhaustedError("external_request_budget_exhausted")
-    );
-    expect(
-      checkpointer
-        .events("external-run")
-        .filter((event) => event.eventType === "liveness_tool_call_charged")
-    ).toHaveLength(12);
+    expect(before).toBe(60);
+    expect(liveness.snapshot("external-run").external_calls).toBe(60);
 
     now += 1;
     const restarted = new LivenessController(checkpointer, () => now);
-    expect(restarted.snapshot("external-run").external_calls).toBe(12);
+    expect(restarted.snapshot("external-run").external_calls).toBe(60);
     checkpointer.close();
   });
 
@@ -253,7 +412,7 @@ describe("durable liveness budgets", () => {
     checkpointer.close();
   });
 
-  it("folds parallel wall time as a union and charges interruption downtime on recovery", () => {
+  it("retains wall-time telemetry but does not charge process downtime to a V3 lease", () => {
     const root = temporaryDirectory();
     let now = 0;
     const { checkpointer, liveness, engine } = runtime(root, () => now);
@@ -294,22 +453,18 @@ describe("durable liveness budgets", () => {
       branchId: "worker-c",
       purpose: "phase",
     });
-    now += 5 * 60_000;
+    now += 20 * 60_000;
     const recovered = engine.handle({
       schema_version: 2,
       action: "recover",
       identity: identity("wall-run"),
     });
-    expect(recovered.action).toBe("incomplete");
-    if (recovered.action === "incomplete") {
-      expect(recovered.result.terminal_reason).toBe("worker_wall_clock_exhausted");
-      expect(recovered.met).toBe(false);
-    }
+    expect(recovered.action).not.toBe("incomplete");
     expect(liveness.snapshot("wall-run").open_workers).toBe(0);
     checkpointer.close();
   });
 
-  it("projects per-state/branch attempts from durable events without lowering the P1 total ceiling", () => {
+  it("retains per-state/branch attempt telemetry without ordinary phase admission ceilings", () => {
     const root = temporaryDirectory();
     const { checkpointer, liveness, engine } = runtime(root, () => 9_000);
     start(engine, root, "phase-projection-run");
@@ -325,18 +480,94 @@ describe("durable liveness budgets", () => {
     expect(liveness.phaseAttemptProjection("phase-projection-run")).toEqual({
       '{"branch_id":"same-branch","state_id":"researching"}': 6,
     });
-    expect(() =>
-      liveness.admitInvocation({
-        runId: "phase-projection-run",
-        stateId: "researching",
-        branchId: "same-branch",
-        attempt: 7,
-        purpose: "phase",
-      })
-    ).toThrowError(new LivenessExhaustedError("model_turn_budget_exhausted"));
+    liveness.admitInvocation({
+      runId: "phase-projection-run",
+      stateId: "researching",
+      branchId: "same-branch",
+      attempt: 7,
+      purpose: "phase",
+    });
+    expect(liveness.phaseAttemptProjection("phase-projection-run")).toEqual({
+      '{"branch_id":"same-branch","state_id":"researching"}': 7,
+    });
     const restarted = new LivenessController(checkpointer, () => 9_001);
     expect(restarted.phaseAttemptProjection("phase-projection-run")).toEqual(
       liveness.phaseAttemptProjection("phase-projection-run")
+    );
+    checkpointer.close();
+  });
+
+  it("replays an exact V2 active-work policy without reinterpreting it as a lease", () => {
+    const root = temporaryDirectory();
+    const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
+    const run = RunContext.create({
+      identity: identity("v2-continuation-run"),
+      goal: "V2 continuation",
+      constraints: { mode: "quick" },
+      projectRoot: root,
+      trustProfile: "trusted-interactive",
+      maxSteps: 96,
+    });
+    checkpointer.createRun(run, "run_started", { fixture: true });
+    const original = new LivenessController(checkpointer, () => 0);
+    original.setPolicyResolver(() =>
+      activeWorkLivenessPolicy({
+        scope: "research",
+        preset: "quick",
+        worker_active_work_budget_ms: 5 * 60_000,
+        run_active_work_budget_ms: 15 * 60_000,
+      })
+    );
+    expect(original.bindPolicy(run).schema_version).toBe(2);
+    const recovered = new LivenessController(checkpointer, () => 20 * 60_000);
+    recovered.setPolicyResolver(() => researchLivenessPolicy("quick"));
+    const bound = recovered.bindPolicy(run);
+    expect(bound.schema_version).toBe(2);
+    expect(bound).toHaveProperty("worker_active_work_budget_ms", 5 * 60_000);
+    checkpointer.close();
+  });
+
+  it("recovers an exact V1 bound policy rather than resolving it as V3", () => {
+    const root = temporaryDirectory();
+    const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
+    const run = RunContext.create({
+      identity: identity("v1-continuation-run"),
+      goal: "V1 continuation",
+      constraints: { mode: "quick" },
+      projectRoot: root,
+      trustProfile: "trusted-interactive",
+      maxSteps: 96,
+    });
+    checkpointer.createRun(run, "run_started", { fixture: true });
+    const original = new LivenessController(checkpointer, () => 0);
+    original.setPolicyResolver(() => legacyResearchLivenessPolicy("quick"));
+    expect(original.bindPolicy(run).schema_version).toBe(1);
+    const recovered = new LivenessController(checkpointer, () => 1);
+    recovered.setPolicyResolver(() => researchLivenessPolicy("quick"));
+    const bound = recovered.bindPolicy(run);
+    expect(bound.schema_version).toBe(1);
+    recovered.admitInvocation({
+      runId: run.identity.run_id,
+      stateId: "researching",
+      branchId: "v1",
+      attempt: 1,
+      purpose: "phase",
+    });
+    recovered.startWorker({
+      runId: run.identity.run_id,
+      workerId: "v1-worker",
+      stateId: "researching",
+      branchId: "v1",
+      purpose: "phase",
+    });
+    const sink = recovered.sessionSink({
+      runId: run.identity.run_id,
+      workerId: "v1-worker",
+      stateId: "researching",
+    });
+    for (let index = 0; index < 8; index += 1) sink({ kind: "tool_call", tool_name: "web_fetch" });
+    expect(() => sink({ kind: "tool_call", tool_name: "web_fetch" })).toThrowError(
+      new LivenessExhaustedError("external_request_budget_exhausted")
     );
     checkpointer.close();
   });

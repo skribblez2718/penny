@@ -1,5 +1,6 @@
 import {
   parseJson,
+  requireNumber,
   requireRecord,
   requireRecordArray,
   requireString,
@@ -48,7 +49,9 @@ function orchestrationSource(
     "apps/orchestration/tests/state-reconciliation.test.ts:40"
   ).DatabaseSync)(databasePath);
   try {
-    database.exec("DROP TABLE store_metadata; PRAGMA user_version=9;");
+    database.exec(
+      "DROP TABLE child_workflow_calls; DROP TABLE store_metadata; PRAGMA user_version=9;"
+    );
     const insert = database.prepare(
       `INSERT INTO runs(
         run_id,session_id,playbook,engine_owner,schema_version,status,
@@ -312,6 +315,9 @@ describe("explicit duplicate-source reconciliation", () => {
     );
     expect(runsTable).toMatchObject({ name: "runs", row_count: 2 });
     expect(runsTable.rows_sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(
+      reconciliation.target_tables.find((table) => table.name === "child_workflow_calls")
+    ).toMatchObject({ name: "child_workflow_calls", row_count: 0 });
     const planBytes = readFileSync(paths.planPath, "utf8");
     expect(planBytes).not.toContain(primary);
     expect(planBytes).not.toContain(nested);
@@ -355,7 +361,12 @@ describe("explicit duplicate-source reconciliation", () => {
       target.prepare("SELECT run_id FROM runs ORDER BY run_id").all(),
       "reconciled run rows"
     );
+    const childCalls = requireRecord(
+      target.prepare("SELECT COUNT(*) AS count FROM child_workflow_calls").get(),
+      "reconciled child-workflow call rows"
+    );
     target.close();
+    expect(requireNumber(childCalls["count"], "reconciled child-workflow call count")).toBe(0);
     expect(
       runIds.map((row, index) => requireString(row["run_id"], `run rows[${index}].run_id`))
     ).toEqual(["run-nested", "run-primary"]);

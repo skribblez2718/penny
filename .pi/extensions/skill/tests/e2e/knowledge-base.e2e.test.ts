@@ -1063,8 +1063,9 @@ describe("registered knowledge_base production path", () => {
     const parentSurfaces: RegisteredToolResult[] = [];
     const hostSurfaces: unknown[] = [];
 
-    // Profile authority fails closed before init; the failure is both logged and
-    // content-free. The valid profile/grant is then installed out of band.
+    // Unregistered project state fails closed before profile authority is consulted; the failure
+    // preserves its root cause and remains content-free. Valid state/profile/grant is then installed
+    // out of band.
     const profileRefusal = await callTool(
       tool,
       projectRoot,
@@ -1074,7 +1075,7 @@ describe("registered knowledge_base production path", () => {
     );
     expect(profileRefusal.details).toMatchObject({
       status: "refused",
-      warnings: ["profile_not_authorized"],
+      warnings: ["PROJECT_UNREGISTERED: retained state unavailable"],
     });
     installProfile(projectRoot, kbRoot);
     const projectPaths = resolvePennyProjectState(projectRoot).paths;

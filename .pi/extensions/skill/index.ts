@@ -38,6 +38,7 @@ import {
   KnowledgeBaseRequestSchema,
   OrchestrationService,
   PLAYBOOK_REGISTRY,
+  PennyStateResolutionError,
   resolvePennyRuntimeState,
   validateKnowledgeBaseRequest,
   type Checkpointer,
@@ -97,6 +98,17 @@ const logger = createLogger("skill");
 import { mapWithConcurrencyLimit } from "../subagent/agent-runner.js";
 
 type SkillIngressResolver = typeof resolveSkillIngress;
+
+function stateFailureDiagnostic(error: PennyStateResolutionError): string {
+  const details = error.details;
+  const versions =
+    details.actualSchemaVersion === undefined || details.requiredSchemaVersion === undefined
+      ? ""
+      : ` (${details.actualSchemaVersion} → ${details.requiredSchemaVersion})`;
+  const recovery =
+    details.recoveryAction === undefined ? "" : `; recovery=${details.recoveryAction}`;
+  return `${error.code}: ${details.component ?? "retained"} state unavailable${versions}${recovery}`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -306,7 +318,6 @@ function runProgressFromOrchestration(
     cancelled: "cancelled",
     paused: "paused",
     status: "status returned",
-    invoke_child_workflow: "invoking child workflow",
   };
   return {
     stage: "boundary_reached",
@@ -650,7 +661,8 @@ const StepOverride = Type.Object({
   ),
   constraints: Type.Optional(
     Type.Record(Type.String(), Type.Unknown(), {
-      description: "Override the failed step's constraints (e.g., longer timeout)",
+      description:
+        "Override the failed step's caller-admitted constraints; host liveness and deadline controls cannot be raised here.",
     })
   ),
 });
@@ -1585,8 +1597,13 @@ export default function skillExtension(
           grantStoreDir: hostGrantRoot,
         });
       } catch (error) {
+        const stateFailure =
+          error instanceof PennyStateResolutionError ? stateFailureDiagnostic(error) : undefined;
         logger.warn("kb_profile_admission_refused", {
-          errorCode: "KB_PROFILE_ADMISSION_REFUSED",
+          errorCode:
+            error instanceof PennyStateResolutionError
+              ? error.code
+              : "KB_PROFILE_ADMISSION_REFUSED",
           reason: error instanceof Error ? error.name : "unknown",
         });
         const refused = {
@@ -1599,7 +1616,7 @@ export default function skillExtension(
           counts: {},
           artifacts: [],
           evidence: [],
-          warnings: ["profile_not_authorized"],
+          warnings: [stateFailure ?? "profile_not_authorized"],
           unresolved: [],
           next: "none",
         };
@@ -3897,7 +3914,7 @@ export default function skillExtension(
       "Penny decides WHEN to invoke; skills decide HOW to execute.",
       "Exact agent output is owner-persisted and re-read before SUMMARY routing; single and step inputs may include exact IDs from any run.",
       "Use for engine-backed skills whose listed description matches the task; do not use for a skill with a dedicated typed Pi-tool entrypoint such as knowledge_base.",
-      "Use a skill name from Pi's <available_skills> system catalog; descriptions are not repeated here.",
+      "Use a skill name from Pi's <available_skills> system catalog; descriptions are not repeated here. Before invoking an unfamiliar generic skill, read its catalog-provided SKILL.md Invocation contract and supply only its compatible fields.",
       "",
       "Modes:",
       "  - Single:  skill({ skill_name, goal })",
@@ -3934,6 +3951,51 @@ export default function skillExtension(
       }
 
       let result: SkillResult;
+
+      try {
+        resolvePennyRuntimeState(path.resolve(ctx.cwd), { env: process.env });
+      } catch (error) {
+        if (!(error instanceof PennyStateResolutionError)) throw error;
+        const errorResult: SkillResult = {
+          success: false,
+          session_id: params.session_id ?? "",
+          skill_name: params.skill_name ?? detected.mode,
+          state: "error",
+          requires_approval: false,
+          steps_total: 0,
+          agents_invoked: [],
+          errors: [stateFailureDiagnostic(error)],
+          state_failure: {
+            code: error.code,
+            details: {
+              component: error.details.component ?? "state",
+              ...(error.details.recoveryAction === undefined
+                ? {}
+                : { recoveryAction: error.details.recoveryAction }),
+              ...(error.details.actualSchemaVersion === undefined
+                ? {}
+                : { actualSchemaVersion: error.details.actualSchemaVersion }),
+              ...(error.details.requiredSchemaVersion === undefined
+                ? {}
+                : { requiredSchemaVersion: error.details.requiredSchemaVersion }),
+              ...(error.details.upgradeSupported === undefined
+                ? {}
+                : { upgradeSupported: error.details.upgradeSupported }),
+            },
+          },
+          ...(detected.mode === "single" ? { mode: "single" as const } : {}),
+          ...(detected.mode === "parallel" ? { mode: "parallel" as const } : {}),
+          ...(detected.mode === "chain" || detected.mode === "resume"
+            ? { mode: "chain" as const }
+            : {}),
+        };
+        return {
+          content: [
+            { type: "text", text: formatResult(errorResult, ctx.ui.theme.fg.bind(ctx.ui.theme)) },
+          ],
+          details: errorResult,
+        };
+      }
 
       switch (detected.mode) {
         case "single": {

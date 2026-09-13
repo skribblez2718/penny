@@ -539,7 +539,7 @@ function decideSave(projectRoot: string, runId: string, decision: "approve" | "d
   try {
     const engine = new OrchestrationEngine(checkpointer, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: 40,
       playbookName: "knowledge-base",
     });

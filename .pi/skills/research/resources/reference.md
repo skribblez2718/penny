@@ -12,7 +12,7 @@ The research skill is a registered TypeScript playbook. `OrchestrationService` c
 | `RSC-002` | The authoritative output and chain handoff are the latest exact `GroundedSynthesisV1` semantic core; three Markdown files remain deterministic compatibility renders. | `SKILL.md`; `README.md`; this reference | `research-product-activation.test.ts`; `research-parity.test.ts` |
 | `RSC-003` | P3 activates the acyclic latest-core receipt/render/product-envelope graph and deterministic crash-recoverable host renderer. | `SKILL.md`; `README.md`; this reference | `research-contract-v2.test.ts`; `research-product-activation.test.ts` |
 | `RSC-004` | P3 projects Synthia's typed semantic draft before sealing, runs Vera before report Carren, and sends every changed core back through Vera before Carren or rendering. | `resources/flow.html`; this reference | `flow-diagrams.test.ts`; `research-product-activation.test.ts` |
-| `RSC-005` | Deterministic P1 liveness/cancellation remains certified; the live-model PG4 Quick gate passed in verified run `p4-qr-live-20260827-009`. | `SKILL.md`; `README.md`; this reference | `liveness-budget.test.ts`; `worker-cancellation.test.ts`; ignored local PG4 verification bundle |
+| `RSC-005` | New V3 ordinary work has no phase/model/tool/external count or total elapsed-work quota; calibrated inactivity leases, independent host-operation deadlines, cancellation, malformed/protocol protection, repair limits, and exact V1/V2 continuation are locally certified. The live-model PG4 Quick gate passed in verified run `p4-qr-live-20260827-009`. | `SKILL.md`; `README.md`; this reference | `liveness-budget.test.ts`; `worker-cancellation.test.ts`; ignored local PG4 verification bundle |
 | `RSC-006` | Deprecated `report_format` remains real caller-owned output-shape guidance for the three declared cognitive consumers. | `SKILL.md`; phase prompts; this reference | `research-context.test.ts`; `prompt-guidance-contract.test.ts` |
 | `RSC-007` | `rigor_escalation` is rejected and new terminal projections omit decoder-only `rigor_escalated`. | `SKILL.md`; this reference | `research-request-admission.test.ts`; `research-parity.test.ts` |
 | `RSC-008` | Context/product metadata never alter exact selected-agent YAML tools, and private KB bodies never enter the product graph. | `SKILL.md`; this reference | `worker-tool-surface-matrix.test.ts`; `worker-registration.test.ts` |
@@ -39,7 +39,7 @@ Before a new run row or model session, owner code normalizes goal, scope, budget
 | Standard | no | no | 2 | 3 |
 | Deep | yes | yes | 3 | 3 |
 
-Effective breadth remains `min(max_sub_queries, max_fan_width)`. Compatibility aliases remain value-preserving. Existing P1 phase/model/tool/external/time/malformed/protocol/cancellation ceilings and durable counters are unchanged. Host `sealing_core`/`rendering` work consumes no model turns or model-visible tools.
+Effective breadth remains `min(max_sub_queries, max_fan_width)`. Compatibility aliases remain value-preserving. V3 replaces ordinary active-work/run-duration termination with calibrated renewable inactivity leases while retaining malformed/protocol, cancellation, and routing-repair containment; counters remain durable telemetry. Bound V1/V2 runs retain their exact historical semantics. Host `sealing_core`/`rendering` work consumes no model turns or model-visible tools.
 
 ## Owner-resolved context
 

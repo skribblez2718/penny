@@ -59,6 +59,7 @@ function fixture(root: string): {
     "apps/orchestration/tests/state-migration.test.ts:52"
   ).DatabaseSync)(database);
   sourceDatabase.exec(`
+    DROP TABLE child_workflow_calls;
     DROP TABLE store_metadata;
     PRAGMA user_version=9;
     INSERT INTO runs(
@@ -210,12 +211,17 @@ describe("explicit state migration apply/verify/finalize", () => {
       targetDatabase.prepare("SELECT COUNT(*) AS count FROM runs").get(),
       "migrated run count"
     );
+    const childCallCount = requireRecord(
+      targetDatabase.prepare("SELECT COUNT(*) AS count FROM child_workflow_calls").get(),
+      "migrated child-workflow call count"
+    );
     targetDatabase.close();
-    expect(requireNumber(version["user_version"], "migrated user_version")).toBe(10);
+    expect(requireNumber(version["user_version"], "migrated user_version")).toBe(12);
     expect(requireString(binding["project_id"], "migrated project_id")).toBe(
       plan.target_project_id
     );
     expect(requireNumber(runCount["count"], "migrated run count")).toBe(2);
+    expect(requireNumber(childCallCount["count"], "migrated child-workflow call count")).toBe(0);
 
     await expect(
       applyStateMigration({
@@ -354,6 +360,7 @@ describe("explicit state migration apply/verify/finalize", () => {
       sourceDatabase.exec(`
         PRAGMA journal_mode=WAL;
         PRAGMA wal_autocheckpoint=0;
+        DROP TABLE child_workflow_calls;
         DROP TABLE store_metadata;
         PRAGMA user_version=9;
         INSERT INTO runs(

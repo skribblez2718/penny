@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
-import { ArtifactStore, currentArtifactRef, resolvePennyRuntimeState } from "@penny/orchestration";
+import {
+  ArtifactStore,
+  currentArtifactRef,
+  PennyStateResolutionError,
+  resolvePennyRuntimeState,
+} from "@penny/orchestration";
 import type {
   CurrentArtifactRef as TypeScriptArtifactRef,
   OutputArtifactMetadata as TypeScriptArtifactMetadata,
@@ -41,6 +46,26 @@ export class ArtifactClientError extends Error {
     super(message);
     this.name = "ArtifactClientError";
   }
+}
+
+function stateFailureMetadata(error: unknown): Record<string, unknown> {
+  if (!(error instanceof PennyStateResolutionError)) return {};
+  return {
+    state_error_code: error.code,
+    ...(error.details.component === undefined ? {} : { component: error.details.component }),
+    ...(error.details.actualSchemaVersion === undefined
+      ? {}
+      : { actual_schema_version: error.details.actualSchemaVersion }),
+    ...(error.details.requiredSchemaVersion === undefined
+      ? {}
+      : { required_schema_version: error.details.requiredSchemaVersion }),
+    ...(error.details.upgradeSupported === undefined
+      ? {}
+      : { upgrade_supported: error.details.upgradeSupported }),
+    ...(error.details.recoveryAction === undefined
+      ? {}
+      : { recovery_action: error.details.recoveryAction }),
+  };
 }
 
 function contractError(message: string): never {
@@ -292,7 +317,8 @@ export function resolveArtifactRoot(
   } catch (error) {
     throw new ArtifactClientError(
       "ARTIFACT_CONFIG_INVALID",
-      error instanceof Error ? error.message : "Penny project state is unavailable"
+      error instanceof Error ? error.message : "Penny project state is unavailable",
+      stateFailureMetadata(error)
     );
   }
 }

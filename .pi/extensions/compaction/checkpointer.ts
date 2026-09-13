@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 
-import { resolvePennyRuntimeState } from "@penny/orchestration/source";
+import { PennyStateResolutionError, resolvePennyRuntimeState } from "@penny/orchestration/source";
 
 import { createLogger } from "../../lib/logger/logger.js";
 import {
@@ -57,18 +57,30 @@ function canonicalRunId(value: unknown): string | null {
   return value;
 }
 
-function configuredDatabase(projectRoot: string): {
-  databasePath: string;
-  projectId: string;
-} | null {
+type ConfiguredDatabase =
+  | { readonly ok: true; readonly databasePath: string; readonly projectId: string }
+  | { readonly ok: false; readonly issue: string };
+
+function configuredDatabase(projectRoot: string): ConfiguredDatabase {
   try {
     const state = resolvePennyRuntimeState(projectRoot);
     return {
+      ok: true,
       databasePath: state.paths.orchestration.database,
       projectId: state.projectId,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof PennyStateResolutionError) {
+      const schema = error.details.actualSchemaVersion;
+      const required = error.details.requiredSchemaVersion;
+      const versionDetail =
+        schema === undefined || required === undefined ? "" : ` (${schema} → ${required})`;
+      return {
+        ok: false,
+        issue: `checkpointer state unavailable: ${error.code}${versionDetail}`,
+      };
+    }
+    return { ok: false, issue: "checkpointer state unavailable: STATE_CUSTODY_INVALID" };
   }
 }
 
@@ -188,8 +200,11 @@ export function readExactCheckpoints(
   if (exactIds.length === 0) return { runs: [], artifactRefs: [], issues: [] };
 
   const configured = configuredDatabase(projectRoot);
-  if (!configured || !existsSync(configured.databasePath)) {
-    return { runs: [], artifactRefs: [], issues: [] };
+  if (!configured.ok) {
+    return { runs: [], artifactRefs: [], issues: [configured.issue] };
+  }
+  if (!existsSync(configured.databasePath)) {
+    return { runs: [], artifactRefs: [], issues: ["checkpointer database is unavailable"] };
   }
 
   let database: SqliteDatabaseBoundary | undefined;

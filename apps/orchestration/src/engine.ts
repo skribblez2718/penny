@@ -14,6 +14,7 @@ import {
 } from "./checkpointer.js";
 import { readRunInput, settleRunInput } from "./private-inputs.js";
 import { RunContext } from "./context.js";
+import type { ChildWorkflowCallRecord } from "./child-workflows/contracts.js";
 import {
   OperationReceiptStore,
   promotionApplyOperationSourceIdentity,
@@ -70,6 +71,7 @@ import {
   type PlaybookV1,
 } from "./playbooks/playbook.js";
 import {
+  bindGenericChildYamlAuthority,
   DEFAULT_PLAYBOOK_NAME,
   isRegisteredPlaybook,
   PLAYBOOK_REGISTRY,
@@ -106,6 +108,7 @@ export interface EngineOptions {
   /** Owner-resolved, metadata-only research context seam. */
   readonly researchContext?: ResearchContextOwnerV2;
   readonly livenessController?: LivenessController;
+  /** Test/private registration fallback; durable bound policy bytes always win on replay. */
   readonly livenessPolicyResolver?: LivenessPolicyResolver;
   /** Deterministic crash-boundary injection used only by local host-recovery tests. */
   readonly researchHostFault?: (point: string) => void;
@@ -474,6 +477,8 @@ export class OrchestrationEngine {
   private readonly registrationContractSha256: string;
   private readonly runtimeRegistrationSha256: string;
   private readonly projectRoot: string;
+  /** Exact caller catalog used to bind generic-child YAML maxima for this engine instance. */
+  private readonly catalogAgentProjectRoot: string;
   private readonly maxSteps: number;
   private readonly dispatchMode: () => string | undefined;
   private readonly artifactReader: ArtifactReader | undefined;
@@ -494,18 +499,23 @@ export class OrchestrationEngine {
         : new Map([[options.playbookRegistration.name, options.playbookRegistration]]));
     const playbookName =
       options.playbookName ?? options.playbookRegistration?.name ?? DEFAULT_PLAYBOOK_NAME;
-    const registration =
+    const selectedRegistration =
       options.playbookRegistration ?? resolvePlaybook(playbookName, this.registry);
-    if (registration === undefined) {
+    if (selectedRegistration === undefined) {
       throw new Error(`playbook '${playbookName}' is not registered in the supplied registry`);
     }
-    if (registration.name !== playbookName) {
+    if (selectedRegistration.name !== playbookName) {
       throw new Error(
-        `playbook registration '${registration.name}' does not match selected '${playbookName}'`
+        `playbook registration '${selectedRegistration.name}' does not match selected '${playbookName}'`
       );
     }
+    this.catalogAgentProjectRoot = path.resolve(options.projectRoot);
+    const registration = bindGenericChildYamlAuthority(
+      selectedRegistration,
+      this.catalogAgentProjectRoot
+    );
     // W3: authority metadata is validated before playbook construction.
-    this.contract = validateRegistrationContract(registration);
+    this.contract = validateRegistrationContract(registration, this.catalogAgentProjectRoot);
     this.registration = registration;
     this.registrationContractSha256 = skillContractSha256(this.contract);
     this.runtimeRegistrationSha256 = runtimeRegistrationSha256(this.registration);
@@ -547,11 +557,13 @@ export class OrchestrationEngine {
     this.maxSteps = options.maxSteps;
     this.dispatchMode = options.dispatchMode ?? (() => process.env[ARTIFACT_DISPATCH_MODE_ENV]);
     this.receiptAuthority = options.receiptAuthority;
-    this.liveness = options.livenessController ?? new LivenessController(this.checkpointer);
+    this.liveness =
+      options.livenessController ?? new LivenessController(this.checkpointer, Date.now);
     const registrationResolver = registration.liveness.resolve;
     const fallbackResolver = options.livenessPolicyResolver;
     this.liveness.setPolicyResolver(
-      (context) => registrationResolver(context) ?? fallbackResolver?.(context)
+      (context, boundPolicy) =>
+        registrationResolver(context, boundPolicy) ?? fallbackResolver?.(context, boundPolicy)
     );
   }
 
@@ -823,6 +835,138 @@ export class OrchestrationEngine {
         return next;
       }
     }
+  }
+
+  /**
+   * Start an already reserved child run. Generic child calls never enter the public `start`
+   * request path because reservation has already atomically created the child row and suspended
+   * its parent. The supplied request is still passed through the child's ordinary start admission
+   * and materialization path before any phase can execute.
+   */
+  startReservedChild(request: StartRequest): Directive {
+    if (path.resolve(request.project_root) !== this.projectRoot) {
+      throw new Error(
+        `project_root mismatch: engine owns '${this.projectRoot}', request supplied '${request.project_root}'`
+      );
+    }
+    const context = this.checkpointer.loadRun(request.identity);
+    const bindingRefusal = this.registrationBindingRefusal(context);
+    if (bindingRefusal !== undefined) return bindingRefusal;
+    if (
+      context.stateId !== "intake" ||
+      context.status !== "running" ||
+      context.pendingDirective !== null ||
+      context.terminalDirective !== null
+    ) {
+      throw new CheckpointIdentityError(
+        `reserved child '${request.identity.run_id}' is not an unstarted intake checkpoint`
+      );
+    }
+    const prepared = this.prepareStart(request);
+    if (prepared === undefined) {
+      throw new Error(`child '${request.identity.playbook}' has no skill start admission`);
+    }
+    const materialized = this.materializeStart(prepared);
+    for (const ref of materialized) {
+      if (!context.selectedArtifacts.some((selected) => selected.artifact_id === ref.artifact_id)) {
+        context.selectedArtifacts.push(ref);
+      }
+    }
+    this.bindLivenessIfRequired(context);
+    const next = this.admitTerminal(context, this.playbook.initialize(context));
+    this.checkpointer.saveRun(context, "child_workflow_started", {
+      ...metadata(context.identity),
+      state_id: context.stateId,
+    });
+    return next;
+  }
+
+  /**
+   * Build the parent continuation for one validated child terminal without persisting it. The
+   * child owner commits this returned context together with the `consumed` call marker, so a crash
+   * cannot leave a routed parent without the exact-once consumption record.
+   */
+  prepareChildWorkflowContinuation(input: {
+    readonly record: ChildWorkflowCallRecord;
+    readonly outputArtifact: ArtifactRef | null;
+    readonly resultArtifact: ArtifactRef;
+  }): { readonly context: RunContext; readonly next: Directive } {
+    const context = this.checkpointer.loadRun(input.record.parent_identity);
+    const bindingRefusal = this.registrationBindingRefusal(context);
+    if (bindingRefusal !== undefined) {
+      throw new Error(
+        `parent '${input.record.parent_identity.run_id}' refuses child continuation: ${
+          bindingRefusal.action
+        }`
+      );
+    }
+    const pending = context.pendingDirective;
+    if (
+      pending?.action !== "invoke_child_workflow" ||
+      canonicalJson(pending) !== canonicalJson(input.record.directive)
+    ) {
+      throw new CheckpointIdentityError(
+        "child-workflow parent no longer names the exact reserved directive"
+      );
+    }
+    const add = (artifact: ArtifactRef): void => {
+      const existing = context.selectedArtifacts.find(
+        (candidate) => candidate.artifact_id === artifact.artifact_id
+      );
+      if (existing !== undefined) {
+        if (canonicalJson(existing) !== canonicalJson(artifact)) {
+          throw new CheckpointIdentityError(
+            `child artifact '${artifact.artifact_id}' conflicts with selected parent evidence`
+          );
+        }
+        return;
+      }
+      context.selectedArtifacts.push(structuredClone(artifact));
+    };
+    if (input.outputArtifact !== null) add(input.outputArtifact);
+    add(input.resultArtifact);
+    context.pendingDirective = null;
+    context.pendingBranches = [];
+    const outcome = this.playbook.dispatch(context);
+    if (isHostContinuation(outcome)) {
+      throw new Error("child-workflow continuation cannot begin an uncommitted host continuation");
+    }
+    return { context, next: this.admitTerminal(context, outcome) };
+  }
+
+  /** Fail closed when child execution was explicitly disabled or no owner was installed. */
+  refuseChildWorkflowDispatch(
+    directive: Extract<Directive, { action: "invoke_child_workflow" }>
+  ): Directive {
+    const context = this.checkpointer.loadRun(directive.identity);
+    const bindingRefusal = this.registrationBindingRefusal(context);
+    if (bindingRefusal !== undefined) return bindingRefusal;
+    if (canonicalJson(context.pendingDirective) !== canonicalJson(directive)) {
+      throw new CheckpointIdentityError(
+        "child workflow refusal does not match the pending directive"
+      );
+    }
+    const terminal = validateDirective({
+      schema_version: 2,
+      action: "error",
+      identity: context.identity,
+      status: "error",
+      met: false,
+      result: { code: "CHILD_WORKFLOW_OWNER_UNAVAILABLE" },
+      artifacts: context.selectedArtifacts,
+      unresolved: ["No child-workflow execution owner is installed for this service."],
+    });
+    context.status = "error";
+    context.met = false;
+    context.pendingDirective = terminal;
+    context.terminalDirective = terminal;
+    this.checkpointer.saveRun(context, "child_workflow_refused", {
+      ...metadata(context.identity),
+      call_key: directive.call_key,
+      child_name: directive.child_name,
+      code: "CHILD_WORKFLOW_OWNER_UNAVAILABLE",
+    });
+    return terminal;
   }
 
   /**
@@ -1901,6 +2045,7 @@ export class OrchestrationEngine {
     let activeRegistrationSha256: string | undefined;
     try {
       activeContractSha256 = skillContractSha256(this.contract);
+      validateRegistrationContract(this.registration, this.catalogAgentProjectRoot);
       activeRegistrationSha256 = runtimeRegistrationSha256(this.registration);
     } catch {
       // Runtime registration mutation or corruption is a closed mismatch, never an unchecked throw.

@@ -1,8 +1,19 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Real catalog-YAML session creation now serializes each agent's full tool
@@ -11,14 +22,22 @@ vi.setConfig({ testTimeout: 60_000 });
 
 const lifecycleHarness = vi.hoisted(() => ({
   outcomes: [] as Array<
-    "success" | "liveness" | "tool_mismatch" | "tool_addition" | "tool_replacement"
+    | "success"
+    | "private_success"
+    | "liveness"
+    | "tool_mismatch"
+    | "tool_addition"
+    | "tool_replacement"
   >,
   events: [] as string[],
   promptCalls: 0,
+  sdkActiveToolSets: [] as Array<readonly string[]>,
   sessionOptions: [] as Array<{
     readonly model: unknown;
     readonly thinkingLevel: unknown;
+    readonly noTools: unknown;
     readonly tools: readonly string[] | undefined;
+    readonly customTools: readonly string[] | undefined;
   }>,
 }));
 
@@ -30,7 +49,9 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
       lifecycleHarness.sessionOptions.push({
         model: args[0]?.model,
         thinkingLevel: args[0]?.thinkingLevel,
+        noTools: args[0]?.noTools,
         tools: args[0]?.tools,
+        customTools: args[0]?.customTools?.map((tool) => tool.name),
       });
       const outcome = lifecycleHarness.outcomes.shift();
       if (outcome === undefined) throw new Error("lifecycle fixture outcome is absent");
@@ -39,6 +60,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
         throw new Error("lifecycle fixture requested tools are absent");
       }
       const created = await actual.createAgentSession(...args);
+      lifecycleHarness.sdkActiveToolSets.push([...created.session.getActiveToolNames()]);
       const originalDispose = created.session.dispose.bind(created.session);
       vi.spyOn(created.session, "dispose").mockImplementation(() => {
         lifecycleHarness.events.push("dispose");
@@ -59,10 +81,12 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
         vi.spyOn(created.session, "getActiveToolNames").mockReturnValue(["read"]);
         return created;
       }
-      vi.spyOn(created.session, "getActiveToolNames").mockReturnValue([...requestedTools]);
+      if (outcome !== "private_success") {
+        vi.spyOn(created.session, "getActiveToolNames").mockReturnValue([...requestedTools]);
+      }
       vi.spyOn(created.session, "prompt").mockImplementation(async () => {
         lifecycleHarness.promptCalls += 1;
-        if (outcome === "success") {
+        if (outcome === "success" || outcome === "private_success") {
           const message = {
             role: "assistant" as const,
             content: [{ type: "text" as const, text: "complete lifecycle result" }],
@@ -110,21 +134,25 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   };
 });
 
+import { ArtifactStore } from "../src/artifact-store.js";
+import type { Directive } from "../src/contracts.js";
 import { LivenessExhaustedError } from "../src/liveness.js";
 import {
   PiAgentClient,
   parseSsotTools,
   type AgentInvocation,
   type InlineExtension,
+  type ModelClient,
   type PiAgentClientOptions,
 } from "../src/model-client.js";
 import { DECIDE_PLAYBOOK_REGISTRATION } from "../src/playbooks/decide.js";
 import { resolvePlaybook } from "../src/playbooks/registry.js";
+import { WorkerExecutor } from "../src/worker.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const temporaryRoots: string[] = [];
 
-function temporaryProject(): {
+function temporaryProject(catalog: "linked" | "copied" | "absent" = "linked"): {
   readonly projectRoot: string;
   readonly sessionRoot: string;
 } {
@@ -134,7 +162,15 @@ function temporaryProject(): {
   const sessionRoot = path.join(root, "subagent-sessions");
   mkdirSync(projectRoot, { recursive: true, mode: 0o700 });
   mkdirSync(sessionRoot, { recursive: true, mode: 0o700 });
-  symlinkSync(path.join(PROJECT_ROOT, ".pi"), path.join(projectRoot, ".pi"), "dir");
+  if (catalog === "linked") {
+    symlinkSync(path.join(PROJECT_ROOT, ".pi"), path.join(projectRoot, ".pi"), "dir");
+  } else if (catalog === "copied") {
+    const piRoot = path.join(projectRoot, ".pi");
+    mkdirSync(piRoot, { recursive: true, mode: 0o700 });
+    cpSync(path.join(PROJECT_ROOT, ".pi", "agents"), path.join(piRoot, "agents"), {
+      recursive: true,
+    });
+  }
   return { projectRoot, sessionRoot };
 }
 
@@ -189,6 +225,43 @@ function invocation(projectRoot: string, runId: string): AgentInvocation {
   };
 }
 
+function workerDirective(input: {
+  readonly runId: string;
+  readonly modelOverride: string;
+}): Extract<Directive, { action: "invoke_agent" }> {
+  return {
+    schema_version: 2,
+    action: "invoke_agent",
+    identity: {
+      schema_version: 2,
+      run_id: input.runId,
+      session_id: `session-${input.runId}`,
+      playbook: "research",
+      engine_owner: "typescript",
+    },
+    state_id: "planning",
+    agent: "piper",
+    attempt: 1,
+    trust_profile: "hardened-untrusted",
+    model_override: input.modelOverride,
+    task: "Exercise generic-child YAML admission.",
+    input_artifacts: { schema_version: 2, artifacts: [] },
+    output_artifact: {
+      schema_version: 2,
+      run_id: input.runId,
+      phase: "planning",
+      branch_id: null,
+      kind: "agent-output",
+      operation_id: `operation-${input.runId}`,
+      version: 1,
+      producer: "agent:piper",
+      media_type: "text/plain; charset=utf-8",
+      parent_ref: null,
+      upstream_refs: [],
+    },
+  };
+}
+
 function decideCandidateInvocation(input: {
   readonly projectRoot: string;
   readonly runId: string;
@@ -223,12 +296,202 @@ afterEach(() => {
   lifecycleHarness.outcomes.length = 0;
   lifecycleHarness.events.length = 0;
   lifecycleHarness.promptCalls = 0;
+  lifecycleHarness.sdkActiveToolSets.length = 0;
   lifecycleHarness.sessionOptions.length = 0;
   vi.restoreAllMocks();
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("PiAgentClient created-session lifecycle", () => {
+  it("refuses an unbound generic-child YAML carrier before resource, session, or model work even when the catalog appears later", async () => {
+    const { projectRoot, sessionRoot } = temporaryProject("absent");
+    const tracked = trackedResourceExtension();
+    const modelResolver = vi.fn((): never => {
+      throw new Error("model resolution must not run");
+    });
+    const piClient = new PiAgentClient({
+      resolveModel: modelResolver,
+      workerExtensions: [tracked.extension],
+      catalogSessions: {
+        projectId: `prj_${"3".repeat(32)}`,
+        root: sessionRoot,
+      },
+    });
+    const captured: AgentInvocation[] = [];
+    const bridge: ModelClient = {
+      async runAgent(activeInvocation) {
+        captured.push(activeInvocation);
+        symlinkSync(path.join(PROJECT_ROOT, ".pi"), path.join(projectRoot, ".pi"), "dir");
+        return piClient.runAgent(activeInvocation);
+      },
+    };
+    const registration = resolvePlaybook("research");
+    if (registration === undefined) throw new Error("research registration is absent");
+    using artifacts = new ArtifactStore(path.join(path.dirname(projectRoot), "artifacts-unbound"));
+    const worker = new WorkerExecutor(bridge, artifacts, {
+      projectRoot,
+      parallelConcurrency: 1,
+      registration,
+    });
+
+    await expect(
+      worker.execute(
+        workerDirective({
+          runId: "unbound-generic-child-yaml",
+          modelOverride: "must-not/resolve",
+        })
+      )
+    ).rejects.toThrow(/unbound generic child YAML authority/u);
+
+    expect(captured).toHaveLength(1);
+    const activeInvocation = captured[0];
+    if (activeInvocation === undefined) throw new Error("worker invocation was not captured");
+    expect(activeInvocation.registration.generic_child_yaml_authority).toEqual({
+      carrier: "catalog_agent_yaml_maximum",
+      allowed_tools: null,
+    });
+    expect(modelResolver).not.toHaveBeenCalled();
+    expect(lifecycleHarness.sessionOptions).toHaveLength(0);
+    expect(lifecycleHarness.promptCalls).toBe(0);
+    expect(lifecycleHarness.events).toEqual([]);
+    expect(tracked.isOpen()).toBe(false);
+  });
+
+  it("accepts an anonymous host-private exact custom-tool session without catalog or generic-child authority", async () => {
+    const { projectRoot } = temporaryProject("absent");
+    const exactToolNames = ["read_private_fixture"] as const;
+    const customTools = [
+      defineTool({
+        name: exactToolNames[0],
+        label: "Read private fixture",
+        description: "Read one host-private fixture through a closed offline test tool.",
+        parameters: Type.Object(
+          { schema_version: Type.Literal(1) },
+          { additionalProperties: false }
+        ),
+        async execute() {
+          return {
+            content: [{ type: "text" as const, text: "private fixture" }],
+            details: { schema_version: 1 as const },
+          };
+        },
+      }),
+    ];
+    const privateInvocation: AgentInvocation = {
+      agent: "anonymous-private-regression",
+      stateId: "query",
+      task: "Exercise the offline anonymous private-session lifecycle.",
+      projectRoot,
+      trustProfile: "hardened-untrusted",
+      inputArtifacts: [],
+      registration: {
+        playbook_name: "knowledge-base",
+        workflow_name: "knowledge-base",
+        guidance: {
+          skill_root: ".pi/skills/knowledge-base/assets/prompts",
+          resolution: "per_agent_phase",
+        },
+        result_transport: "host_typed",
+        opening_policy: "host_private_opening",
+        model_policy: "host_private_ssot_model",
+      },
+      session: {
+        isolatedSystemPrompt: "Anonymous host-private regression system prompt.",
+        noTools: "all",
+        tools: exactToolNames,
+        customTools,
+        opening: "Return the offline typed fixture.",
+        readResult: () => "typed private result",
+      },
+    };
+    expect(privateInvocation.registration).not.toHaveProperty("allowed_tools");
+    expect(privateInvocation.registration).not.toHaveProperty("generic_child_yaml_authority");
+    expect(customTools).not.toHaveLength(0);
+
+    lifecycleHarness.outcomes.push("private_success");
+    const client = new PiAgentClient();
+    await expect(client.runAgent(privateInvocation)).resolves.toEqual({
+      text: "typed private result",
+    });
+
+    expect(lifecycleHarness.sessionOptions).toEqual([
+      {
+        model: undefined,
+        thinkingLevel: undefined,
+        noTools: "all",
+        tools: exactToolNames,
+        customTools: exactToolNames,
+      },
+    ]);
+    expect(lifecycleHarness.sdkActiveToolSets).toEqual([exactToolNames]);
+    expect(lifecycleHarness.sdkActiveToolSets[0]).not.toContain("artifact_read");
+    expect(lifecycleHarness.sdkActiveToolSets[0]).not.toContain("bash");
+    expect(lifecycleHarness.promptCalls).toBe(1);
+  });
+
+  it("refuses YAML drift introduced after worker validation and before Pi session admission", async () => {
+    const { projectRoot, sessionRoot } = temporaryProject("copied");
+    const definitionPath = path.join(projectRoot, ".pi", "agents", "piper.md");
+    const original = readFileSync(definitionPath, "utf8");
+    const boundYamlMaximum = parseSsotTools(original, "piper");
+    const changedTools = boundYamlMaximum.slice(1);
+    if (changedTools.length === 0) throw new Error("Piper YAML maximum is unexpectedly singular");
+    const tracked = trackedResourceExtension();
+    const modelResolver = vi.fn((): never => {
+      throw new Error("model resolution must not run");
+    });
+    const piClient = new PiAgentClient({
+      resolveModel: modelResolver,
+      workerExtensions: [tracked.extension],
+      catalogSessions: {
+        projectId: `prj_${"4".repeat(32)}`,
+        root: sessionRoot,
+      },
+    });
+    const captured: AgentInvocation[] = [];
+    const bridge: ModelClient = {
+      async runAgent(activeInvocation) {
+        captured.push(activeInvocation);
+        writeFileSync(
+          definitionPath,
+          original.replace(/^tools:.*$/mu, `tools: ${changedTools.join(", ")}`),
+          "utf8"
+        );
+        return piClient.runAgent(activeInvocation);
+      },
+    };
+    const registration = resolvePlaybook("research");
+    if (registration === undefined) throw new Error("research registration is absent");
+    using artifacts = new ArtifactStore(path.join(path.dirname(projectRoot), "artifacts-drift"));
+    const worker = new WorkerExecutor(bridge, artifacts, {
+      projectRoot,
+      parallelConcurrency: 1,
+      registration,
+    });
+
+    await expect(
+      worker.execute(
+        workerDirective({
+          runId: "post-validation-generic-child-yaml-drift",
+          modelOverride: "must-not/resolve",
+        })
+      )
+    ).rejects.toThrow(/generic child YAML authority drifted after registration binding/u);
+
+    expect(captured).toHaveLength(1);
+    const activeInvocation = captured[0];
+    if (activeInvocation === undefined) throw new Error("worker invocation was not captured");
+    expect(activeInvocation.registration.generic_child_yaml_authority).toEqual({
+      carrier: "catalog_agent_yaml_maximum",
+      allowed_tools: boundYamlMaximum,
+    });
+    expect(modelResolver).not.toHaveBeenCalled();
+    expect(lifecycleHarness.sessionOptions).toHaveLength(0);
+    expect(lifecycleHarness.promptCalls).toBe(0);
+    expect(lifecycleHarness.events).toEqual([]);
+    expect(tracked.isOpen()).toBe(false);
+  });
+
   it("activates exact Demetri YAML for an ordinary Decide workflow phase", async () => {
     const { projectRoot, sessionRoot } = temporaryProject();
     const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
@@ -398,11 +661,17 @@ describe("PiAgentClient created-session lifecycle", () => {
       },
     });
 
+    const boundSessionModels: Array<{ provider: string; model: string }> = [];
     lifecycleHarness.outcomes.push("success", "success");
     await client.runAgent({
       ...invocation(projectRoot, "host-thinking"),
       modelOverride: "fixture-provider/fixture-model",
       thinkingLevel: "medium",
+      bindResolvedSessionModel: (resolved) => {
+        expect(lifecycleHarness.sdkActiveToolSets).toHaveLength(1);
+        expect(lifecycleHarness.promptCalls).toBe(0);
+        boundSessionModels.push(resolved);
+      },
     });
     await client.runAgent(invocation(projectRoot, "test-thinking"));
 
@@ -415,6 +684,7 @@ describe("PiAgentClient created-session lifecycle", () => {
     lifecycleHarness.outcomes.push("success");
     await normalClient.runAgent(invocation(projectRoot, "settings-thinking"));
 
+    expect(boundSessionModels).toEqual([{ provider: "fixture-provider", model: "fixture-model" }]);
     expect(
       lifecycleHarness.sessionOptions.map(({ model, thinkingLevel }) => ({ model, thinkingLevel }))
     ).toEqual([

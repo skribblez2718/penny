@@ -13,7 +13,7 @@ import {
   type Directive,
   type EvaluationResultV2,
   type JsonValue,
-  type LivenessPolicyV1,
+  type LivenessPolicyV3,
   type LivenessSnapshotV1,
   type LivenessTerminalReason,
   type OutputArtifactMetadata,
@@ -21,8 +21,10 @@ import {
   type SkillContract,
 } from "../contracts.js";
 import { RunContext } from "../context.js";
+import { ordinaryLivenessPolicy } from "../liveness.js";
 import {
   assertDiagnosisLineage,
+  DiagnosisRequestConstraintsV1Schema,
   canonicalizeDiagnosisRequest,
   diagnosisDraftPromptContract,
   diagnosisProductEnvelopeId,
@@ -103,31 +105,10 @@ export const DIAGNOSE_FLOW = {
   ],
 } as const;
 
-export const DIAGNOSE_LIVENESS_POLICY = {
-  schema_version: 1,
+export const DIAGNOSE_LIVENESS_POLICY = ordinaryLivenessPolicy({
   scope: "orchestrated-diagnose-workflow",
-  preset: "analysis-only-v1",
-  total_phase_repair_invocations: 20,
-  model_turns_per_worker: 12,
-  model_turns_per_run: 80,
-  tool_calls_per_worker: 24,
-  tool_calls_per_run: 128,
-  external_calls_per_worker: 8,
-  external_calls_per_run: 64,
-  worker_wall_clock_ms: 180_000,
-  run_wall_clock_ms: 900_000,
-  malformed_results_per_state_branch: 2,
-  identical_malformed_digest_limit: 2,
-  protocol_errors_per_worker: 4,
-  identical_protocol_digest_limit: 2,
-  routing_repair: {
-    max_invocations_per_state_branch: 1,
-    model_turns_per_worker: 4,
-    tool_calls_per_worker: 2,
-    external_calls_per_worker: 0,
-    worker_wall_clock_ms: 120_000,
-  },
-} as const satisfies LivenessPolicyV1;
+  preset: "ordinary-progress-lease-v3",
+}) satisfies LivenessPolicyV3;
 
 const FindingSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const FindingsSchema = Type.Array(FindingSchema, { maxItems: 32 });
@@ -1879,6 +1860,24 @@ export const DIAGNOSE_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
   contract: DIAGNOSE_SKILL_CONTRACT,
   ingress: "skill",
   start_admission: DIAGNOSE_START_ADMISSION,
+  caller_documentation: {
+    constraints_schema: DiagnosisRequestConstraintsV1Schema,
+    example: {
+      goal: "Diagnose the reported startup failure.",
+      constraints: {
+        schema_version: 1,
+        symptoms: [{ statement: "The service exits during startup." }],
+        supplied_observations: [],
+        environment_facts: [],
+        hard_constraints: [{ statement: "Do not execute tests." }],
+        non_goals: [],
+        known_uncertainties: [],
+        permitted_test_boundary: { mode: "proposal_only" },
+      },
+    },
+    semantic_caveat:
+      "Returns a causal assessment and optional proposed checks; it executes neither.",
+  },
   liveness: {
     resolver_id: "diagnoseLivenessPolicy",
     resolve: () => DIAGNOSE_LIVENESS_POLICY,

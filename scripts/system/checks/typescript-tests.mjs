@@ -6,8 +6,13 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-const LIVE_MODEL_CONFIG = "apps/orchestration/vitest.kb-model-smoke.config.ts";
-const LIVE_MODEL_GATE_SCRIPT = "test:kb-model-smoke:aggregate";
+const LIVE_MODEL_CONFIG_GATES = new Map([
+  ["apps/orchestration/vitest.kb-model-smoke.config.ts", "test:kb-model-smoke:aggregate"],
+  [
+    "apps/orchestration/vitest.child-workflow-model-smoke.config.ts",
+    "test:child-workflow-model-smoke:aggregate",
+  ],
+]);
 
 function toPosix(value) {
   return value.split(path.sep).join("/");
@@ -108,12 +113,13 @@ export function collectTypeScriptTestTargets(projectRoot = process.cwd()) {
     );
     const selected = sorted[0];
     if (!selected) throw new Error(`no runner for ${config}`);
-    if (config === LIVE_MODEL_CONFIG) {
+    const liveGateScript = LIVE_MODEL_CONFIG_GATES.get(config);
+    if (liveGateScript !== undefined) {
       const manifest = parseManifest(path.join(selected.directory, "package.json"));
-      if (typeof manifest.scripts?.[LIVE_MODEL_GATE_SCRIPT] !== "string") {
-        throw new Error(`${LIVE_MODEL_CONFIG} has no permanent opt-in gate script`);
+      if (typeof manifest.scripts?.[liveGateScript] !== "string") {
+        throw new Error(`${config} has no permanent opt-in gate script`);
       }
-      targets.push({ ...selected, script: LIVE_MODEL_GATE_SCRIPT, gatedLiveModel: true });
+      targets.push({ ...selected, script: liveGateScript, gatedLiveModel: true });
     } else {
       targets.push({ ...selected, gatedLiveModel: false });
     }

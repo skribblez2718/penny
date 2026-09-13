@@ -138,6 +138,49 @@ class GraceExpiryResearchClient implements ModelClient {
   }
 }
 
+class LeaseProgressResearchClient implements ModelClient {
+  private releaseStarted: (() => void) | undefined;
+  readonly started = new Promise<void>((resolve) => {
+    this.releaseStarted = resolve;
+  });
+
+  constructor(private readonly productive: boolean) {}
+
+  async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
+    invocation.bindResolvedSessionModel?.({ provider: "openai-codex", model: "gpt-5.6-sol" });
+    this.releaseStarted?.();
+    this.releaseStarted = undefined;
+    if (!this.productive) {
+      await new Promise<void>((_resolve, reject) => {
+        const onAbort = (): void => reject(invocation.signal?.reason);
+        if (invocation.signal?.aborted) onAbort();
+        else invocation.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+      throw new Error("unreachable stalled worker");
+    }
+    return await new Promise<AgentCompletion>((resolve) => {
+      for (const atMs of [4, 8, 12].map((minutes) => minutes * 60_000)) {
+        setTimeout(() => {
+          invocation.liveness?.({
+            kind: "activity",
+            activity_class: "assistant_thinking_delta",
+            observed_units: 1,
+          });
+        }, atMs);
+      }
+      setTimeout(
+        () =>
+          resolve({
+            text: 'plan\nSUMMARY:{"confidence":"CERTAIN","plan_steps":["one"],"plan_complete":true,"mode":"quick"}',
+            confidence: "CERTAIN",
+            details: { plan_steps: ["one"], plan_complete: true, mode: "quick" },
+          }),
+        13 * 60_000
+      );
+    });
+  }
+}
+
 class ObservedArtifactStore extends ArtifactStore {
   readonly persistedResearchBranches: string[] = [];
   private releaseFirstPersisted: (() => void) | undefined;
@@ -166,6 +209,103 @@ class ObservedArtifactStore extends ArtifactStore {
     return ref;
   }
 }
+
+describe("renewable worker inactivity enforcement", () => {
+  it("lets productive execution exceed the former worker duration", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const root = temporaryDirectory();
+    const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
+    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const engine = new OrchestrationEngine(checkpointer, {
+      projectRoot: root,
+      maxSteps: 96,
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
+      artifactRevisions: artifacts,
+    });
+    const client = new LeaseProgressResearchClient(true);
+    const workers = new WorkerExecutor(client, artifacts, {
+      projectRoot: root,
+      parallelConcurrency: 1,
+      hostOperationDeadlineMs: 60 * 60_000,
+      registration: engine.registration,
+    });
+    workers.setReceiptAuthority(engine.receiptAuthority);
+    workers.setLivenessController(engine.liveness);
+    const initial = engine.handle({
+      schema_version: 2,
+      action: "start",
+      identity: identity(),
+      goal: "Synthetic productive lease fixture",
+      constraints: { mode: "quick" },
+      project_root: root,
+      trust_profile: "trusted-interactive",
+    });
+
+    const execution = workers.execute(initial);
+    const completed = expect(execution).resolves.toHaveLength(1);
+    await client.started;
+    await vi.advanceTimersByTimeAsync(13 * 60_000);
+    await completed;
+    expect(
+      checkpointer
+        .events(identity().run_id)
+        .filter((event) => event.eventType === "liveness_progress_observed")
+    ).toHaveLength(3);
+    expect(
+      checkpointer
+        .events(identity().run_id)
+        .find((event) => event.eventType === "liveness_worker_lease_bound")?.payload.binding
+    ).toMatchObject({
+      provider_id: "openai-codex",
+      model_id: "gpt-5.6-sol",
+      inactivity_interval_ms: 6 * 60_000,
+    });
+
+    artifacts.close();
+    checkpointer.close();
+  });
+
+  it("aborts a stalled execution at its resolved-model inactivity interval", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const root = temporaryDirectory();
+    const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
+    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const engine = new OrchestrationEngine(checkpointer, {
+      projectRoot: root,
+      maxSteps: 96,
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
+      artifactRevisions: artifacts,
+    });
+    const client = new LeaseProgressResearchClient(false);
+    const workers = new WorkerExecutor(client, artifacts, {
+      projectRoot: root,
+      parallelConcurrency: 1,
+      hostOperationDeadlineMs: 60 * 60_000,
+      registration: engine.registration,
+    });
+    workers.setReceiptAuthority(engine.receiptAuthority);
+    workers.setLivenessController(engine.liveness);
+    const initial = engine.handle({
+      schema_version: 2,
+      action: "start",
+      identity: identity(),
+      goal: "Synthetic stalled lease fixture",
+      constraints: { mode: "quick" },
+      project_root: root,
+      trust_profile: "trusted-interactive",
+    });
+
+    const execution = workers.execute(initial);
+    const expired = expect(execution).rejects.toThrow("worker_inactivity_lease_expired");
+    await client.started;
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    await expired;
+    expect(engine.liveness.snapshot(identity().run_id).open_workers).toBe(0);
+
+    artifacts.close();
+    checkpointer.close();
+  });
+});
 
 describe("cooperative worker cancellation", () => {
   it("accepts completed siblings, stops dispatch, and returns path-free exact partials", async () => {

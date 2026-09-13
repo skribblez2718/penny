@@ -34,6 +34,31 @@ each state **safe to re-run** and honest about what happened.
 | Retry budget exhausted                | Registered exhaustion route; terminal truth remains `incomplete/met:false` unless later admitted  |
 | Planned gate denied                   | Route to the playbook's declared honest negative terminal                                         |
 
+## Child-call storage recovery
+
+The current child-call owner establishes only durable storage recovery. Before reserving a call it
+verifies the canonical request and every input through a concrete `ArtifactStore` bound to the same
+project as the checkpointer. One transaction then records the parent's pending child directive,
+creates the ordinary unstarted child run, and inserts the call row and events. A failed transaction
+leaves none of those control-state effects.
+
+After restart, an exact repeated logical call adopts the committed row and its current lifecycle.
+Changed immutable operands conflict. Artifact bytes without a matching call row are not a committed
+call; a child run without its matching call row, a missing linked run, a registration mismatch, or
+corrupt/noncanonical record bytes fail closed. The store never reconstructs child linkage from
+artifacts, memory, logs, prose, or a broad scan.
+
+Lifecycle changes are compare-and-set storage operations. The active depth-one owner uses them to
+run a child and atomically consume a verified terminal into the parent. A runner cancellation signal
+or concurrent durable parent-cancel request records `cancelled` on the child, so a late boundary
+cannot resurrect parent success. New calls also carry a fenced, content-free inactivity lease;
+trusted host-observed activity or workflow convergence renews one interval, while expiry stops and
+consumes a silent child without pretending the parent requested cancellation. Parent/child run-row
+pins are implemented at the store level, but child-gate projection, arbitrary post-capture restart
+reconciliation, and artifact/receipt/catalog-session cohort retention remain unimplemented. The
+active all-six authority is runtime authorization, not provider promotion or live qualification.
+Gate 2 remains `not_run`.
+
 ## Constraints
 
 - **Never fake completion.** No error or exhaustion path may report success.

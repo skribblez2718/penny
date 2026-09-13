@@ -1,6 +1,6 @@
 import { ArtifactStore } from "../artifact-store.js";
 import { rejectRetiredConfiguration } from "../config.js";
-import { Checkpointer } from "../checkpointer.js";
+import { Checkpointer, OrchestrationSchemaCompatibilityError } from "../checkpointer.js";
 import { ReceiptAuthority } from "../receipts.js";
 import { ProjectCatalog, type ProjectBinding } from "./catalog.js";
 import {
@@ -30,12 +30,26 @@ export type PennyStateResolutionErrorCode =
   | "PROJECT_UNREGISTERED"
   | "PROJECT_NOT_ACTIVE"
   | "STATE_CUSTODY_INVALID"
-  | "STATE_COMPONENT_UNINITIALIZED";
+  | "STATE_COMPONENT_UNINITIALIZED"
+  | "STATE_SCHEMA_INCOMPATIBLE";
+
+export interface PennyStateResolutionDetails {
+  readonly component?: "orchestration";
+  readonly actualSchemaVersion?: number;
+  readonly requiredSchemaVersion?: number;
+  readonly upgradeSupported?: boolean;
+  readonly recoveryAction?: "penny-state-upgrade";
+}
 
 export class PennyStateResolutionError extends Error {
   readonly code: PennyStateResolutionErrorCode;
 
-  constructor(code: PennyStateResolutionErrorCode, message: string, cause?: unknown) {
+  constructor(
+    code: PennyStateResolutionErrorCode,
+    message: string,
+    cause?: unknown,
+    readonly details: PennyStateResolutionDetails = {}
+  ) {
     super(`${code}: ${message}`, { cause });
     this.name = "PennyStateResolutionError";
     this.code = code;
@@ -236,6 +250,15 @@ export function resolvePennyRuntimeState(
     ReceiptAuthority.loadExisting(resolved.paths.orchestration.receiptKey);
     return resolved;
   } catch (error) {
+    if (error instanceof OrchestrationSchemaCompatibilityError) {
+      throw new PennyStateResolutionError("STATE_SCHEMA_INCOMPATIBLE", error.message, error, {
+        component: error.component,
+        actualSchemaVersion: error.actualVersion,
+        requiredSchemaVersion: error.requiredVersion,
+        upgradeSupported: error.upgradeSupported,
+        ...(error.upgradeSupported ? { recoveryAction: "penny-state-upgrade" } : {}),
+      });
+    }
     throw new PennyStateResolutionError(
       "STATE_COMPONENT_UNINITIALIZED",
       `Penny runtime state is incomplete or incompatible: ${

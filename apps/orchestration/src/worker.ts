@@ -20,9 +20,11 @@ import {
   validateContract,
 } from "./contracts.js";
 import { OrchestrationEngine } from "./engine.js";
+import type { ChildWorkflowRuntimeOwner } from "./child-workflows/owner.js";
 import {
   requireNonEmptyStageOutput,
   type ActiveWorkerRegistrationMetadataV1,
+  type GenericChildCatalogAgentYamlMaximumCarrierV1,
   type ModelClient,
 } from "./model-client.js";
 import {
@@ -31,6 +33,7 @@ import {
   researchThinkingLevelForLivenessPreset,
 } from "./liveness.js";
 import {
+  bindGenericChildYamlAuthority,
   resolvePlaybook,
   validateRegistrationContract,
   type PlaybookRegistrationV1,
@@ -195,11 +198,24 @@ export type OrchestrationProgressEvent =
       readonly event: "boundary_reached";
       readonly run_id: string;
       readonly playbook: string;
-      readonly action: Exclude<Directive["action"], "invoke_agent" | "invoke_agents_parallel">;
+      readonly action: Exclude<
+        Directive["action"],
+        "invoke_agent" | "invoke_agents_parallel" | "invoke_child_workflow"
+      >;
       readonly state_id?: string;
     };
 
 export type OrchestrationProgressSink = (event: OrchestrationProgressEvent) => void;
+
+/** Internal content-free activity channel used by an owning child execution lease. */
+export interface OrchestrationWorkerActivityEvent {
+  readonly run_id: string;
+  readonly state_id: string;
+  readonly worker_id: string;
+  readonly activity_class: import("./child-workflows/contracts.js").WorkerActivityClassV1;
+  readonly observed_units: number;
+}
+export type OrchestrationWorkerActivitySink = (event: OrchestrationWorkerActivityEvent) => void;
 
 type SettledOutput<T> =
   | { readonly status: "fulfilled"; readonly value: T }
@@ -208,6 +224,12 @@ type SettledOutput<T> =
 export interface WorkerExecutorOptions {
   readonly projectRoot: string;
   readonly parallelConcurrency: number;
+  /**
+   * Trusted host operation deadline. It remains an independent upper bound beside V3 renewable
+   * inactivity leases and historical V1/V2 fixed-duration liveness; providers may stop sooner.
+   */
+  readonly hostOperationDeadlineMs?: number;
+  /** @deprecated Compatibility alias for hostOperationDeadlineMs. */
   readonly workerTimeoutMs?: number;
   /**
    * Exact engine registration. It is the only source for an orchestration phase subset;
@@ -216,6 +238,20 @@ export interface WorkerExecutorOptions {
   readonly registration?: PlaybookRegistrationV1;
   /** Re-resolves selected safe context envelopes before model/session work. */
   readonly researchContext?: ResearchContextOwnerV2;
+}
+
+type WorkerExecutableDirective = Extract<
+  Directive,
+  { action: "invoke_agent" | "invoke_agents_parallel" }
+>;
+
+/** Child workflow dispatch has a separate runtime owner and cannot enter a worker result path. */
+export function assertWorkerExecutableDirective(
+  directive: Directive
+): asserts directive is WorkerExecutableDirective {
+  if (directive.action !== "invoke_agent" && directive.action !== "invoke_agents_parallel") {
+    throw new Error(`directive '${directive.action}' is not executable by a worker`);
+  }
 }
 
 export class WorkerExecutor {
@@ -237,6 +273,7 @@ export class WorkerExecutor {
   }
 
   async execute(directive: Directive, signal?: AbortSignal): Promise<PhaseResult[]> {
+    assertWorkerExecutableDirective(directive);
     if (directive.action === "invoke_agent") {
       return [
         await this.executeAssignment(
@@ -286,25 +323,45 @@ export class WorkerExecutor {
         signal
       );
     }
-    throw new Error(`directive '${directive.action}' is not executable by a worker`);
+    throw new Error("unreachable worker directive");
   }
 
   async executeSettled(
     directive: Directive,
     signal?: AbortSignal,
-    onResult?: (result: PhaseResult) => void
+    onResult?: (result: PhaseResult) => void,
+    onActivity?: OrchestrationWorkerActivitySink
   ): Promise<WorkerExecutionSettlement> {
+    assertWorkerExecutableDirective(directive);
     if (directive.action === "invoke_agent") {
       try {
-        const results = await this.execute(directive, signal);
+        const results = [
+          await this.executeAssignment(
+            {
+              identity: directive.identity,
+              stateId: directive.state_id,
+              branchId: null,
+              agent: directive.agent,
+              attempt: directive.attempt,
+              trustProfile: directive.trust_profile,
+              ...(directive.model_override ? { modelOverride: directive.model_override } : {}),
+              executionPurpose: directive.execution_purpose ?? "phase",
+              ...(directive.routing_repair_binding
+                ? { routingRepairBinding: directive.routing_repair_binding }
+                : {}),
+              task: directive.task,
+              inputArtifacts: directive.input_artifacts,
+              outputArtifact: directive.output_artifact,
+            },
+            signal,
+            onActivity
+          ),
+        ];
         for (const result of results) onResult?.(result);
         return { results, errors: [] };
       } catch (error) {
         return { results: [], errors: [error] };
       }
-    }
-    if (directive.action !== "invoke_agents_parallel") {
-      throw new Error(`directive '${directive.action}' is not executable by a worker`);
     }
     const assignments = directive.branches.map(
       (branch): Assignment => ({
@@ -327,7 +384,7 @@ export class WorkerExecutor {
     const settled = await this.mapConcurrentSettled(
       assignments,
       Math.max(1, this.options.parallelConcurrency),
-      (assignment) => this.executeAssignment(assignment, signal),
+      (assignment) => this.executeAssignment(assignment, signal, onActivity),
       signal,
       onResult
     );
@@ -339,7 +396,8 @@ export class WorkerExecutor {
 
   private async executeAssignment(
     assignment: Assignment,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onActivity?: OrchestrationWorkerActivitySink
   ): Promise<PhaseResult> {
     const runId = assignment.identity.run_id;
     const workerId = randomUUID();
@@ -376,31 +434,74 @@ export class WorkerExecutor {
       branchId: assignment.branchId,
       purpose: assignment.executionPurpose,
     });
+    let renewInactivityLease: ((remainingMs: number) => void) | undefined;
     const livenessInvocation =
       liveness === undefined
         ? {}
-        : {
-            liveness: liveness.sessionSink({
+        : (() => {
+            const sink = liveness.sessionSink({
               runId,
               workerId,
               stateId: assignment.stateId,
-            }),
-            livenessBudget: liveness.workerPromptBudget(runId, workerId),
-          };
+            });
+            return {
+              liveness: (event: Parameters<typeof sink>[0]): void => {
+                sink(event);
+                const progressEvent =
+                  event.kind === "activity"
+                    ? event
+                    : "progress" in event
+                      ? event.progress
+                      : undefined;
+                if (progressEvent !== undefined) {
+                  const lease = liveness.workerInactivityLease(runId, workerId);
+                  if (lease !== undefined) renewInactivityLease?.(lease.remainingMs);
+                  onActivity?.({
+                    run_id: runId,
+                    state_id: assignment.stateId,
+                    worker_id: workerId,
+                    activity_class: progressEvent.activity_class,
+                    observed_units: progressEvent.observed_units,
+                  });
+                }
+              },
+              livenessBudget: liveness.workerPromptBudget(runId, workerId),
+              bindResolvedSessionModel: (resolved: { provider: string; model: string }): void => {
+                if (boundPolicy?.schema_version !== 3) return;
+                liveness.bindWorkerProgressLease({
+                  runId,
+                  workerId,
+                  providerId: resolved.provider,
+                  modelId: resolved.model,
+                });
+                const lease = liveness.workerInactivityLease(runId, workerId);
+                if (lease === undefined) throw new Error("bound worker inactivity lease is absent");
+                renewInactivityLease?.(lease.remainingMs);
+              },
+            };
+          })();
     let outcome: "complete" | "error" | "cancelled" = "error";
     try {
       const startedAt = new Date().toISOString();
-      const configuredTimeoutMs = this.options.workerTimeoutMs ?? 15 * 60 * 1_000;
+      const hostOperationDeadlineMs =
+        this.options.hostOperationDeadlineMs ?? this.options.workerTimeoutMs ?? 15 * 60 * 1_000;
       if (
-        !Number.isSafeInteger(configuredTimeoutMs) ||
-        configuredTimeoutMs <= 0 ||
-        configuredTimeoutMs > MAX_TIMER_DELAY_MS
+        !Number.isSafeInteger(hostOperationDeadlineMs) ||
+        hostOperationDeadlineMs <= 0 ||
+        hostOperationDeadlineMs > MAX_TIMER_DELAY_MS
       ) {
-        throw new Error(`workerTimeoutMs must be an integer between 1 and ${MAX_TIMER_DELAY_MS}`);
+        throw new Error(
+          `hostOperationDeadlineMs must be an integer between 1 and ${MAX_TIMER_DELAY_MS}`
+        );
       }
-      const policyTimeoutMs = liveness?.remainingWorkerWallMs(runId, workerId);
-      const timeoutMs = Math.min(configuredTimeoutMs, policyTimeoutMs ?? configuredTimeoutMs);
-      if (timeoutMs <= 0) {
+      // Historical V1/V2 policies retain their exact active-work deadline. V3 has no elapsed-work
+      // gate: a resettable inactivity timer runs beside the independent host-operation upper bound.
+      const historicalPolicyRemainingMs = liveness?.remainingWorkerWallMs(runId, workerId);
+      const fixedDeadlineMs = Math.min(
+        hostOperationDeadlineMs,
+        historicalPolicyRemainingMs ?? hostOperationDeadlineMs
+      );
+      if (fixedDeadlineMs <= 0) {
         throw new LivenessExhaustedError("worker_wall_clock_exhausted");
       }
       const controller = new AbortController();
@@ -409,18 +510,46 @@ export class WorkerExecutor {
       };
       if (signal?.aborted) abort();
       else signal?.addEventListener("abort", abort, { once: true });
-      const deadlineMs = Date.now() + timeoutMs;
+      const deadlineMs = Date.now() + fixedDeadlineMs;
       if (!Number.isSafeInteger(deadlineMs)) {
         throw new Error("worker deadline exceeds the safe Unix-millisecond range");
       }
-      let timer: NodeJS.Timeout | undefined;
-      const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
+      let fixedTimer: NodeJS.Timeout | undefined;
+      let inactivityTimer: NodeJS.Timeout | undefined;
+      const fixedTimeout = new Promise<never>((_resolve, reject) => {
+        fixedTimer = setTimeout(() => {
           const error = new LivenessExhaustedError("worker_wall_clock_exhausted");
           controller.abort(error);
           reject(error);
-        }, timeoutMs);
+        }, fixedDeadlineMs);
       });
+      let rejectInactivity: ((error: LivenessExhaustedError) => void) | undefined;
+      const inactivityTimeout = new Promise<never>((_resolve, reject) => {
+        rejectInactivity = reject;
+      });
+      const initialLease = liveness?.workerInactivityLease(runId, workerId);
+      if (initialLease !== undefined) {
+        renewInactivityLease = (remainingMs): void => {
+          if (
+            !Number.isSafeInteger(remainingMs) ||
+            remainingMs < 0 ||
+            remainingMs > MAX_TIMER_DELAY_MS
+          ) {
+            throw new Error(
+              `worker inactivity remainder must be an integer between 0 and ${MAX_TIMER_DELAY_MS}`
+            );
+          }
+          if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+          const expire = (): void => {
+            const error = new LivenessExhaustedError("worker_inactivity_lease_expired");
+            controller.abort(error);
+            rejectInactivity?.(error);
+          };
+          if (remainingMs === 0) expire();
+          else inactivityTimer = setTimeout(expire, remainingMs);
+        };
+        renewInactivityLease(initialLease.remainingMs);
+      }
       let completion;
       try {
         const modelPipeline = async (): ReturnType<ModelClient["runAgent"]> => {
@@ -497,9 +626,15 @@ export class WorkerExecutor {
                 invokeModelClient
               );
         };
-        completion = await Promise.race([modelPipeline(), timeout]);
+        completion = await Promise.race([
+          modelPipeline(),
+          fixedTimeout,
+          ...(initialLease === undefined ? [] : [inactivityTimeout]),
+        ]);
       } finally {
-        if (timer !== undefined) clearTimeout(timer);
+        renewInactivityLease = undefined;
+        if (fixedTimer !== undefined) clearTimeout(fixedTimer);
+        if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
         signal?.removeEventListener("abort", abort);
       }
       const stageOutput = requireNonEmptyStageOutput(completion.text);
@@ -611,18 +746,22 @@ export class WorkerExecutor {
 
   private activeRegistration(assignment: Assignment): PlaybookRegistrationV1 {
     const injected = this.options.registration;
-    const registration = injected ?? resolvePlaybook(assignment.identity.playbook);
-    if (registration === undefined) {
+    const selectedRegistration = injected ?? resolvePlaybook(assignment.identity.playbook);
+    if (selectedRegistration === undefined) {
       throw new Error(
         `worker refuses unregistered playbook '${assignment.identity.playbook}' before input or model work`
       );
     }
-    if (registration.name !== assignment.identity.playbook) {
+    if (selectedRegistration.name !== assignment.identity.playbook) {
       throw new Error(
-        `worker registration '${registration.name}' does not match directive playbook '${assignment.identity.playbook}'`
+        `worker registration '${selectedRegistration.name}' does not match directive playbook '${assignment.identity.playbook}'`
       );
     }
-    validateRegistrationContract(registration);
+    const registration = bindGenericChildYamlAuthority(
+      selectedRegistration,
+      this.options.projectRoot
+    );
+    validateRegistrationContract(registration, this.options.projectRoot);
     const phase = registration.worker.phases.get(assignment.stateId);
     if (phase === undefined || phase.agent !== assignment.agent) {
       throw new Error(
@@ -643,6 +782,13 @@ export class WorkerExecutor {
     // Preserve absence versus presence exactly: absence means YAML equality, while a present
     // list is already part of runtimeRegistrationSha256 and must reach PiAgentClient unchanged.
     const allowedTools = "allowed_tools" in phase ? phase.allowed_tools : undefined;
+    const genericChildPhase = registration.generic_child?.provider.phases.find(
+      (candidate) => candidate.state_id === stateId
+    );
+    const genericChildYamlAuthority: GenericChildCatalogAgentYamlMaximumCarrierV1 | undefined =
+      genericChildPhase?.tool_authority.carrier === "catalog_agent_yaml_maximum"
+        ? genericChildPhase.tool_authority
+        : undefined;
     const browserNetworkAllowlist =
       "browser_network_allowlist" in phase ? phase.browser_network_allowlist : undefined;
     return {
@@ -653,6 +799,9 @@ export class WorkerExecutor {
       opening_policy: registration.worker.opening_policy,
       model_policy: registration.worker.model_policy,
       ...(allowedTools === undefined ? {} : { allowed_tools: [...allowedTools] }),
+      ...(genericChildYamlAuthority === undefined
+        ? {}
+        : { generic_child_yaml_authority: genericChildYamlAuthority }),
       ...(browserNetworkAllowlist === undefined
         ? {}
         : { browser_network_allowlist: browserNetworkAllowlist }),
@@ -737,7 +886,8 @@ export class WorkerExecutor {
 export class OrchestrationRunner {
   constructor(
     private readonly engine: OrchestrationEngine,
-    private readonly workers: WorkerExecutor
+    private readonly workers: WorkerExecutor,
+    private readonly childWorkflows?: ChildWorkflowRuntimeOwner
   ) {
     this.workers.setReceiptAuthority(this.engine.receiptAuthority);
     this.workers.setLivenessController(this.engine.liveness);
@@ -746,7 +896,8 @@ export class OrchestrationRunner {
   async runUntilBoundary(
     initial: Directive,
     signal?: AbortSignal,
-    onProgress?: OrchestrationProgressSink
+    onProgress?: OrchestrationProgressSink,
+    onActivity?: OrchestrationWorkerActivitySink
   ): Promise<Directive> {
     // Closing this local sink before return prevents a non-cooperative worker
     // from publishing a late update after a durable terminal boundary.
@@ -757,7 +908,14 @@ export class OrchestrationRunner {
       return boundary;
     };
     let current = this.engine.authorizeDispatch(initial);
-    while (current.action === "invoke_agent" || current.action === "invoke_agents_parallel") {
+    if (current.action === "cancelled") {
+      this.childWorkflows?.cancelParent(current.identity.run_id);
+    }
+    while (
+      current.action === "invoke_agent" ||
+      current.action === "invoke_agents_parallel" ||
+      current.action === "invoke_child_workflow"
+    ) {
       if (signal?.aborted) {
         return finish(
           this.engine.handle({
@@ -767,6 +925,31 @@ export class OrchestrationRunner {
             reason: "cancelled by caller",
           })
         );
+      }
+      if (current.action === "invoke_child_workflow") {
+        if (this.childWorkflows === undefined) {
+          return finish(this.engine.refuseChildWorkflowDispatch(current));
+        }
+        current = this.engine.authorizeDispatch(
+          await this.childWorkflows.dispatch(this.engine, current, signal)
+        );
+        if (signal?.aborted) {
+          return finish(
+            this.engine.handle({
+              schema_version: 2,
+              action: "cancel",
+              identity: current.identity,
+              reason: "cancelled by caller",
+            })
+          );
+        }
+        const terminal =
+          current.action === "complete" ||
+          current.action === "incomplete" ||
+          current.action === "error" ||
+          current.action === "cancelled";
+        if (terminal) return finish(current);
+        continue;
       }
       const active = current;
       const workers = this.progressWorkers(active);
@@ -781,26 +964,31 @@ export class OrchestrationRunner {
       // Keep owner-complete results reachable even when another branch outlives
       // cancellation grace; the engine reorders this batch by stable branch order.
       const completedResults: PhaseResult[] = [];
-      const execution = this.workers.executeSettled(active, signal, (result) => {
-        completedResults.push(result);
-        const worker = workers.find(
-          (candidate) =>
-            candidate.state_id === result.state_id &&
-            candidate.agent === result.agent &&
-            candidate.attempt === result.attempt &&
-            candidate.branch_id === (result.branch_id ?? null)
-        );
-        if (worker === undefined) return;
-        this.emitProgress(progress, {
-          event: "worker_completed",
-          run_id: active.identity.run_id,
-          playbook: active.identity.playbook,
-          state_id: result.state_id,
-          worker,
-          completed_workers: completedResults.length,
-          total_workers: workers.length,
-        });
-      });
+      const execution = this.workers.executeSettled(
+        active,
+        signal,
+        (result) => {
+          completedResults.push(result);
+          const worker = workers.find(
+            (candidate) =>
+              candidate.state_id === result.state_id &&
+              candidate.agent === result.agent &&
+              candidate.attempt === result.attempt &&
+              candidate.branch_id === (result.branch_id ?? null)
+          );
+          if (worker === undefined) return;
+          this.emitProgress(progress, {
+            event: "worker_completed",
+            run_id: active.identity.run_id,
+            playbook: active.identity.playbook,
+            state_id: result.state_id,
+            worker,
+            completed_workers: completedResults.length,
+            total_workers: workers.length,
+          });
+        },
+        onActivity
+      );
       const settlement = await this.settleWithinCancellationGrace(execution, signal);
       const cancellationGraceExpired = settlement === undefined;
       const results = settlement?.results ?? completedResults;
@@ -883,7 +1071,11 @@ export class OrchestrationRunner {
   }
 
   private finish(directive: Directive, onProgress?: OrchestrationProgressSink): Directive {
-    if (directive.action === "invoke_agent" || directive.action === "invoke_agents_parallel") {
+    if (
+      directive.action === "invoke_agent" ||
+      directive.action === "invoke_agents_parallel" ||
+      directive.action === "invoke_child_workflow"
+    ) {
       return directive;
     }
     this.emitProgress(onProgress, {

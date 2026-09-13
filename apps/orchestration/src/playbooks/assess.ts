@@ -13,7 +13,7 @@ import {
   type Directive,
   type EvaluationResultV2,
   type JsonValue,
-  type LivenessPolicyV1,
+  type LivenessPolicyV3,
   type LivenessSnapshotV1,
   type LivenessTerminalReason,
   type OutputArtifactMetadata,
@@ -21,8 +21,10 @@ import {
   type SkillContract,
 } from "../contracts.js";
 import { RunContext } from "../context.js";
+import { ordinaryLivenessPolicy } from "../liveness.js";
 import {
   AssessmentDraftValidationError,
+  AssessmentRequestConstraintsV1Schema,
   assertAssessmentLineageV2,
   assessmentDraftPromptContractV2,
   assessmentProductEnvelopeIdV2,
@@ -111,31 +113,10 @@ export const ASSESS_FLOW = {
   ],
 } as const;
 
-export const ASSESS_LIVENESS_POLICY = {
-  schema_version: 1,
+export const ASSESS_LIVENESS_POLICY = ordinaryLivenessPolicy({
   scope: "orchestrated-assess-workflow",
-  preset: "closed-assessment-no-actions-v1",
-  total_phase_repair_invocations: 18,
-  model_turns_per_worker: 12,
-  model_turns_per_run: 72,
-  tool_calls_per_worker: 24,
-  tool_calls_per_run: 112,
-  external_calls_per_worker: 8,
-  external_calls_per_run: 64,
-  worker_wall_clock_ms: 180_000,
-  run_wall_clock_ms: 900_000,
-  malformed_results_per_state_branch: 2,
-  identical_malformed_digest_limit: 2,
-  protocol_errors_per_worker: 4,
-  identical_protocol_digest_limit: 2,
-  routing_repair: {
-    max_invocations_per_state_branch: 1,
-    model_turns_per_worker: 4,
-    tool_calls_per_worker: 2,
-    external_calls_per_worker: 0,
-    worker_wall_clock_ms: 120_000,
-  },
-} as const satisfies LivenessPolicyV1;
+  preset: "ordinary-progress-lease-v3",
+}) satisfies LivenessPolicyV3;
 
 const FindingSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const FindingsSchema = Type.Array(FindingSchema, { maxItems: 32 });
@@ -1934,6 +1915,22 @@ export const ASSESS_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
   contract: ASSESS_SKILL_CONTRACT,
   ingress: "skill",
   start_admission: ASSESS_START_ADMISSION,
+  caller_documentation: {
+    constraints_schema: AssessmentRequestConstraintsV1Schema,
+    example: {
+      goal: "Assess whether the supplied note satisfies the communication criteria.",
+      constraints: {
+        schema_version: 1,
+        target: "Hello, team. The maintenance window is Tuesday at 09:00 UTC.",
+        criteria: [{ statement: "States the maintenance time clearly.", importance: "required" }],
+        supplied_evidence: [],
+        hard_constraints: [{ statement: "Do not externally verify the schedule." }],
+        non_goals: [{ statement: "Do not rewrite or send the note." }],
+        known_uncertainties: [],
+      },
+    },
+    semantic_caveat: "Accepts no caller artifacts; assess only caller-supplied evidence.",
+  },
   liveness: {
     resolver_id: "assessLivenessPolicy",
     resolve: () => ASSESS_LIVENESS_POLICY,

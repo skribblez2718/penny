@@ -61,7 +61,7 @@ import type {
 } from "../model-client.js";
 import { readRunInput } from "../private-inputs.js";
 import { kbLivenessPolicy } from "../liveness.js";
-import type { LivenessPolicyV1 } from "../contracts.js";
+import type { LivenessPolicy } from "../contracts.js";
 
 const PRIOR_PHASES: Readonly<Record<KbPhaseState, readonly KbPhaseState[]>> = {
   ingest: [],
@@ -501,12 +501,8 @@ export class KbWorkerClient implements ModelClient {
       });
   }
 
-  livenessPolicy(): LivenessPolicyV1 {
-    const policy = readPolicy(this.options.kbRoot);
-    return kbLivenessPolicy({
-      action: this.options.operation,
-      readerMaxCallsPerPhase: policy.reader_limits.max_calls_per_phase,
-    });
+  livenessPolicy(): LivenessPolicy {
+    return kbLivenessPolicy({ action: this.options.operation });
   }
 
   /** Bind the worker to the service's exact control DB before dispatch. */

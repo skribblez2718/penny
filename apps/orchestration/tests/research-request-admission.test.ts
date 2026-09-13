@@ -83,7 +83,7 @@ function engineRuntime(projectRoot: string) {
   const artifacts = new ArtifactStore(path.join(projectRoot, "artifacts"));
   const checkpointer = new Checkpointer(path.join(projectRoot, "orchestration-v2.db"));
   const engine = new OrchestrationEngine(checkpointer, {
-    projectRoot,
+    projectRoot: projectRoot,
     maxSteps: 96,
     receiptAuthority: TEST_RECEIPT_AUTHORITY,
     artifactRevisions: artifacts,

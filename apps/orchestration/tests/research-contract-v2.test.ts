@@ -11,9 +11,9 @@ import {
   GroundedSynthesisV1Schema,
   MAX_RESEARCH_SEMANTIC_DRAFT_BYTES,
   ProductReceiptV1Schema,
-  ResearchBudgetAdmissionV1Schema,
-  ResearchBudgetPolicyV1Schema,
-  ResearchBudgetSnapshotV1Schema,
+  ResearchBudgetAdmissionV3Schema,
+  ResearchBudgetPolicyV3Schema,
+  ResearchBudgetSnapshotV3Schema,
   ResearchProductEnvelopeV1Schema,
   ResearchSemanticDraftV1Schema,
   ResolvedContextV2Schema,
@@ -614,16 +614,19 @@ describe("P2 research request and budget projections", () => {
     });
   });
 
-  it("maps frozen presets exactly onto P1 liveness without changing host ceilings", () => {
-    validateSkillSchema(ResearchBudgetPolicyV1Schema, RESEARCH_BUDGET_POLICY, "policy");
+  it("maps frozen presets onto V3 progress leases without elapsed-work ceilings", () => {
+    validateSkillSchema(ResearchBudgetPolicyV3Schema, RESEARCH_BUDGET_POLICY, "policy");
     for (const mode of ["quick", "standard", "deep"] as const) {
       expect(RESEARCH_BUDGET_POLICY.presets[mode].liveness).toEqual(researchLivenessPolicy(mode));
     }
-    expect(RESEARCH_BUDGET_POLICY.presets.quick.liveness.external_calls_per_run).toBe(12);
-    expect(RESEARCH_BUDGET_POLICY.presets.standard.liveness.total_phase_repair_invocations).toBe(
-      16
-    );
-    expect(RESEARCH_BUDGET_POLICY.presets.deep.liveness.run_wall_clock_ms).toBe(180 * 60_000);
+    const quick = RESEARCH_BUDGET_POLICY.presets.quick.liveness;
+    expect(quick.schema_version).toBe(3);
+    expect(quick.renewal_policy).toBe("trusted_host_activity_or_convergence_v1");
+    expect(quick.unknown_provider_phase_inactivity_ms).toBe(10 * 60_000);
+    expect(quick.calibration_sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect("worker_active_work_budget_ms" in quick).toBe(false);
+    expect("run_active_work_budget_ms" in quick).toBe(false);
+    expect("external_calls_per_run" in quick).toBe(false);
   });
 
   it("validates admission and snapshot projections as closed values", () => {
@@ -632,12 +635,12 @@ describe("P2 research request and budget projections", () => {
       constraints: { mode: "standard" },
     });
     const admission = resolveResearchBudgetAdmission(request, RESEARCH_BUDGET_POLICY);
-    validateSkillSchema(ResearchBudgetAdmissionV1Schema, admission, "admission");
+    validateSkillSchema(ResearchBudgetAdmissionV3Schema, admission, "admission");
     validateSkillSchema(
-      ResearchBudgetSnapshotV1Schema,
+      ResearchBudgetSnapshotV3Schema,
       {
-        schema_id: "penny.research-budget-snapshot.v1",
-        schema_version: 1,
+        schema_id: "penny.research-budget-snapshot.v3",
+        schema_version: 3,
         admission,
         liveness_snapshot_sha256: "a".repeat(64),
         phase_attempts_by_state_branch: { "planning:null": 1 },

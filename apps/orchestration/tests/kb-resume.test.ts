@@ -314,9 +314,13 @@ describe("KB exact status/resume authority", () => {
     const { kbRoot, run } = fixture();
     expect(() => requireKbRunPolicyCurrent(run, kbRoot)).not.toThrow();
     const policy = readPolicy(kbRoot);
+    if (policy.schema_version !== 2) throw new Error("expected new V2 policy fixture");
     writePolicy(kbRoot, {
       ...policy,
-      reader_limits: { ...policy.reader_limits, max_calls_per_phase: 15 },
+      reader_limits: {
+        ...policy.reader_limits,
+        max_phase_utf8_bytes: policy.reader_limits.max_phase_utf8_bytes - 1,
+      },
     });
     expect(() => requireKbRunPolicyCurrent(run, kbRoot)).toThrow(PolicyRefusal);
   });
@@ -335,9 +339,13 @@ describe("KB exact status/resume authority", () => {
     run.status = "complete";
     run.met = true;
     const policy = readPolicy(kbRoot);
+    if (policy.schema_version !== 2) throw new Error("expected new V2 policy fixture");
     writePolicy(kbRoot, {
       ...policy,
-      reader_limits: { ...policy.reader_limits, max_calls_per_phase: 15 },
+      reader_limits: {
+        ...policy.reader_limits,
+        max_phase_utf8_bytes: policy.reader_limits.max_phase_utf8_bytes - 1,
+      },
     });
     expect(() => requireKbRunPolicyCurrent(run, kbRoot)).not.toThrow();
   });

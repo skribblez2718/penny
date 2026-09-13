@@ -5,7 +5,8 @@ import { Type, type Static } from "typebox";
 import { canonicalJson, sha256 } from "../checkpointer.js";
 import {
   ArtifactRefSchema,
-  LivenessPolicyV1Schema,
+  LivenessPolicyV2Schema,
+  LivenessPolicyV3Schema,
   type ArtifactRef,
   type InputArtifacts,
   type JsonValue,
@@ -178,6 +179,31 @@ export const ResearchRequestV1Schema = Type.Object(
   { additionalProperties: false }
 );
 export type ResearchRequestV1 = Static<typeof ResearchRequestV1Schema>;
+
+/** Structural caller constraints consumed by canonicalizeResearchRequest; not a second validator. */
+export const ResearchCallerConstraintsV1Schema = Type.Object(
+  {
+    mode: Type.Optional(ResearchRequestV1Schema.properties.mode),
+    scope: Type.Optional(ScopeSchema),
+    verification_model_override: Type.Optional(TextSchema({ minBytes: 1, maxBytes: 256 })),
+    validate_model: Type.Optional(TextSchema({ minBytes: 1, maxBytes: 256 })),
+    budget_overrides: Type.Optional(BudgetOverridesSchema),
+    max_sub_queries: Type.Optional(Type.Integer({ minimum: 1, maximum: 64 })),
+    max_fan_width: Type.Optional(Type.Integer({ minimum: 1, maximum: 64 })),
+    total_research_rounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
+    max_research_rounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
+    max_evaluator_attempts_per_loop: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
+    max_iterations: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
+    critique_passes: Type.Optional(Type.Integer({ minimum: 0, maximum: 2 })),
+    context_bindings: Type.Optional(
+      Type.Array(ResearchContextBindingRequestV1Schema, { maxItems: MAX_CONTEXT_BINDINGS })
+    ),
+    report_format: Type.Optional(
+      TextSchema({ minBytes: 1, maxBytes: QUESTION_BYTES, multiline: true })
+    ),
+  },
+  { additionalProperties: false }
+);
 
 function record(value: JsonValue | undefined, label: string): Record<string, JsonValue> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -2557,26 +2583,26 @@ export const RESEARCH_PORTS = {
   },
 } as const satisfies Readonly<Record<string, SkillPortV1>>;
 
-const ResearchBudgetPresetV1Schema = Type.Object(
+const ResearchBudgetPresetV2Schema = Type.Object(
   {
     plan_critique: Type.Boolean(),
     quality_critique: Type.Boolean(),
     total_research_rounds: Type.Integer({ minimum: 1, maximum: 16 }),
     default_max_evaluator_attempts: Type.Integer({ minimum: 1, maximum: 16 }),
-    liveness: LivenessPolicyV1Schema,
+    liveness: LivenessPolicyV2Schema,
   },
   { additionalProperties: false }
 );
 
-export const ResearchBudgetPolicyV1Schema = Type.Object(
+export const ResearchBudgetPolicyV2Schema = Type.Object(
   {
-    schema_id: Type.Literal("penny.research-budget-policy.v1"),
-    schema_version: Type.Literal(1),
+    schema_id: Type.Literal("penny.research-budget-policy.v2"),
+    schema_version: Type.Literal(2),
     presets: Type.Object(
       {
-        quick: ResearchBudgetPresetV1Schema,
-        standard: ResearchBudgetPresetV1Schema,
-        deep: ResearchBudgetPresetV1Schema,
+        quick: ResearchBudgetPresetV2Schema,
+        standard: ResearchBudgetPresetV2Schema,
+        deep: ResearchBudgetPresetV2Schema,
       },
       { additionalProperties: false }
     ),
@@ -2603,28 +2629,19 @@ export const ResearchBudgetPolicyV1Schema = Type.Object(
       { minItems: 5, maxItems: 5, uniqueItems: true }
     ),
     host_ceiling_fields: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
-      minItems: 10,
-      maxItems: 16,
+      minItems: 7,
+      maxItems: 7,
       uniqueItems: true,
     }),
-    phase_attempt_projection: Type.Object(
-      {
-        source_event: Type.Literal("liveness_invocation_admitted"),
-        key: Type.Literal("state_id+branch_id"),
-        ceiling_source: Type.Literal("total_phase_repair_invocations"),
-        relation: Type.Literal("equal_to_total_ceiling"),
-      },
-      { additionalProperties: false }
-    ),
   },
   { additionalProperties: false }
 );
-export type ResearchBudgetPolicyV1 = Static<typeof ResearchBudgetPolicyV1Schema>;
+export type ResearchBudgetPolicyV2 = Static<typeof ResearchBudgetPolicyV2Schema>;
 
-export const ResearchBudgetAdmissionV1Schema = Type.Object(
+export const ResearchBudgetAdmissionV2Schema = Type.Object(
   {
-    schema_id: Type.Literal("penny.research-budget-admission.v1"),
-    schema_version: Type.Literal(1),
+    schema_id: Type.Literal("penny.research-budget-admission.v2"),
+    schema_version: Type.Literal(2),
     mode: Type.Union([Type.Literal("quick"), Type.Literal("standard"), Type.Literal("deep")]),
     max_sub_queries: Type.Integer({ minimum: 1, maximum: 64 }),
     max_fan_width: Type.Integer({ minimum: 1, maximum: 64 }),
@@ -2633,18 +2650,17 @@ export const ResearchBudgetAdmissionV1Schema = Type.Object(
     max_evaluator_attempts_per_loop: Type.Integer({ minimum: 1, maximum: 16 }),
     max_semantic_repairs_per_loop: Type.Integer({ minimum: 0, maximum: 15 }),
     critique_passes: Type.Integer({ minimum: 0, maximum: 2 }),
-    liveness: LivenessPolicyV1Schema,
-    phase_attempt_ceiling_per_state_branch: Type.Integer({ minimum: 1 }),
+    liveness: LivenessPolicyV2Schema,
   },
   { additionalProperties: false }
 );
-export type ResearchBudgetAdmissionV1 = Static<typeof ResearchBudgetAdmissionV1Schema>;
+export type ResearchBudgetAdmissionV2 = Static<typeof ResearchBudgetAdmissionV2Schema>;
 
-export const ResearchBudgetSnapshotV1Schema = Type.Object(
+export const ResearchBudgetSnapshotV2Schema = Type.Object(
   {
-    schema_id: Type.Literal("penny.research-budget-snapshot.v1"),
-    schema_version: Type.Literal(1),
-    admission: ResearchBudgetAdmissionV1Schema,
+    schema_id: Type.Literal("penny.research-budget-snapshot.v2"),
+    schema_version: Type.Literal(2),
+    admission: ResearchBudgetAdmissionV2Schema,
     liveness_snapshot_sha256: Sha256Schema,
     phase_attempts_by_state_branch: Type.Record(
       Type.String({ minLength: 1, maxLength: 260 }),
@@ -2653,18 +2669,86 @@ export const ResearchBudgetSnapshotV1Schema = Type.Object(
   },
   { additionalProperties: false }
 );
-export type ResearchBudgetSnapshotV1 = Static<typeof ResearchBudgetSnapshotV1Schema>;
+export type ResearchBudgetSnapshotV2 = Static<typeof ResearchBudgetSnapshotV2Schema>;
+
+const ResearchBudgetPresetV3Schema = Type.Object(
+  {
+    plan_critique: Type.Boolean(),
+    quality_critique: Type.Boolean(),
+    total_research_rounds: Type.Integer({ minimum: 1, maximum: 16 }),
+    default_max_evaluator_attempts: Type.Integer({ minimum: 1, maximum: 16 }),
+    liveness: LivenessPolicyV3Schema,
+  },
+  { additionalProperties: false }
+);
+
+export const ResearchBudgetPolicyV3Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.research-budget-policy.v3"),
+    schema_version: Type.Literal(3),
+    presets: Type.Object(
+      {
+        quick: ResearchBudgetPresetV3Schema,
+        standard: ResearchBudgetPresetV3Schema,
+        deep: ResearchBudgetPresetV3Schema,
+      },
+      { additionalProperties: false }
+    ),
+    aliases: ResearchBudgetPolicyV2Schema.properties.aliases,
+    caller_override_fields: ResearchBudgetPolicyV2Schema.properties.caller_override_fields,
+    host_ceiling_fields: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
+      minItems: 12,
+      maxItems: 12,
+      uniqueItems: true,
+    }),
+  },
+  { additionalProperties: false }
+);
+export type ResearchBudgetPolicyV3 = Static<typeof ResearchBudgetPolicyV3Schema>;
+
+export const ResearchBudgetAdmissionV3Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.research-budget-admission.v3"),
+    schema_version: Type.Literal(3),
+    mode: Type.Union([Type.Literal("quick"), Type.Literal("standard"), Type.Literal("deep")]),
+    max_sub_queries: Type.Integer({ minimum: 1, maximum: 64 }),
+    max_fan_width: Type.Integer({ minimum: 1, maximum: 64 }),
+    effective_decomposition_width: Type.Integer({ minimum: 1, maximum: 64 }),
+    total_research_rounds: Type.Integer({ minimum: 1, maximum: 16 }),
+    max_evaluator_attempts_per_loop: Type.Integer({ minimum: 1, maximum: 16 }),
+    max_semantic_repairs_per_loop: Type.Integer({ minimum: 0, maximum: 15 }),
+    critique_passes: Type.Integer({ minimum: 0, maximum: 2 }),
+    liveness: LivenessPolicyV3Schema,
+  },
+  { additionalProperties: false }
+);
+export type ResearchBudgetAdmissionV3 = Static<typeof ResearchBudgetAdmissionV3Schema>;
+
+export const ResearchBudgetSnapshotV3Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.research-budget-snapshot.v3"),
+    schema_version: Type.Literal(3),
+    admission: ResearchBudgetAdmissionV3Schema,
+    liveness_snapshot_sha256: Sha256Schema,
+    phase_attempts_by_state_branch: Type.Record(
+      Type.String({ minLength: 1, maxLength: 260 }),
+      Type.Integer({ minimum: 0 })
+    ),
+  },
+  { additionalProperties: false }
+);
+export type ResearchBudgetSnapshotV3 = Static<typeof ResearchBudgetSnapshotV3Schema>;
 
 export function makeResearchBudgetPolicy(input: {
-  readonly quick: Static<typeof LivenessPolicyV1Schema>;
-  readonly standard: Static<typeof LivenessPolicyV1Schema>;
-  readonly deep: Static<typeof LivenessPolicyV1Schema>;
-}): ResearchBudgetPolicyV1 {
+  readonly quick: Static<typeof LivenessPolicyV3Schema>;
+  readonly standard: Static<typeof LivenessPolicyV3Schema>;
+  readonly deep: Static<typeof LivenessPolicyV3Schema>;
+}): ResearchBudgetPolicyV3 {
   return validateSkillSchema(
-    ResearchBudgetPolicyV1Schema,
+    ResearchBudgetPolicyV3Schema,
     {
-      schema_id: "penny.research-budget-policy.v1",
-      schema_version: 1,
+      schema_id: "penny.research-budget-policy.v3",
+      schema_version: 3,
       presets: {
         quick: {
           plan_critique: false,
@@ -2705,33 +2789,29 @@ export function makeResearchBudgetPolicy(input: {
         "critique_passes",
       ],
       host_ceiling_fields: [
-        "total_phase_repair_invocations",
-        "model_turns_per_worker",
-        "model_turns_per_run",
-        "tool_calls_per_worker",
-        "tool_calls_per_run",
-        "external_calls_per_worker",
-        "external_calls_per_run",
-        "worker_wall_clock_ms",
-        "run_wall_clock_ms",
+        "lease_registry_id",
+        "lease_registry_sha256",
+        "calibration_id",
+        "calibration_sha256",
+        "unknown_provider_phase_inactivity_ms",
+        "unknown_provider_routing_repair_inactivity_ms",
+        "renewal_policy",
+        "malformed_results_per_state_branch",
+        "identical_malformed_digest_limit",
+        "protocol_errors_per_worker",
+        "identical_protocol_digest_limit",
         "routing_repair",
       ],
-      phase_attempt_projection: {
-        source_event: "liveness_invocation_admitted",
-        key: "state_id+branch_id",
-        ceiling_source: "total_phase_repair_invocations",
-        relation: "equal_to_total_ceiling",
-      },
     },
-    "ResearchBudgetPolicyV1"
+    "ResearchBudgetPolicyV3"
   );
 }
 
 export function resolveResearchBudgetAdmission(
   request: ResearchRequestV1,
-  policy: ResearchBudgetPolicyV1,
+  policy: ResearchBudgetPolicyV3,
   declaredMode: "quick" | "standard" | "deep" = "standard"
-): ResearchBudgetAdmissionV1 {
+): ResearchBudgetAdmissionV3 {
   validateResearchRequest(request);
   const mode = request.mode ?? declaredMode;
   const preset = policy.presets[mode];
@@ -2741,10 +2821,10 @@ export function resolveResearchBudgetAdmission(
     request.budget_overrides.max_evaluator_attempts_per_loop ??
     preset.default_max_evaluator_attempts;
   return validateSkillSchema(
-    ResearchBudgetAdmissionV1Schema,
+    ResearchBudgetAdmissionV3Schema,
     {
-      schema_id: "penny.research-budget-admission.v1",
-      schema_version: 1,
+      schema_id: "penny.research-budget-admission.v3",
+      schema_version: 3,
       mode,
       max_sub_queries: maxSubQueries,
       max_fan_width: maxFanWidth,
@@ -2755,8 +2835,7 @@ export function resolveResearchBudgetAdmission(
       max_semantic_repairs_per_loop: evaluatorAttempts - 1,
       critique_passes: request.budget_overrides.critique_passes ?? (preset.plan_critique ? 2 : 0),
       liveness: preset.liveness,
-      phase_attempt_ceiling_per_state_branch: preset.liveness.total_phase_repair_invocations,
     },
-    "ResearchBudgetAdmissionV1"
+    "ResearchBudgetAdmissionV3"
   );
 }

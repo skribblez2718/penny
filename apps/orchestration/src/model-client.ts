@@ -26,7 +26,8 @@ import {
 import { Type, type Static } from "typebox";
 export type { InlineExtension };
 
-import { canonicalJson } from "./checkpointer.js";
+import { canonicalJson, sha256 } from "./checkpointer.js";
+import type { WorkerActivityClassV1 } from "./child-workflows/contracts.js";
 import {
   assertRegisteredBrowserPolicyCarrier,
   registeredBrowserPolicyOwnerScopeId,
@@ -40,11 +41,7 @@ import {
   type LivenessTerminalReason,
   type SkillContract,
 } from "./contracts.js";
-import {
-  isExternalCallTool,
-  LivenessExhaustedError,
-  type WorkerPromptBudgetV1,
-} from "./liveness.js";
+import { isExternalCallTool, LivenessExhaustedError, type WorkerPromptBudget } from "./liveness.js";
 import type { ResearchContextOverlay } from "./research-context.js";
 import {
   assertOwnerDirectory,
@@ -60,6 +57,13 @@ type PiModel = NonNullable<CreateSessionOptions["model"]>;
 type PiCustomTool = NonNullable<CreateSessionOptions["customTools"]>[number];
 export type SessionThinkingLevel = NonNullable<CreateSessionOptions["thinkingLevel"]>;
 
+/** Exact generic-child YAML authority bound before a worker reaches this client. */
+export interface GenericChildCatalogAgentYamlMaximumCarrierV1 {
+  readonly carrier: "catalog_agent_yaml_maximum";
+  /** Null preserves an unbound template and must never be upgraded from a later filesystem read. */
+  readonly allowed_tools: readonly string[] | null;
+}
+
 export interface ActiveWorkerRegistrationMetadataV1 {
   readonly playbook_name: string;
   readonly workflow_name: string;
@@ -72,6 +76,11 @@ export interface ActiveWorkerRegistrationMetadataV1 {
    * YAML equality; presence is the registration-digest-bound strict subset revalidated here.
    */
   readonly allowed_tools?: readonly string[];
+  /**
+   * Present only for a generic-child YAML-maximum phase. Absence means no such carrier; a present
+   * null snapshot means registration binding was unbound and must fail closed.
+   */
+  readonly generic_child_yaml_authority?: GenericChildCatalogAgentYamlMaximumCarrierV1;
   /** Exact immutable phase policy; only WorkerExecutor may project it from registration. */
   readonly browser_network_allowlist?: readonly string[];
 }
@@ -140,7 +149,7 @@ export interface AgentInvocation {
   /** Host-enforced, non-observational charge sink. Errors abort before admission. */
   readonly liveness?: AgentSessionLivenessSink;
   /** Read-only projection of the host-enforced counters for this open worker lease. */
-  readonly livenessBudget?: WorkerPromptBudgetV1;
+  readonly livenessBudget?: WorkerPromptBudget;
   readonly modelOverride?: string;
   /** Host-owned per-invocation policy; when absent, session-level fallback remains authoritative. */
   readonly thinkingLevel?: SessionThinkingLevel;
@@ -157,6 +166,12 @@ export interface AgentInvocation {
    * rather than run on an unadmitted default.
    */
   readonly admitResolvedModel?: (resolved: { provider: string; model: string }) => void;
+  /**
+   * Post-creation, pre-prompt binding for host controls that need Pi's actual session model when
+   * no explicit override was supplied. Unlike admitResolvedModel, this does not authorize session
+   * creation; throwing closes the created session before any model invocation.
+   */
+  readonly bindResolvedSessionModel?: (resolved: { provider: string; model: string }) => void;
   /** W6: bounded metadata projected from the exact active playbook registration. */
   readonly registration: ActiveWorkerRegistrationMetadataV1;
   /**
@@ -313,6 +328,11 @@ export type AgentSessionTraceRecordV1 =
 
 export type AgentSessionTraceSink = (record: AgentSessionTraceRecordV1) => void;
 
+export interface AgentSessionProgressActivityV1 {
+  readonly activity_class: WorkerActivityClassV1;
+  readonly observed_units: number;
+}
+
 export type AgentSessionLivenessEventV1 =
   | {
       readonly kind: "model_turn";
@@ -322,12 +342,26 @@ export type AgentSessionLivenessEventV1 =
         | "summarization_retry_attempt_start"
         | "compaction_start";
     }
-  | { readonly kind: "tool_call"; readonly tool_name: string }
+  | {
+      readonly kind: "tool_call";
+      readonly tool_name: string;
+      readonly progress?: AgentSessionProgressActivityV1;
+    }
   | {
       readonly kind: "protocol_error";
       readonly tool_name: string;
       readonly error_code: AgentSessionProtocolErrorCodeV1;
-    };
+      readonly progress?: AgentSessionProgressActivityV1;
+    }
+  | ({ readonly kind: "activity" } & AgentSessionProgressActivityV1);
+
+export interface ContentFreeSessionLivenessProjectionStateV1 {
+  readonly tool_update_sha256: Map<string, string>;
+}
+
+export function createContentFreeSessionLivenessProjectionState(): ContentFreeSessionLivenessProjectionStateV1 {
+  return { tool_update_sha256: new Map() };
+}
 
 export type AgentSessionLivenessSink = (event: AgentSessionLivenessEventV1) => void;
 
@@ -391,10 +425,41 @@ export function contentFreeSessionProtocolErrorRecord(
   return errorCode === undefined ? undefined : { kind: "protocol_error", error_code: errorCode };
 }
 
-/** Project one Pi event onto the host-enforced, content-free charge vocabulary. */
+function observedDeltaUnits(delta: string): number | undefined {
+  const units = Buffer.byteLength(delta, "utf8");
+  return units === 0 ? undefined : Math.min(units, 16_777_216);
+}
+
+function toolUpdateProgress(
+  event: Extract<AgentSessionEvent, { type: "tool_execution_update" }>,
+  state?: ContentFreeSessionLivenessProjectionStateV1
+): AgentSessionProgressActivityV1 | undefined {
+  let bytes: string;
+  try {
+    bytes = canonicalJson(event.partialResult);
+  } catch {
+    return undefined;
+  }
+  if (typeof bytes !== "string" || bytes.length === 0) return undefined;
+  const digest = sha256(bytes);
+  if (state?.tool_update_sha256.get(event.toolCallId) === digest) return undefined;
+  state?.tool_update_sha256.set(event.toolCallId, digest);
+  return {
+    activity_class: "tool_execution_updated",
+    observed_units: Math.min(Buffer.byteLength(bytes, "utf8"), 16_777_216),
+  };
+}
+
+/**
+ * Project one Pi event onto the host-enforced, content-free charge/activity vocabulary.
+ * Raw deltas and tool results are inspected only to prove non-empty/change; only class and
+ * bounded unit count leave this adapter. Production callers supply state so repeated cumulative
+ * tool updates do not renew a lease.
+ */
 export function contentFreeSessionLivenessEvent(
   event: AgentSessionEvent,
-  allowedToolNames: ReadonlySet<string>
+  allowedToolNames: ReadonlySet<string>,
+  state?: ContentFreeSessionLivenessProjectionStateV1
 ): AgentSessionLivenessEventV1 | undefined {
   if (
     event.type === "turn_start" ||
@@ -404,23 +469,83 @@ export function contentFreeSessionLivenessEvent(
   ) {
     return { kind: "model_turn", source: event.type };
   }
+  if (event.type === "message_update") {
+    const update = event.assistantMessageEvent;
+    if (update.type === "text_delta") {
+      const observedUnits = observedDeltaUnits(update.delta);
+      return observedUnits === undefined
+        ? undefined
+        : {
+            kind: "activity",
+            activity_class: "assistant_text_delta",
+            observed_units: observedUnits,
+          };
+    }
+    if (update.type === "thinking_delta") {
+      const observedUnits = observedDeltaUnits(update.delta);
+      return observedUnits === undefined
+        ? undefined
+        : {
+            kind: "activity",
+            activity_class: "assistant_thinking_delta",
+            observed_units: observedUnits,
+          };
+    }
+    return undefined;
+  }
   if (event.type === "tool_execution_start") {
+    const admitted = allowedToolNames.has(event.toolName);
     return {
       kind: "tool_call",
-      tool_name: allowedToolNames.has(event.toolName) ? event.toolName : "unknown_tool",
+      tool_name: admitted ? event.toolName : "unknown_tool",
+      ...(admitted
+        ? {
+            progress: {
+              activity_class: "tool_execution_started" as const,
+              observed_units: 1,
+            },
+          }
+        : {}),
     };
   }
-  if (event.type !== "tool_execution_end" || !event.isError) return undefined;
+  if (event.type === "tool_execution_update") {
+    if (!allowedToolNames.has(event.toolName)) return undefined;
+    const progress = toolUpdateProgress(event, state);
+    return progress === undefined ? undefined : { kind: "activity", ...progress };
+  }
+  if (event.type === "turn_end" && event.message.role === "assistant") {
+    return {
+      kind: "activity",
+      activity_class: "provider_turn_ended",
+      observed_units: 1,
+    };
+  }
+  if (event.type === "agent_end") {
+    return {
+      kind: "activity",
+      activity_class: "worker_completed",
+      observed_units: 1,
+    };
+  }
+  if (event.type !== "tool_execution_end") return undefined;
+  state?.tool_update_sha256.delete(event.toolCallId);
   const unknownTool = !allowedToolNames.has(event.toolName);
+  const progress = unknownTool
+    ? undefined
+    : ({ activity_class: "tool_execution_completed", observed_units: 1 } as const);
+  if (!event.isError) return progress === undefined ? undefined : { kind: "activity", ...progress };
   const errorCode = unknownTool
     ? "unknown_tool"
     : contentFreeSessionProtocolErrorCode(event.result);
   return errorCode === undefined
-    ? undefined
+    ? progress === undefined
+      ? undefined
+      : { kind: "activity", ...progress }
     : {
         kind: "protocol_error",
         tool_name: unknownTool ? "unknown_tool" : event.toolName,
         error_code: errorCode,
+        ...(progress === undefined ? {} : { progress }),
       };
 }
 
@@ -808,23 +933,39 @@ export function buildAgentOpening(input: {
   if (repair && operativeGuidance?.trim().length === 0) {
     throw new Error("routing repair has no mechanically projected summary-only guidance");
   }
+  const budget = input.invocation.livenessBudget;
   const livenessContext =
-    input.invocation.livenessBudget === undefined
+    budget === undefined
       ? ""
-      : [
-          "HOST-ENFORCED LIVENESS BUDGET:",
-          canonicalJson(input.invocation.livenessBudget),
-          "EXTERNAL-BUDGET TOOLS:",
-          canonicalJson(input.activeToolNames.filter(isExternalCallTool).sort()),
-          [
-            "Each assistant response consumes one model turn. Reserve one effective model",
-            "turn for the final assistant answer. Before emitting tool calls, ensure another",
-            "model turn remains for that answer. Every requested tool call—including each",
-            "call in a parallel batch—is charged individually. Stop tool use and answer with",
-            "the best supported result when evidence is sufficient or another tool round",
-            "would consume the reserve.",
-          ].join("\n"),
-        ].join("\n\n");
+      : budget.schema_version === 3
+        ? [
+            "HOST-ENFORCED RENEWABLE INACTIVITY LEASE:",
+            "The host renews the lease only from trusted non-empty assistant/thinking deltas,",
+            "admitted tool lifecycle progress, provider turn completion, or durable workflow",
+            "convergence. Total elapsed work is not a liveness budget; stalled work is stopped.",
+          ].join("\n")
+        : budget.schema_version === 2
+          ? [
+              "HOST-ENFORCED ACTIVE-WORK ENVELOPE:",
+              canonicalJson(budget),
+              "Ordinary permitted model turns and tool calls have no call-count budget. Continue",
+              "only while work is useful, respect the registered authority boundary, and finish",
+              "before the host active-work deadline.",
+            ].join("\n\n")
+          : [
+              "HOST-ENFORCED LEGACY V1 LIVENESS BUDGET:",
+              canonicalJson(budget),
+              "EXTERNAL-BUDGET TOOLS:",
+              canonicalJson(input.activeToolNames.filter(isExternalCallTool).sort()),
+              [
+                "Each assistant response consumes one model turn. Reserve one effective model",
+                "turn for the final assistant answer. Before emitting tool calls, ensure another",
+                "model turn remains for that answer. Every requested tool call—including each",
+                "call in a parallel batch—is charged individually. Stop tool use and answer with",
+                "the best supported result when evidence is sufficient or another tool round",
+                "would consume the reserve.",
+              ].join("\n"),
+            ].join("\n\n");
   return [
     `You are executing the '${input.invocation.agent}' role for a registered workflow.`,
     input.agentGuidance,
@@ -911,6 +1052,13 @@ export class PiAgentClient implements ModelClient {
         `agent '${invocation.agent}' state '${invocation.stateId}' has registration/session posture mismatch`
       );
     }
+    const genericChildYamlAuthority = registration.generic_child_yaml_authority;
+    if (genericChildYamlAuthority?.allowed_tools === null) {
+      throw new Error(
+        `agent '${invocation.agent}' state '${invocation.stateId}' has unbound generic child YAML authority`
+      );
+    }
+    const genericChildYamlSnapshot = genericChildYamlAuthority?.allowed_tools;
     const catalogAgentDoc = await optionalText(
       path.join(invocation.projectRoot, ".pi", "agents", `${invocation.agent}.md`)
     );
@@ -920,6 +1068,15 @@ export class PiAgentClient implements ModelClient {
       );
     }
     const agentGuidance = isolated ? "" : catalogAgentDoc;
+    const yamlMaximum = isolated ? [] : [...parseSsotTools(agentGuidance, invocation.agent)];
+    if (
+      genericChildYamlSnapshot !== undefined &&
+      canonicalJson(yamlMaximum) !== canonicalJson(genericChildYamlSnapshot)
+    ) {
+      throw new Error(
+        `agent '${invocation.agent}' state '${invocation.stateId}' generic child YAML authority drifted after registration binding`
+      );
+    }
     // W6: contract-resolved, not hardcoded. Private sessions already carry the
     // exact resolved guidance in their isolated system prompt, so they never
     // rediscover a project/global prompt here.
@@ -948,7 +1105,6 @@ export class PiAgentClient implements ModelClient {
         `agent '${invocation.agent}' state '${invocation.stateId}' has empty required guidance`
       );
     }
-    const yamlMaximum = isolated ? [] : [...parseSsotTools(agentGuidance, invocation.agent)];
     // This is the sole catalog narrowing gate. WorkerExecutor may copy only the active
     // PlaybookRegistrationV1 phase value here; task/trust/runtime state has no selector.
     // Validate strict membership before createAgentSession, then pass the accepted list unchanged.
@@ -1093,6 +1249,22 @@ export class PiAgentClient implements ModelClient {
       throw error;
     }
     const { session } = created;
+    if (invocation.bindResolvedSessionModel !== undefined) {
+      const provider = typeof session.model?.provider === "string" ? session.model.provider : "";
+      const id = typeof session.model?.id === "string" ? session.model.id : "";
+      if (provider.length === 0 || id.length === 0) {
+        await closeCreatedSession(session, sessionManager);
+        throw new Error(
+          `agent '${invocation.agent}' state '${invocation.stateId}': created session has no model identity to bind before prompt`
+        );
+      }
+      try {
+        invocation.bindResolvedSessionModel({ provider, model: id });
+      } catch (error) {
+        await closeCreatedSession(session, sessionManager);
+        throw error;
+      }
+    }
     const activeTools = [...session.getActiveToolNames()].sort();
     const expectedTools = [...allowed].sort();
     if (
@@ -1107,11 +1279,16 @@ export class PiAgentClient implements ModelClient {
       );
     }
     const traceToolNames = new Set(allowed);
+    const livenessProjection = createContentFreeSessionLivenessProjectionState();
     const unsubscribeLiveness =
       invocation.liveness === undefined
         ? undefined
         : session.subscribe((event) => {
-            const charge = contentFreeSessionLivenessEvent(event, traceToolNames);
+            const charge = contentFreeSessionLivenessEvent(
+              event,
+              traceToolNames,
+              livenessProjection
+            );
             if (charge !== undefined) invocation.liveness?.(charge);
           });
     const traceSinks = [this.options.sessionTrace, spec?.trace].filter(

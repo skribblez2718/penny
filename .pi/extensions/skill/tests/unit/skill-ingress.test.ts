@@ -35,6 +35,8 @@ function registration(): PlaybookRegistrationV1 {
     name,
     contract: { ...research.contract, name },
     worker: { ...research.worker, workflow_name: name },
+    // A synthetic generic ingress is not one of the six authorized child providers.
+    generic_child: undefined,
   };
 }
 

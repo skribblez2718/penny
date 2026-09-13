@@ -17,18 +17,19 @@ safely.
 
 ## Components
 
-| Module                        | Role                                                                                                 |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `engine.ts`                   | Closed request handling, playbook dispatch, transitions, receipts, gates, recovery                   |
-| `service.ts`                  | Engine/checkpointer/artifact/worker composition                                                      |
-| `checkpointer.ts`             | Owner-only Node SQLite state keyed by exact `run_id`; canonical content-review packet/receipt rows   |
-| `artifact-store.ts`           | Immutable manifest and content-addressed exact-byte objects                                          |
-| `worker.ts`                   | Active-registration checks, bounded Pi SDK execution, capture, fan-out, signed receipts              |
-| `model-client.ts`             | Registration guidance, agent SSOT models, YAML maxima, strict-subset validation, and active equality |
-| `playbooks/registry.ts`       | Fail-closed playbook, worker-phase, repair-route, and completion construction                        |
-| `playbooks/research.ts`       | Research cognitive graph, host sealing/rendering, latest-core product graph and DoD                  |
-| `playbooks/knowledge-base.ts` | Knowledge-base machine and host-only gates                                                           |
-| `observability.ts`            | Best-effort metadata/digest events                                                                   |
+| Module                        | Role                                                                                                                                          |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine.ts`                   | Closed request handling, playbook dispatch, transitions, receipts, gates, recovery                                                            |
+| `service.ts`                  | Engine/checkpointer/artifact/worker composition                                                                                               |
+| `checkpointer.ts`             | Owner-only Node SQLite state keyed by exact `run_id`; canonical content-review packet/receipt rows                                            |
+| `artifact-store.ts`           | Immutable manifest and content-addressed exact-byte objects                                                                                   |
+| `worker.ts`                   | Active-registration checks, bounded Pi SDK execution, capture, fan-out, signed receipts                                                       |
+| `model-client.ts`             | Registration guidance, agent SSOT models, YAML maxima, strict-subset validation, and active equality                                          |
+| `playbooks/registry.ts`       | Fail-closed playbook construction plus digest-bound active generic-child parent/provider authority projection                                 |
+| `child-workflows/`            | Bounded envelopes, active depth-one engine owner, artifact custody, durable call state, exact terminal capture, and atomic parent consumption |
+| `playbooks/research.ts`       | Research cognitive graph, host sealing/rendering, latest-core product graph and DoD                                                           |
+| `playbooks/knowledge-base.ts` | Knowledge-base machine and host-only gates                                                                                                    |
+| `observability.ts`            | Best-effort metadata/digest events                                                                                                            |
 
 ## Rules
 
@@ -62,10 +63,83 @@ safely.
     product, context metadata, and optional-service state cannot select or alter tools.
 14. A phase subset does not mutate agent YAML/profiles and creates no OS/process sandbox or
     extension-code isolation. Anonymous host-private matrices remain separate and unchanged.
-15. New research starts canonicalize `ResearchRequestV1` and validate typed imported semantic-core bytes before run mutation or model/session work.
-16. Research context persists metadata-only, versioned `ContextSourceRef` artifacts. Resolver-v2 admission uses bounded pre-resolved snapshots, while every selected current or legacy envelope is asynchronously re-resolved immediately before model execution under the current manifest/use-time policy. The worker owns the wall-clock deadline, `AbortController`, and Promise race; synchronous throws, rejections, non-settling Promises, cancellation, stale output, drift, revocation, conflicts, and unavailable sources fail before `runAgent`. V2 handlers are explicitly trusted in-process adapters and receive the use-time `AbortSignal` and deadline. This does not let JavaScript preempt malicious CPU-infinite synchronous adapter code; untrusted resolver logic requires an interruptible worker/process boundary behind the adapter. Invocation is deferred one event-loop turn so cancellation already requested can win before adapter start. Scope and verification-disposition widening is never inferred for an older selection: it requires a newly admitted binding with its exact source, revision/approval, scope, role, media type, disposition, and provider identity verified.
-17. P3 research returns/forwards the latest canonical `GroundedSynthesisV1` semantic-core ID. Synthia's closed `ResearchSemanticDraftV1` is deterministically projected and sealed by the host before Vera; every changed core re-enters Vera before optional report Carren. Host rendering persists latest-core receipts/renders/envelope and admits success only through the research DoD from `rendering`.
-18. A catalog phase's optional `browser_network_allowlist` is frozen, canonical, registration-digest-bound, and projected only by `WorkerExecutor`. `browser-policy-contract-v1.ts` is the single v1 parser/bounds/carrier contract used by orchestration and Playwright; production accepts only the context-local `orchestration-registration` carrier admitted by `PiAgentClient`. Browser resource closure alone retains a live binding; captured session retirement reclaims it only after owned browser-process exit is confirmed.
+15. `registry.ts` projects the six ordinary workflows—`assess`, `decide`, `diagnose`, `plan`,
+    `produce`, and `research`—as active depth-one generic parents and providers. A normal service
+    constructs the child owner; an explicit host-only `enableChildWorkflows: false` setting disables
+    it and returns the typed owner-unavailable refusal. The owner revalidates registration/YAML and
+    native request bindings, atomically reserves one child, drives the ordinary child engine and
+    runner, validates the exact terminal core, persists a child-result artifact, and atomically marks
+    the call consumed with the parent continuation. It enforces fixed call/active/project admission
+    and a content-free inactivity lease renewed only by host-observed worker activity or workflow
+    convergence. The child otherwise uses its registered repair/liveness policy and the service-wide
+    step backstop; active calls carry no predicted child-specific turn, tool, output, step, time,
+    aggregate, or reserve budget. Runner
+    cancellation, a concurrent durable parent cancel, and lease expiry all stop the current child;
+    only parent cancellation marks the parent cancelled. `knowledge-base` remains dedicated/private
+    and excluded. Child user gates, arbitrary restart reconciliation after terminal capture,
+    artifact/receipt/session cohort retention, promotion, and live-provider qualification remain
+    separate work; Gate 2 evidence remains unrun.
+16. New calls use schema-v3 `invoke_child_workflow` directives and durable
+    `ChildWorkflowCallRecordV2`. They contain no resource allocation and bind one exact,
+    content-free child-execution lease profile. Each execution uses a fenced
+    owner/attempt/session coordinate; stale or empty activity cannot renew it, activity does not
+    manufacture convergence, and expiry aborts the child. Legacy schema-v2 directives and V1 records
+    remain exact replay inputs under their original timing policy and are never minted for new calls.
+17. New research starts canonicalize `ResearchRequestV1` and validate typed imported semantic-core bytes before run mutation or model/session work.
+18. Research context persists metadata-only, versioned `ContextSourceRef` artifacts. Resolver-v2 admission uses bounded pre-resolved snapshots, while every selected current or legacy envelope is asynchronously re-resolved immediately before model execution under the current manifest/use-time policy. The worker owns the wall-clock deadline, `AbortController`, and Promise race; synchronous throws, rejections, non-settling Promises, cancellation, stale output, drift, revocation, conflicts, and unavailable sources fail before `runAgent`. V2 handlers are explicitly trusted in-process adapters and receive the use-time `AbortSignal` and deadline. This does not let JavaScript preempt malicious CPU-infinite synchronous adapter code; untrusted resolver logic requires an interruptible worker/process boundary behind the adapter. Invocation is deferred one event-loop turn so cancellation already requested can win before adapter start. Scope and verification-disposition widening is never inferred for an older selection: it requires a newly admitted binding with its exact source, revision/approval, scope, role, media type, disposition, and provider identity verified.
+19. P3 research returns/forwards the latest canonical `GroundedSynthesisV1` semantic-core ID. Synthia's closed `ResearchSemanticDraftV1` is deterministically projected and sealed by the host before Vera; every changed core re-enters Vera before optional report Carren. Host rendering persists latest-core receipts/renders/envelope and admits success only through the research DoD from `rendering`.
+20. A catalog phase's optional `browser_network_allowlist` is frozen, canonical, registration-digest-bound, and projected only by `WorkerExecutor`. `browser-policy-contract-v1.ts` is the single v1 parser/bounds/carrier contract used by orchestration and Playwright; production accepts only the context-local `orchestration-registration` carrier admitted by `PiAgentClient`. Browser resource closure alone retains a live binding; captured session retirement reclaims it only after owned browser-process exit is confirmed.
+
+## Child-call storage boundary
+
+`ChildWorkflowStateOwner` mints opaque custody from one concrete `ArtifactStore`. The checkpointer
+matches that store to the control database's project ID and re-verifies the canonical request and
+all input refs/bytes before mutation. For a new logical call, one `BEGIN IMMEDIATE` transaction:
+
+1. records the exact `invoke_child_workflow` directive as the running parent's pending work;
+2. inserts an ordinary unstarted child run with the same project root/trust profile and the reserved
+   service-configured step backstop;
+3. inserts the canonical `child_workflow_calls` row; and
+4. appends parent-reservation and child-creation events, then checks exact readback.
+
+The row binds the exact parent visit, deterministic call/child identities, parent and child
+registration digests, request/input/output-contract refs and digests, policy binding, active lease binding,
+lifecycle, and timestamps. Historical V1 rows additionally retain their original allocation. Exact
+duplicate immutable operands adopt the existing row and lifecycle;
+changed operands conflict. Missing linked runs, an unpaired deterministic child run, mismatched
+registration/project/trust/visit data, corrupt rows, or artifact-only state fail closed rather than
+being reconstructed.
+
+Schema v12 accepts both exact legacy V1 and active V2 call records. The explicit v11→v12 migration
+rebuilds only the row-version check and preserves every canonical V1 record byte; exact older
+fingerprints upgrade without inventing call rows. Unversioned, unsupported, newer, or malformed
+retained state refuses before use. The separate state-migration verifier requires the artifact
+manifest and objects whenever retained call rows exist and rechecks their exact refs.
+
+Lifecycle updates are compare-and-set operations. A captured terminal can be consumed only through
+one owner transaction that verifies the original pending directive, preserves the terminal operands,
+writes the parent continuation, and changes the record to `consumed`; a repeated delivery cannot
+advance the parent twice. Terminal pruning keeps every child run named by a call row and keeps a
+parent while a linked call is not consumed. This does not claim artifact-cohort, receipt, or
+catalog-session retention, eventual cohort eviction, child-gate projection, or general
+restart/cancellation reconciliation.
+
+## Active generic-child authority projection
+
+Every active ordinary registration carries the same explicit all-six parent allowlist and its own
+native provider declaration. The policy permits one depth-one call, one active child, and project
+concurrency one. It deliberately carries no child-specific resource allocation, aggregate budget,
+or parent-sealing reserve. Agent YAML remains the maximum tool authority unless an existing phase registration
+already fixes a strict subset; that registered subset is projected unchanged. A subset-absent
+provider carrier records the exact YAML maximum snapshot, and registration validation re-reads the
+catalog to refuse YAML drift. The existing `browser_network_allowlist`, or null when absent, is the
+only destination carrier. Request/task, runtime, trust, liveness, provider response, and
+optional-service data cannot select either carrier.
+
+This projection authorizes active depth-one dispatch through the service-owned child runtime;
+`WorkerExecutor` still never executes child directives directly. Provider qualification and external
+discovery/promotion remain independent: Gate 2 is `not_run` with no evidence, and runtime execution
+does not fabricate qualification evidence.
 
 ## Composition
 

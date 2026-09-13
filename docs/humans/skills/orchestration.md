@@ -20,6 +20,29 @@ admission, and recovery.
 Parallel work uses branch IDs. Chain composition verifies and forwards the exact terminal
 ID directly into the next run; `{previous}` never transports payload text.
 
+## Active generic-child authority
+
+The active registry records explicit runtime parent/provider authority for the six ordinary
+workflows: assess, decide, diagnose, plan, produce, and research. Each can target the same all-six set
+at depth one under fixed call and concurrency admission. Active policy deliberately does not guess
+how many turns, tools, output bytes, steps, or seconds a child needs and has no aggregate budget or
+parent reserve. Every provider binds its own native request/output contracts and fixed registered phase agent, result,
+tool, and browser-network carriers. When a phase uses its YAML tool maximum, the registration stores
+that exact snapshot and refuses later YAML drift. Missing or unknown workflows deny, and the
+dedicated/private knowledge-base workflow is excluded.
+
+This projection authorizes active depth-one child dispatch. Normal services construct the child
+owner by default; a host can explicitly disable it. The owner drives a registered child through the
+ordinary engine/runner, validates its terminal core, and atomically continues the parent. New calls
+use the child's registered repair/liveness policy and the service-wide step backstop plus one
+content-free inactivity lease bound by the host. Fenced non-empty host-observed worker activity or workflow convergence renews one interval;
+stale/empty signals refuse, activity does not manufacture convergence, and expiry stops the child.
+Runner and concurrent parent cancellation are also forwarded. Workers do not execute child
+directives directly. Child gates, arbitrary post-capture restart reconciliation, cohort retention,
+promotion, and live provider qualification remain separate; Gate 2 remains unrun, so execution alone
+is not qualification evidence. Legacy fixed-time V1 records remain replayable but are not created for
+new calls.
+
 ## Recovery
 
 The Node SQLite checkpointer stores compact state and selected refs, never stage payloads.

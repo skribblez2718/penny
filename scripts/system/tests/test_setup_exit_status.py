@@ -7,10 +7,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).parents[3]
 MASTER_SETUP = PROJECT_ROOT / "scripts" / "setup" / "setup.sh"
 BROWSER_SETUP = PROJECT_ROOT / "scripts" / "setup" / "init-external-tools.sh"
 MEMORY_SETUP = PROJECT_ROOT / "scripts" / "setup" / "init-memory.sh"
+ORCHESTRATION_SETUP = PROJECT_ROOT / "scripts" / "setup" / "init-orchestration.sh"
 CONFIG_CHECK = PROJECT_ROOT / "scripts" / "setup" / "check-config.mjs"
 PREFLIGHT = PROJECT_ROOT / "scripts" / "setup" / "preflight.mjs"
 MAKEFILE = PROJECT_ROOT / "Makefile"
@@ -279,13 +282,15 @@ def test_preflight_checks_supported_versions_without_installing(tmp_path: Path) 
     assert completed.returncode == 0, completed.stderr
     result = _last_json(completed.stdout)
     assert result["status"] == "ready"
-    assert [item["component"] for item in result["checks"]] == [
-        "node",
-        "bun",
-        "pi",
-        "python",
-        "uv",
-    ]
+    checks = result["checks"]
+    assert isinstance(checks, list)
+    components: list[str] = []
+    for item in checks:
+        assert isinstance(item, dict)
+        component = item["component"]
+        assert isinstance(component, str)
+        components.append(component)
+    assert components == ["node", "bun", "pi", "python", "uv"]
 
 
 def test_preflight_rejects_pi_sdk_version_skew(tmp_path: Path) -> None:
@@ -408,6 +413,117 @@ def test_make_setup_contract_is_explicit_frozen_and_parallel_safe() -> None:
     assert hub_dry_run.stdout.count("uv sync --frozen --offline") == 1
     assert hub_dry_run.stdout.count("bun install --frozen-lockfile --offline") == 1
     assert "PENNY_SETUP_ALLOW_FRESH_INIT=1" in hub_dry_run.stdout
+
+
+@pytest.mark.parametrize(
+    ("install_exit", "build_exit", "readiness_exit"),
+    [(0, 0, 0), (7, 0, 0), (0, 8, 0), (0, 0, 1)],
+)
+def test_verify_runtime_checks_retained_state_only_after_successful_build(
+    tmp_path: Path, install_exit: int, build_exit: int, readiness_exit: int
+) -> None:
+    # Exercise the real Make dependency graph and setup shell with bounded command
+    # fakes. The state CLI's real schema/refusal behavior has its own integration tests.
+    project = tmp_path / "project with spaces and 'quotes'"
+    _copy_setup_script(project, ORCHESTRATION_SETUP)
+    shutil.copy2(MAKEFILE, project / "Makefile")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls_file = tmp_path / "calls.jsonl"
+    state_cli = project / "apps" / "orchestration" / "dist" / "state-cli.js"
+    recorder = (
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        f"calls = Path({str(calls_file)!r})\n"
+        f"state_cli = Path({str(state_cli)!r})\n"
+    )
+    _write_executable(
+        bin_dir / "bun",
+        recorder
+        + "if args == ['install', '--frozen-lockfile', '--offline']:\n"
+        + f"    action, status = 'install', {install_exit}\n"
+        + f"elif args == ['run', '--cwd', {str(state_cli.parents[1])!r}, 'build']:\n"
+        + f"    action, status = 'build', {build_exit}\n"
+        + "    if status == 0:\n"
+        + "        state_cli.parent.mkdir(parents=True)\n"
+        + "        state_cli.write_text('// synthetic build output\\n')\n"
+        + "else:\n"
+        + "    raise AssertionError(args)\n"
+        + "with calls.open('a') as output:\n"
+        + "    output.write(json.dumps(action) + '\\n')\n"
+        + "sys.exit(status)\n",
+    )
+    _write_executable(
+        bin_dir / "node",
+        recorder
+        + "if args == ['scripts/setup/preflight.mjs', 'javascript']:\n"
+        + "    action, status = 'preflight', 0\n"
+        + "else:\n"
+        + "    assert state_cli.is_file(), 'readiness ran before build output existed'\n"
+        + f"    assert args == [str(state_cli), 'readiness', {f'--project-root={project}'!r}]\n"
+        + f"    action, status = 'readiness', {readiness_exit}\n"
+        + "    if status != 0:\n"
+        + "        print('STATE_SCHEMA_INCOMPATIBLE', file=sys.stderr)\n"
+        + "with calls.open('a') as output:\n"
+        + "    output.write(json.dumps(action) + '\\n')\n"
+        + "sys.exit(status)\n",
+    )
+    environment = os.environ.copy()
+    environment["PATH"] = f"{bin_dir}:/usr/bin:/bin"
+    completed = subprocess.run(
+        ["make", "-j4", "verify-runtime"],
+        cwd=project,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    expected_calls = ["preflight", "install"]
+    if install_exit == 0:
+        expected_calls.append("build")
+        if build_exit == 0:
+            expected_calls.append("readiness")
+    assert [json.loads(line) for line in calls_file.read_text().splitlines()] == expected_calls
+    assert (completed.returncode == 0) == (install_exit == build_exit == readiness_exit == 0)
+    if readiness_exit != 0:
+        assert "STATE_SCHEMA_INCOMPATIBLE" in completed.stderr
+    assert "build is ready" not in completed.stdout
+    assert "Penny is ready" not in completed.stdout
+
+
+def test_verify_runtime_and_setup_share_one_parallel_build() -> None:
+    completed = subprocess.run(
+        ["make", "-n", "-j4", "setup", "verify-runtime", "MEMORY_MODE=disabled"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.count("init-orchestration.sh build") == 1
+    assert completed.stdout.count("init-orchestration.sh readiness") == 1
+    assert completed.stdout.index("init-orchestration.sh build") < completed.stdout.index(
+        "init-orchestration.sh readiness"
+    )
+
+
+def test_orchestration_readiness_refuses_missing_build_without_initializing(tmp_path: Path) -> None:
+    script = _copy_setup_script(tmp_path, ORCHESTRATION_SETUP)
+    completed = subprocess.run(
+        ["bash", str(script), "readiness"],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 1
+    assert "state CLI is not built" in completed.stderr
+    assert not (tmp_path / "apps").exists()
 
 
 def test_websocket_runtime_peer_has_no_unused_direct_type_package() -> None:

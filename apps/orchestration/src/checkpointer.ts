@@ -1,9 +1,22 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { Type, type Static } from "typebox";
 
+import { canonicalJson, sha256 } from "./canonical-json.js";
+import {
+  childWorkflowCallImmutableJcs,
+  decodeStoredChildWorkflowCallRow,
+  encodeChildWorkflowCallRecord,
+  isLegalChildWorkflowCallTransition,
+  verifyChildWorkflowArtifactCustody,
+  type StoredChildWorkflowCallRowV1,
+} from "./child-workflows/storage.js";
+import type {
+  ChildWorkflowCallRecord,
+  ChildWorkflowLifecycleV1,
+} from "./child-workflows/contracts.js";
 import { RunContext } from "./context.js";
 import {
   CompletionAdmissionEnvelopeSchema,
@@ -84,8 +97,60 @@ import {
   type ReadOnlySqliteSnapshot,
 } from "./state/sqlite-snapshot.js";
 
-export const ORCHESTRATION_DATABASE_SCHEMA_VERSION = 10 as const;
+export { canonicalJson, sha256 } from "./canonical-json.js";
+
+export const ORCHESTRATION_DATABASE_SCHEMA_VERSION = 12 as const;
+export const ORCHESTRATION_UPGRADE_SOURCE_VERSIONS = [10, 11] as const;
+
+export class OrchestrationSchemaCompatibilityError extends Error {
+  readonly code = "ORCHESTRATION_SCHEMA_INCOMPATIBLE";
+  readonly component = "orchestration";
+  readonly requiredVersion = ORCHESTRATION_DATABASE_SCHEMA_VERSION;
+  readonly upgradeSupported: boolean;
+
+  constructor(readonly actualVersion: number) {
+    const upgradeSupported = ORCHESTRATION_UPGRADE_SOURCE_VERSIONS.some(
+      (version) => version === actualVersion
+    );
+    super(
+      upgradeSupported
+        ? `orchestration schema ${actualVersion} is not current; run penny-state upgrade --project-root=PATH --backup-dir=PATH`
+        : `orchestration schema ${actualVersion} is not supported by this runtime (required ${ORCHESTRATION_DATABASE_SCHEMA_VERSION})`
+    );
+    this.name = "OrchestrationSchemaCompatibilityError";
+    this.upgradeSupported = upgradeSupported;
+  }
+}
+
+export interface OrchestrationSchemaInspection {
+  readonly actualVersion: number;
+  readonly requiredVersion: number;
+  readonly upgradeRequired: boolean;
+  readonly upgradeSupported: boolean;
+}
+
+export interface OrchestrationSchemaUpgradeResult {
+  readonly sourceVersion: number;
+  readonly targetVersion: number;
+  readonly changed: boolean;
+}
+
 const REQUIRED_ORCHESTRATION_COLUMNS = {
+  child_workflow_calls: [
+    "call_id",
+    "schema_version",
+    "parent_run_id",
+    "parent_state_id",
+    "parent_visit_sequence",
+    "parent_visit_offset",
+    "call_key",
+    "child_run_id",
+    "lifecycle",
+    "record_jcs",
+    "record_sha256",
+    "created_at",
+    "updated_at",
+  ],
   content_reviews: ["challenge_id", "run_id", "packet_sha256", "packet_jcs", "state"],
   events: ["run_id", "sequence", "event_type", "payload_json", "created_at"],
   gates: ["run_id", "gate_id", "state_id", "challenge", "status"],
@@ -125,7 +190,13 @@ const REQUIRED_ORCHESTRATION_COLUMNS = {
 } as const;
 const REQUIRED_ORCHESTRATION_TABLES = Object.keys(REQUIRED_ORCHESTRATION_COLUMNS);
 
-type CheckpointerOpenMode = "provision" | "existing" | "verify";
+type CheckpointerOpenMode =
+  | "provision"
+  | "migration-target"
+  | "existing"
+  | "verify"
+  | "upgrade-inspect"
+  | "upgrade";
 
 export interface CheckpointerOptions {
   readonly maxRetainedRuns?: number;
@@ -231,6 +302,55 @@ export class GateConflictError extends Error {
     super(message);
     this.name = "GateConflictError";
   }
+}
+
+export class ChildWorkflowCallConflictError extends Error {
+  readonly code = "child_workflow_call_conflict";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ChildWorkflowCallConflictError";
+  }
+}
+
+export interface ReserveChildWorkflowCallInput {
+  readonly record: ChildWorkflowCallRecord;
+  readonly childContext: RunContext;
+  /** Atomic capacity bounds required for every lease-bound new call. */
+  readonly admission?: {
+    readonly max_calls: number;
+    readonly max_active_children: number;
+    readonly project_concurrency_limit: number;
+  };
+  /** Opaque runtime-verified artifact-store custody capability required before mutation. */
+  readonly custody: unknown;
+}
+
+export type ReserveChildWorkflowCallOutcome =
+  | { readonly kind: "created"; readonly record: ChildWorkflowCallRecord }
+  | { readonly kind: "adopted"; readonly record: ChildWorkflowCallRecord };
+
+export interface TransitionChildWorkflowCallInput {
+  readonly call_id: string;
+  readonly from: ChildWorkflowLifecycleV1;
+  readonly next: ChildWorkflowCallRecord;
+  /** Opaque runtime-verified artifact-store custody capability required before mutation. */
+  readonly custody: unknown;
+}
+
+/**
+ * The sole parent-result commit boundary. The child terminal record and its immutable output are
+ * already durable; this transaction advances the parent and marks that exact logical call consumed
+ * together so a replay cannot route the parent twice.
+ */
+export interface ConsumeChildWorkflowCallInput {
+  readonly call_id: string;
+  readonly next: ChildWorkflowCallRecord;
+  readonly parentContext: RunContext;
+  readonly eventType: string;
+  readonly payload: Record<string, JsonValue>;
+  /** Opaque runtime-verified artifact-store custody capability required before mutation. */
+  readonly custody: unknown;
 }
 
 function requiredCheckpointValue<T>(value: T | undefined, label: string): T {
@@ -600,6 +720,24 @@ function runRow(row: SqliteRow): RunRow {
   };
 }
 
+function childWorkflowCallRow(row: SqliteRow): StoredChildWorkflowCallRowV1 {
+  return {
+    call_id: row["call_id"],
+    schema_version: row["schema_version"],
+    parent_run_id: row["parent_run_id"],
+    parent_state_id: row["parent_state_id"],
+    parent_visit_sequence: row["parent_visit_sequence"],
+    parent_visit_offset: row["parent_visit_offset"],
+    call_key: row["call_key"],
+    child_run_id: row["child_run_id"],
+    lifecycle: row["lifecycle"],
+    record_jcs: row["record_jcs"],
+    record_sha256: row["record_sha256"],
+    created_at: row["created_at"],
+    updated_at: row["updated_at"],
+  };
+}
+
 function receiptRow(row: SqliteRow): ReceiptRow {
   const label = "stored execution receipt";
   return {
@@ -784,28 +922,6 @@ function kbPhaseResultRow(row: SqliteRow): KbPhaseResultRow {
     artifact_ids_jcs: sqliteText(row, "artifact_ids_jcs", label),
     created_at: sqliteText(row, "created_at", label),
   };
-}
-
-function normalizeJson(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(normalizeJson);
-  }
-  if (isUnknownRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, child]) => [key, normalizeJson(child)])
-    );
-  }
-  return value;
-}
-
-export function canonicalJson(value: unknown): string {
-  return JSON.stringify(normalizeJson(value));
-}
-
-export function sha256(value: string | Uint8Array): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function now(): string {
@@ -1047,6 +1163,14 @@ export class Checkpointer implements Disposable {
     return new Checkpointer(dbPath, observer, options, "provision");
   }
 
+  /**
+   * Explicit state-migration target setup. This is the sole path allowed to bind a recognized
+   * pre-binding retained store after the migration owner has selected its project target.
+   */
+  static provisionMigrationTarget(dbPath: string, projectId: string): Checkpointer {
+    return new Checkpointer(dbPath, undefined, { projectId }, "migration-target");
+  }
+
   /** Open one complete canonical control database without creating, repairing, or migrating it. */
   static openExisting(
     dbPath: string,
@@ -1064,6 +1188,50 @@ export class Checkpointer implements Disposable {
     using _checkpointer = new Checkpointer(dbPath, undefined, options, "verify");
   }
 
+  /** Inspect one bound retained database on a private no-atime image without requiring current schema. */
+  static inspectExistingSchema(dbPath: string, projectId: string): OrchestrationSchemaInspection {
+    using checkpointer = new Checkpointer(dbPath, undefined, { projectId }, "upgrade-inspect");
+    const actualVersion = checkpointer.userVersion();
+    return {
+      actualVersion,
+      requiredVersion: ORCHESTRATION_DATABASE_SCHEMA_VERSION,
+      upgradeRequired: actualVersion !== ORCHESTRATION_DATABASE_SCHEMA_VERSION,
+      upgradeSupported: ORCHESTRATION_UPGRADE_SOURCE_VERSIONS.some(
+        (version) => version === actualVersion
+      ),
+    };
+  }
+
+  /**
+   * Upgrade one already-bound retained control database while an exclusive SQLite writer lock is
+   * held. The caller must create and verify its recovery backup in beforeMutation; ordinary runtime
+   * never reaches this path.
+   */
+  static async upgradeExisting(
+    dbPath: string,
+    projectId: string,
+    beforeMutation: (sourceVersion: number) => Promise<void>,
+    afterMigrationStep?: (targetVersion: 11 | 12) => Promise<void>
+  ): Promise<OrchestrationSchemaUpgradeResult> {
+    const inspection = Checkpointer.inspectExistingSchema(dbPath, projectId);
+    if (!inspection.upgradeRequired) {
+      return {
+        sourceVersion: inspection.actualVersion,
+        targetVersion: inspection.requiredVersion,
+        changed: false,
+      };
+    }
+    if (!inspection.upgradeSupported) {
+      throw new OrchestrationSchemaCompatibilityError(inspection.actualVersion);
+    }
+    using checkpointer = new Checkpointer(dbPath, undefined, { projectId }, "upgrade");
+    return await checkpointer.upgradeExistingTransaction(
+      projectId,
+      beforeMutation,
+      afterMigrationStep
+    );
+  }
+
   constructor(
     dbPath: string,
     private readonly observer?: CheckpointObserver,
@@ -1073,7 +1241,7 @@ export class Checkpointer implements Disposable {
     this.dbPath = dbPath;
     this.maxRetainedRuns = options.maxRetainedRuns ?? 500;
     const databaseExists = dbPath !== ":memory:" && pathExistsNoFollow(dbPath);
-    if (mode === "provision") {
+    if (mode === "provision" || mode === "migration-target") {
       if (dbPath !== ":memory:") {
         provisionOwnerDirectory(path.dirname(dbPath));
         if (databaseExists) assertOwnerFile(dbPath, "Penny orchestration database");
@@ -1089,26 +1257,56 @@ export class Checkpointer implements Disposable {
       }
     }
     const validationSnapshot =
-      mode === "verify"
+      mode === "verify" || mode === "upgrade-inspect"
         ? createReadOnlySqliteSnapshot(dbPath, "Penny orchestration database")
         : undefined;
     this.validationSnapshot = validationSnapshot;
     const { DatabaseSync } = sqliteModule();
     this.db = new DatabaseSync(
       validationSnapshot?.databasePath ?? dbPath,
-      mode === "verify" ? { readOnly: true } : {}
+      mode === "verify" || mode === "upgrade-inspect" ? { readOnly: true } : {}
     );
-    if (mode !== "verify") {
-      this.db.exec(
-        mode === "provision"
-          ? "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;"
-          : "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;"
-      );
+    if (mode !== "verify" && mode !== "upgrade-inspect") {
+      // Connection-local settings do not alter retained database bytes. WAL is deliberately delayed
+      // until migrate() has accepted the source version/fingerprint, so rejected state is untouched.
+      this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
     }
     try {
-      if (mode === "provision") {
-        this.migrate();
+      if (mode === "provision" || mode === "migration-target") {
+        // A bound v10+ store must be checked before any DDL or persistent journal-mode change; a
+        // caller cannot relabel it by a provision attempt. A retained v10 source with no metadata
+        // is an explicitly supported pre-binding migration case, so it is bound only after its
+        // accepted schema upgrade. v9 predates the binding table entirely.
+        const retainedVersion = databaseExists ? this.userVersion() : undefined;
+        if (
+          retainedVersion !== undefined &&
+          retainedVersion >= 10 &&
+          retainedVersion <= ORCHESTRATION_DATABASE_SCHEMA_VERSION &&
+          options.projectId !== undefined
+        ) {
+          const binding = this.db
+            .prepare(
+              "SELECT project_id, state_layout_version FROM store_metadata WHERE singleton = 1"
+            )
+            .get();
+          if (
+            binding !== undefined ||
+            (retainedVersion === ORCHESTRATION_DATABASE_SCHEMA_VERSION &&
+              mode !== "migration-target")
+          ) {
+            this.assertProjectBinding(options.projectId, binding);
+          }
+        }
+        this.migrate(databaseExists);
         if (options.projectId !== undefined) this.ensureProjectBinding(options.projectId);
+        if (dbPath !== ":memory:") {
+          this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
+        }
+        if (dbPath !== ":memory:" && options.projectId !== undefined) {
+          this.assertExistingSchema(options.projectId);
+        }
+      } else if (mode === "upgrade" || mode === "upgrade-inspect") {
+        this.assertUpgradeableSchema(options.projectId);
       } else {
         this.assertExistingSchema(options.projectId);
       }
@@ -1117,7 +1315,11 @@ export class Checkpointer implements Disposable {
       validationSnapshot?.close();
       throw error;
     }
-    if (mode === "provision" && !databaseExists && dbPath !== ":memory:") {
+    if (
+      (mode === "provision" || mode === "migration-target") &&
+      !databaseExists &&
+      dbPath !== ":memory:"
+    ) {
       for (const suffix of ["", "-wal", "-shm"]) {
         const databaseFile = `${dbPath}${suffix}`;
         if (existsSync(databaseFile)) {
@@ -1136,10 +1338,35 @@ export class Checkpointer implements Disposable {
     this.kbRuntimeProjectRoot = resolved;
   }
 
-  private migrate(): void {
+  private migrate(databaseExists: boolean): void {
     const existingVersion = this.userVersion();
     if (existingVersion > ORCHESTRATION_DATABASE_SCHEMA_VERSION) {
       throw new Error(`orchestration schema ${existingVersion} is newer than supported`);
+    }
+    if (databaseExists && existingVersion === 0) {
+      throw new Error(
+        "orchestration schema 0 is not a recognized retained-state version; use an absent database for fresh initialization"
+      );
+    }
+    if (databaseExists && existingVersion === ORCHESTRATION_DATABASE_SCHEMA_VERSION) {
+      this.assertMigrationSourceFingerprint(
+        existingVersion,
+        Checkpointer.currentSchemaFingerprint()
+      );
+    }
+    if (databaseExists && existingVersion > 0 && existingVersion < 9) {
+      throw new Error(
+        `orchestration schema ${existingVersion} is not an approved retained-state migration source`
+      );
+    }
+    if (
+      databaseExists &&
+      (existingVersion === 9 || existingVersion === 10 || existingVersion === 11)
+    ) {
+      this.assertMigrationSourceFingerprint(
+        existingVersion,
+        this.expectedLegacySchemaFingerprint(existingVersion)
+      );
     }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS runs (
@@ -1217,6 +1444,60 @@ export class Checkpointer implements Disposable {
     if (this.userVersion() < 10) {
       this.migrateV10();
     }
+    if (this.userVersion() < 11) {
+      this.migrateV11();
+    }
+    if (this.userVersion() < 12) {
+      this.migrateV12();
+    }
+  }
+
+  private assertMigrationSourceFingerprint(version: number, expected: string): void {
+    const actual = this.schemaFingerprint();
+    if (actual !== expected) {
+      throw new Error(
+        `orchestration schema ${version} fingerprint is incompatible with the explicit migration path (${actual} != ${expected})`
+      );
+    }
+  }
+
+  private expectedLegacySchemaFingerprint(version: 9 | 10 | 11): string {
+    using expected = Checkpointer.provision(":memory:");
+    if (version === 11) {
+      expected.db.exec(`
+        DROP TABLE child_workflow_calls;
+        CREATE TABLE child_workflow_calls (
+          call_id TEXT PRIMARY KEY,
+          schema_version INTEGER NOT NULL CHECK(schema_version = 1),
+          parent_run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+          parent_state_id TEXT NOT NULL,
+          parent_visit_sequence INTEGER NOT NULL CHECK(parent_visit_sequence >= 1),
+          parent_visit_offset INTEGER NOT NULL CHECK(
+            parent_visit_offset >= 0 AND parent_visit_offset <= 31
+          ),
+          call_key TEXT NOT NULL,
+          child_run_id TEXT NOT NULL UNIQUE REFERENCES runs(run_id),
+          lifecycle TEXT NOT NULL CHECK(lifecycle IN (
+            'reserved','running','waiting_user','paused','terminal_recorded',
+            'consumed','failed','cancelled'
+          )),
+          record_jcs TEXT NOT NULL,
+          record_sha256 TEXT NOT NULL CHECK(length(record_sha256) = 64),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(parent_run_id, parent_state_id, call_key),
+          CHECK(parent_run_id <> child_run_id)
+        );
+        CREATE INDEX idx_child_workflow_calls_parent_lifecycle
+          ON child_workflow_calls(parent_run_id, lifecycle);
+        PRAGMA user_version=11;
+      `);
+      return expected.schemaFingerprint();
+    }
+    expected.db.exec("DROP TABLE child_workflow_calls;");
+    if (version === 9) expected.db.exec("DROP TABLE store_metadata;");
+    expected.db.exec(`PRAGMA user_version=${version};`);
+    return expected.schemaFingerprint();
   }
 
   private userVersion(): number {
@@ -1590,6 +1871,161 @@ export class Checkpointer implements Disposable {
     `);
   }
 
+  /** v11 — exact, additive durable child-call linkage and reservation custody. */
+  private migrateV11(transactional = true): void {
+    // SQLite transactional DDL makes an interrupted v10→v11 migration leave the exact v10 source
+    // intact; the next explicit provision can then retry or fail closed from its source fingerprint.
+    const operation = () => {
+      this.db.exec(`
+        CREATE TABLE child_workflow_calls (
+          call_id TEXT PRIMARY KEY,
+          schema_version INTEGER NOT NULL CHECK(schema_version = 1),
+          parent_run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+          parent_state_id TEXT NOT NULL,
+          parent_visit_sequence INTEGER NOT NULL CHECK(parent_visit_sequence >= 1),
+          parent_visit_offset INTEGER NOT NULL CHECK(
+            parent_visit_offset >= 0 AND parent_visit_offset <= 31
+          ),
+          call_key TEXT NOT NULL,
+          child_run_id TEXT NOT NULL UNIQUE REFERENCES runs(run_id),
+          lifecycle TEXT NOT NULL CHECK(lifecycle IN (
+            'reserved','running','waiting_user','paused','terminal_recorded',
+            'consumed','failed','cancelled'
+          )),
+          record_jcs TEXT NOT NULL,
+          record_sha256 TEXT NOT NULL CHECK(length(record_sha256) = 64),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(parent_run_id, parent_state_id, call_key),
+          CHECK(parent_run_id <> child_run_id)
+        );
+        CREATE INDEX idx_child_workflow_calls_parent_lifecycle
+          ON child_workflow_calls(parent_run_id, lifecycle);
+        PRAGMA user_version=11;
+      `);
+    };
+    if (transactional) this.transaction(operation);
+    else operation();
+  }
+
+  /** v12 — lease-bound child calls coexist with byte-exact V1 records. */
+  private migrateV12(transactional = true): void {
+    const operation = () => {
+      this.db.exec(`
+        ALTER TABLE child_workflow_calls RENAME TO child_workflow_calls_v11;
+        CREATE TABLE child_workflow_calls (
+          call_id TEXT PRIMARY KEY,
+          schema_version INTEGER NOT NULL CHECK(schema_version IN (1, 2)),
+          parent_run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+          parent_state_id TEXT NOT NULL,
+          parent_visit_sequence INTEGER NOT NULL CHECK(parent_visit_sequence >= 1),
+          parent_visit_offset INTEGER NOT NULL CHECK(
+            parent_visit_offset >= 0 AND parent_visit_offset <= 31
+          ),
+          call_key TEXT NOT NULL,
+          child_run_id TEXT NOT NULL UNIQUE REFERENCES runs(run_id),
+          lifecycle TEXT NOT NULL CHECK(lifecycle IN (
+            'reserved','running','waiting_user','paused','terminal_recorded',
+            'consumed','failed','cancelled'
+          )),
+          record_jcs TEXT NOT NULL,
+          record_sha256 TEXT NOT NULL CHECK(length(record_sha256) = 64),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(parent_run_id, parent_state_id, call_key),
+          CHECK(parent_run_id <> child_run_id)
+        );
+        INSERT INTO child_workflow_calls(
+          call_id, schema_version, parent_run_id, parent_state_id,
+          parent_visit_sequence, parent_visit_offset, call_key, child_run_id,
+          lifecycle, record_jcs, record_sha256, created_at, updated_at
+        )
+        SELECT
+          call_id, schema_version, parent_run_id, parent_state_id,
+          parent_visit_sequence, parent_visit_offset, call_key, child_run_id,
+          lifecycle, record_jcs, record_sha256, created_at, updated_at
+        FROM child_workflow_calls_v11;
+        DROP TABLE child_workflow_calls_v11;
+        CREATE INDEX idx_child_workflow_calls_parent_lifecycle
+          ON child_workflow_calls(parent_run_id, lifecycle);
+        PRAGMA user_version=12;
+      `);
+    };
+    if (transactional) this.transaction(operation);
+    else operation();
+  }
+
+  private assertUpgradeableSchema(projectId: string | undefined): void {
+    const version = this.userVersion();
+    if (version === ORCHESTRATION_DATABASE_SCHEMA_VERSION) {
+      this.assertExistingSchema(projectId);
+      return;
+    }
+    if (version !== 10 && version !== 11) {
+      throw new OrchestrationSchemaCompatibilityError(version);
+    }
+    const journal = this.db.prepare("PRAGMA journal_mode").get();
+    if (journal === undefined) malformedSqliteColumn("orchestration journal mode", "journal_mode");
+    if (sqliteText(journal, "journal_mode", "orchestration journal mode").toLowerCase() !== "wal") {
+      throw new Error("orchestration database is not configured for WAL mode");
+    }
+    this.assertMigrationSourceFingerprint(version, this.expectedLegacySchemaFingerprint(version));
+    this.assertProjectBinding(projectId);
+    const integrity = this.db.prepare("PRAGMA integrity_check").get();
+    if (integrity === undefined)
+      malformedSqliteColumn("orchestration integrity", "integrity_check");
+    if (sqliteText(integrity, "integrity_check", "orchestration integrity") !== "ok") {
+      throw new Error("orchestration database integrity check failed");
+    }
+    if (this.db.prepare("PRAGMA foreign_key_check").all().length !== 0) {
+      throw new Error("orchestration database foreign-key check failed");
+    }
+  }
+
+  private async upgradeExistingTransaction(
+    projectId: string,
+    beforeMutation: (sourceVersion: number) => Promise<void>,
+    afterMigrationStep?: (targetVersion: 11 | 12) => Promise<void>
+  ): Promise<OrchestrationSchemaUpgradeResult> {
+    this.db.exec("BEGIN EXCLUSIVE");
+    try {
+      const sourceVersion = this.userVersion();
+      this.assertUpgradeableSchema(projectId);
+      if (sourceVersion === ORCHESTRATION_DATABASE_SCHEMA_VERSION) {
+        this.db.exec("ROLLBACK");
+        return {
+          sourceVersion,
+          targetVersion: ORCHESTRATION_DATABASE_SCHEMA_VERSION,
+          changed: false,
+        };
+      }
+      await beforeMutation(sourceVersion);
+      if (sourceVersion < 11) {
+        this.migrateV11(false);
+        await afterMigrationStep?.(11);
+      }
+      if (sourceVersion < 12) {
+        this.migrateV12(false);
+        await afterMigrationStep?.(12);
+      }
+      this.assertExistingSchema(projectId);
+      this.db.exec("COMMIT");
+      return {
+        sourceVersion,
+        targetVersion: ORCHESTRATION_DATABASE_SCHEMA_VERSION,
+        changed: true,
+      };
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // Preserve the initiating upgrade error; the caller's post-failure readiness check reports
+        // whether the transaction committed despite that failure.
+      }
+      throw error;
+    }
+  }
+
   private assertExistingSchema(projectId: string | undefined): void {
     const journal = this.db.prepare("PRAGMA journal_mode").get();
     if (journal === undefined) malformedSqliteColumn("orchestration journal mode", "journal_mode");
@@ -1598,9 +2034,7 @@ export class Checkpointer implements Disposable {
     }
     const version = this.userVersion();
     if (version !== ORCHESTRATION_DATABASE_SCHEMA_VERSION) {
-      throw new Error(
-        `orchestration schema ${version} is not current; run explicit penny-state init or migration`
-      );
+      throw new OrchestrationSchemaCompatibilityError(version);
     }
     const tables = new Set(
       this.db
@@ -1644,6 +2078,11 @@ export class Checkpointer implements Disposable {
       throw new Error("orchestration database foreign-key check failed");
     }
     this.assertProjectBinding(projectId);
+    const callIds = this.db
+      .prepare("SELECT call_id FROM child_workflow_calls ORDER BY call_id")
+      .all()
+      .map((row) => sqliteText(row, "call_id", "stored child-workflow call index"));
+    for (const callId of callIds) this.childWorkflowCall(callId);
   }
 
   private schemaFingerprint(): string {
@@ -2001,6 +2440,523 @@ export class Checkpointer implements Disposable {
     } catch {
       return false;
     }
+  }
+
+  childWorkflowCall(callId: string): ChildWorkflowCallRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM child_workflow_calls WHERE call_id = ?").get(callId);
+    if (row === undefined) return undefined;
+    let record: ChildWorkflowCallRecord;
+    try {
+      record = decodeStoredChildWorkflowCallRow(childWorkflowCallRow(row));
+    } catch (error) {
+      throw new CheckpointIdentityError(
+        `stored child-workflow call '${callId}' is malformed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+    this.assertChildWorkflowCallLinkage(record);
+    return record;
+  }
+
+  childWorkflowCallForParent(
+    parentRunId: string,
+    parentStateId: string,
+    callKey: string
+  ): ChildWorkflowCallRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT call_id FROM child_workflow_calls
+         WHERE parent_run_id = ? AND parent_state_id = ? AND call_key = ?`
+      )
+      .get(parentRunId, parentStateId, callKey);
+    if (row === undefined) return undefined;
+    return requiredCheckpointValue(
+      this.childWorkflowCall(sqliteText(row, "call_id", "stored child-workflow call lookup")),
+      "indexed child-workflow call"
+    );
+  }
+
+  /**
+   * One control-store transaction suspends the exact parent directive, creates the ordinary child
+   * run/initial event, and inserts one immutable reservation. It re-verifies artifact custody
+   * before the transaction so public storage callers cannot bypass artifact-first ordering. This
+   * method performs no dispatch or external work.
+   */
+  reserveChildWorkflowCall(input: ReserveChildWorkflowCallInput): ReserveChildWorkflowCallOutcome {
+    let encoded: ReturnType<typeof encodeChildWorkflowCallRecord>;
+    try {
+      encoded = encodeChildWorkflowCallRecord(input.record);
+    } catch (error) {
+      throw new ChildWorkflowCallConflictError(
+        `child-workflow reservation is invalid: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+    const requested = verifyChildWorkflowArtifactCustody(
+      input.custody,
+      this.projectIdForChildWorkflowCall(),
+      encoded.record
+    );
+    if (
+      requested.lifecycle !== "reserved" ||
+      requested.created_at !== requested.updated_at ||
+      requested.terminal_action !== null ||
+      requested.terminal_sha256 !== null ||
+      requested.output_artifact !== null ||
+      requested.usage !== null
+    ) {
+      throw new ChildWorkflowCallConflictError(
+        "a new child-workflow reservation must be an initial reserved record"
+      );
+    }
+    this.assertInitialChildWorkflowContext(input.childContext, requested);
+    if (requested.schema_version === 2 && input.admission === undefined) {
+      throw new ChildWorkflowCallConflictError(
+        "lease-bound child-workflow reservation requires atomic capacity admission"
+      );
+    }
+    if (
+      input.admission !== undefined &&
+      Object.values(input.admission).some(
+        (limit) => !Number.isSafeInteger(limit) || limit < 1 || limit > 64
+      )
+    ) {
+      throw new ChildWorkflowCallConflictError("child-workflow capacity admission is invalid");
+    }
+
+    const outcome = this.transaction((): ReserveChildWorkflowCallOutcome => {
+      const existing = this.childWorkflowCallForParent(
+        requested.parent_identity.run_id,
+        requested.parent_state_id,
+        requested.call_key
+      );
+      if (existing !== undefined) {
+        if (childWorkflowCallImmutableJcs(existing) !== childWorkflowCallImmutableJcs(requested)) {
+          throw new ChildWorkflowCallConflictError(
+            "child-workflow logical call was already reserved with different immutable operands"
+          );
+        }
+        const parent = this.contextForChildWorkflowCall(existing.parent_identity.run_id);
+        if (
+          existing.lifecycle !== "consumed" &&
+          canonicalJson(parent.pendingDirective) !== canonicalJson(existing.directive)
+        ) {
+          throw new CheckpointIdentityError(
+            "adopted child-workflow call is not the parent's exact pending directive"
+          );
+        }
+        return { kind: "adopted", record: existing };
+      }
+      if (this.childWorkflowCall(requested.call_id) !== undefined) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow call ID is already bound to another logical call"
+        );
+      }
+      if (input.admission !== undefined) {
+        const parentCounts = this.db
+          .prepare(
+            `SELECT
+               COUNT(*) AS calls,
+               COALESCE(SUM(CASE WHEN lifecycle IN ('reserved','running','waiting_user','paused') THEN 1 ELSE 0 END), 0) AS active
+             FROM child_workflow_calls WHERE parent_run_id = ?`
+          )
+          .get(requested.parent_identity.run_id);
+        if (parentCounts === undefined) malformedSqliteColumn("child capacity", "calls");
+        const parentCalls = sqliteInteger(parentCounts, "calls", "child parent call capacity");
+        const parentActive = sqliteInteger(parentCounts, "active", "child parent active capacity");
+        const projectActive = this.activeChildWorkflowCallCount();
+        if (parentCalls >= input.admission.max_calls) {
+          throw new ChildWorkflowCallConflictError("child workflow parent exhausted call capacity");
+        }
+        if (parentActive >= input.admission.max_active_children) {
+          throw new ChildWorkflowCallConflictError(
+            "child workflow parent exhausted active capacity"
+          );
+        }
+        if (projectActive >= input.admission.project_concurrency_limit) {
+          throw new ChildWorkflowCallConflictError("child workflow project capacity is exhausted");
+        }
+      }
+      if (this.selectRun(requested.child_identity.run_id) !== undefined) {
+        throw new CheckpointIdentityError(
+          "deterministic child run exists without its matching child-workflow call"
+        );
+      }
+
+      const parent = this.contextForChildWorkflowCall(requested.parent_identity.run_id);
+      this.assertIdentity(requested.parent_identity, parent.identity);
+      if (parent.status !== "running" || parent.stateId !== requested.parent_state_id) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow parent is not running at the reserved state"
+        );
+      }
+      if (
+        parent.pendingDirective !== null &&
+        canonicalJson(parent.pendingDirective) !== canonicalJson(requested.directive)
+      ) {
+        throw new CheckpointIdentityError(
+          "parent already has pending work without the exact child-workflow directive"
+        );
+      }
+      if (
+        input.childContext.projectRoot !== parent.projectRoot ||
+        input.childContext.trustProfile !== parent.trustProfile
+      ) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow initial context does not share the parent project/trust boundary"
+        );
+      }
+      this.assertRegistrationDigest(
+        parent,
+        requested.parent_registration_sha256,
+        "parent child-workflow registration"
+      );
+      if (
+        !this.stateVisits(parent.identity.run_id).some(
+          (visit) =>
+            visit.event_sequence === requested.parent_visit_sequence &&
+            visit.offset === requested.parent_visit_offset &&
+            visit.state_id === requested.parent_state_id
+        )
+      ) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow reservation does not name an exact durable parent visit"
+        );
+      }
+      if (this.projectIdForChildWorkflowCall() !== requested.policy_binding.project_id) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow policy project does not match the control-store project"
+        );
+      }
+
+      parent.pendingDirective = structuredClone(requested.directive);
+      this.updateRun(parent);
+      const timestamp = requested.created_at;
+      this.db
+        .prepare(
+          `INSERT INTO runs(
+            run_id, session_id, playbook, engine_owner, schema_version,
+            status, state_id, context_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.childContext.identity.run_id,
+          input.childContext.identity.session_id,
+          input.childContext.identity.playbook,
+          input.childContext.identity.engine_owner,
+          input.childContext.identity.schema_version,
+          input.childContext.status,
+          input.childContext.stateId,
+          this.durableContextJson(input.childContext),
+          timestamp,
+          timestamp
+        );
+      this.db
+        .prepare(
+          `INSERT INTO child_workflow_calls(
+            call_id, schema_version, parent_run_id, parent_state_id,
+            parent_visit_sequence, parent_visit_offset, call_key, child_run_id,
+            lifecycle, record_jcs, record_sha256, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          requested.call_id,
+          requested.schema_version,
+          requested.parent_identity.run_id,
+          requested.parent_state_id,
+          requested.parent_visit_sequence,
+          requested.parent_visit_offset,
+          requested.call_key,
+          requested.child_identity.run_id,
+          requested.lifecycle,
+          encoded.record_jcs,
+          encoded.record_sha256,
+          requested.created_at,
+          requested.updated_at
+        );
+      this.insertEvent(
+        parent.identity.run_id,
+        "child_workflow_reserved",
+        this.checkpointPayload(parent, {
+          call_id: requested.call_id,
+          child_run_id: requested.child_identity.run_id,
+          directive_sha256: requested.directive_sha256,
+          request_ref_sha256: requested.request_ref_sha256,
+          input_refs_sha256: requested.input_refs_sha256,
+          expected_output_sha256: requested.expected_output_sha256,
+          policy_sha256: requested.policy_sha256,
+        }),
+        timestamp
+      );
+      this.insertEvent(
+        input.childContext.identity.run_id,
+        "child_workflow_run_created",
+        this.checkpointPayload(input.childContext, {
+          call_id: requested.call_id,
+          parent_run_id: requested.parent_identity.run_id,
+          parent_state_id: requested.parent_state_id,
+        }),
+        timestamp
+      );
+
+      const stored = requiredCheckpointValue(
+        this.childWorkflowCall(requested.call_id),
+        "created child-workflow call"
+      );
+      const storedParent = this.contextForChildWorkflowCall(requested.parent_identity.run_id);
+      const storedChild = this.contextForChildWorkflowCall(requested.child_identity.run_id);
+      if (
+        canonicalJson(stored) !== encoded.record_jcs ||
+        canonicalJson(storedParent.pendingDirective) !== canonicalJson(requested.directive) ||
+        canonicalJson(storedChild.snapshot()) !== canonicalJson(input.childContext.snapshot())
+      ) {
+        throw new CheckpointIdentityError(
+          "child-workflow reservation projections did not round-trip exactly"
+        );
+      }
+      return { kind: "created", record: stored };
+    });
+    if (outcome.kind === "created") input.childContext.markCheckpointEvidencePersisted();
+    return outcome;
+  }
+
+  /** Exact lifecycle compare-and-set for non-consumption changes; consumption has its own atomic owner method. */
+  transitionChildWorkflowCall(input: TransitionChildWorkflowCallInput): ChildWorkflowCallRecord {
+    let encoded: ReturnType<typeof encodeChildWorkflowCallRecord>;
+    try {
+      encoded = encodeChildWorkflowCallRecord(input.next);
+    } catch (error) {
+      throw new ChildWorkflowCallConflictError(
+        `child-workflow lifecycle record is invalid: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+    const next = verifyChildWorkflowArtifactCustody(
+      input.custody,
+      this.projectIdForChildWorkflowCall(),
+      encoded.record
+    );
+    encoded = encodeChildWorkflowCallRecord(next);
+    if (encoded.record.call_id !== input.call_id) {
+      throw new ChildWorkflowCallConflictError("child-workflow lifecycle call ID changed");
+    }
+    if (encoded.record.lifecycle === "consumed") {
+      throw new ChildWorkflowCallConflictError(
+        "child-workflow consumption requires Checkpointer.consumeChildWorkflowCall"
+      );
+    }
+    return this.transaction(() => {
+      const current = requiredCheckpointValue(
+        this.childWorkflowCall(input.call_id),
+        "child-workflow lifecycle call"
+      );
+      if (current.lifecycle !== input.from) {
+        throw new ChildWorkflowCallConflictError(
+          `child-workflow lifecycle compare-and-set expected '${input.from}', found '${current.lifecycle}'`
+        );
+      }
+      if (
+        childWorkflowCallImmutableJcs(current) !== childWorkflowCallImmutableJcs(encoded.record)
+      ) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow lifecycle transition changed immutable operands"
+        );
+      }
+      if (
+        encoded.record.created_at !== current.created_at ||
+        encoded.record.updated_at < current.updated_at
+      ) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow lifecycle transition changed or regressed durable timestamps"
+        );
+      }
+      if (encoded.record.lifecycle === current.lifecycle) {
+        if (canonicalJson(encoded.record) === canonicalJson(current)) return current;
+        throw new ChildWorkflowCallConflictError(
+          "same child-workflow lifecycle cannot change the stored record"
+        );
+      }
+      if (!isLegalChildWorkflowCallTransition(current.lifecycle, encoded.record.lifecycle)) {
+        throw new ChildWorkflowCallConflictError(
+          `illegal child-workflow lifecycle transition '${current.lifecycle}' -> '${encoded.record.lifecycle}'`
+        );
+      }
+      const currentEncoded = encodeChildWorkflowCallRecord(current);
+      const updated = this.db
+        .prepare(
+          `UPDATE child_workflow_calls
+           SET lifecycle = ?, record_jcs = ?, record_sha256 = ?, updated_at = ?
+           WHERE call_id = ? AND lifecycle = ? AND record_sha256 = ?`
+        )
+        .run(
+          encoded.record.lifecycle,
+          encoded.record_jcs,
+          encoded.record_sha256,
+          encoded.record.updated_at,
+          input.call_id,
+          input.from,
+          currentEncoded.record_sha256
+        );
+      if (numberValue(updated.changes) !== 1) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow lifecycle compare-and-set lost its durable owner"
+        );
+      }
+      const stored = requiredCheckpointValue(
+        this.childWorkflowCall(input.call_id),
+        "transitioned child-workflow call"
+      );
+      if (canonicalJson(stored) !== encoded.record_jcs) {
+        throw new CheckpointIdentityError(
+          "child-workflow lifecycle transition did not round-trip exactly"
+        );
+      }
+      return stored;
+    });
+  }
+
+  /** Return all durable child calls for one parent in deterministic creation order. */
+  childWorkflowCallsForParent(parentRunId: string): readonly ChildWorkflowCallRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT call_id FROM child_workflow_calls
+         WHERE parent_run_id = ? ORDER BY created_at, call_id`
+      )
+      .all(parentRunId);
+    return rows.map((row) =>
+      requiredCheckpointValue(
+        this.childWorkflowCall(sqliteText(row, "call_id", "child-workflow parent call index")),
+        "indexed child-workflow parent call"
+      )
+    );
+  }
+
+  /**
+   * Project-wide child capacity is based only on calls that can still dispatch or wait for a
+   * response. Captured terminals no longer consume active-worker capacity, but stay retained until
+   * the separate consume transaction settles their parent.
+   */
+  activeChildWorkflowCallCount(): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM child_workflow_calls
+         WHERE lifecycle IN ('reserved', 'running', 'waiting_user', 'paused')`
+      )
+      .get();
+    if (row === undefined) malformedSqliteColumn("active child-workflow call count", "count");
+    return sqliteInteger(row, "count", "active child-workflow call count");
+  }
+
+  /**
+   * Atomically commit an already captured child terminal into the suspended parent. This is not a
+   * general lifecycle transition: it proves the persisted parent still names the exact original
+   * directive, preserves the terminal operands, writes the new parent snapshot, and changes the
+   * call to `consumed` under one compare-and-set transaction.
+   */
+  consumeChildWorkflowCall(input: ConsumeChildWorkflowCallInput): ChildWorkflowCallRecord {
+    let encoded: ReturnType<typeof encodeChildWorkflowCallRecord>;
+    try {
+      encoded = encodeChildWorkflowCallRecord(input.next);
+    } catch (error) {
+      throw new ChildWorkflowCallConflictError(
+        `child-workflow consumption is invalid: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+    const next = verifyChildWorkflowArtifactCustody(
+      input.custody,
+      this.projectIdForChildWorkflowCall(),
+      encoded.record
+    );
+    encoded = encodeChildWorkflowCallRecord(next);
+    if (next.call_id !== input.call_id || next.lifecycle !== "consumed") {
+      throw new ChildWorkflowCallConflictError(
+        "child-workflow consumption must retain its call ID and use lifecycle 'consumed'"
+      );
+    }
+    let persistedPayload: Record<string, JsonValue> = input.payload;
+    const consumed = this.transaction(() => {
+      const current = requiredCheckpointValue(
+        this.childWorkflowCall(input.call_id),
+        "child-workflow consumption call"
+      );
+      if (current.lifecycle === "consumed") {
+        if (canonicalJson(current) === encoded.record_jcs) return current;
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow call was already consumed with different terminal operands"
+        );
+      }
+      if (current.lifecycle !== "terminal_recorded") {
+        throw new ChildWorkflowCallConflictError(
+          `child-workflow call '${input.call_id}' is not ready for consumption`
+        );
+      }
+      this.assertChildWorkflowCallLinkage(current);
+      if (
+        childWorkflowCallImmutableJcs(current) !== childWorkflowCallImmutableJcs(next) ||
+        current.terminal_action !== next.terminal_action ||
+        current.terminal_sha256 !== next.terminal_sha256 ||
+        canonicalJson(current.output_artifact) !== canonicalJson(next.output_artifact) ||
+        canonicalJson(current.usage) !== canonicalJson(next.usage) ||
+        next.created_at !== current.created_at ||
+        next.updated_at < current.updated_at
+      ) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow consumption changed captured terminal operands"
+        );
+      }
+      this.assertIdentity(current.parent_identity, input.parentContext.identity);
+      this.assertRegistrationDigest(
+        input.parentContext,
+        current.parent_registration_sha256,
+        "parent child-workflow consumption registration"
+      );
+      if (
+        input.parentContext.terminalDirective === null &&
+        input.parentContext.status !== "running"
+      ) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow parent continuation is not running or terminal"
+        );
+      }
+      this.validatePositiveTerminalWrite(input.parentContext);
+      persistedPayload = this.checkpointPayload(input.parentContext, input.payload);
+      this.updateRun(input.parentContext);
+      this.persistPendingGate(input.parentContext);
+      const updated = this.db
+        .prepare(
+          `UPDATE child_workflow_calls
+           SET lifecycle = ?, record_jcs = ?, record_sha256 = ?, updated_at = ?
+           WHERE call_id = ? AND lifecycle = 'terminal_recorded' AND record_sha256 = ?`
+        )
+        .run(
+          next.lifecycle,
+          encoded.record_jcs,
+          encoded.record_sha256,
+          next.updated_at,
+          input.call_id,
+          encodeChildWorkflowCallRecord(current).record_sha256
+        );
+      if (numberValue(updated.changes) !== 1) {
+        throw new ChildWorkflowCallConflictError(
+          "child-workflow consumption compare-and-set lost its durable owner"
+        );
+      }
+      this.insertEvent(
+        input.parentContext.identity.run_id,
+        input.eventType,
+        persistedPayload,
+        now()
+      );
+      return requiredCheckpointValue(this.childWorkflowCall(input.call_id), "consumed child call");
+    });
+    input.parentContext.markCheckpointEvidencePersisted();
+    this.observe(input.parentContext, input.eventType, persistedPayload);
+    return consumed;
   }
 
   createRun(
@@ -4830,11 +5786,20 @@ export class Checkpointer implements Disposable {
   }
 
   events(runId: string): CheckpointEvent[] {
+    return this.eventsAfter(runId, 0);
+  }
+
+  /** Indexed suffix read for incremental deterministic projections such as liveness. */
+  eventsAfter(runId: string, sequence: number): CheckpointEvent[] {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) {
+      throw new CheckpointIdentityError("event sequence must be a non-negative safe integer");
+    }
     const rows = this.db
       .prepare(
-        "SELECT sequence, event_type, payload_json, created_at FROM events WHERE run_id = ? ORDER BY sequence"
+        `SELECT sequence, event_type, payload_json, created_at FROM events
+         WHERE run_id = ? AND sequence > ? ORDER BY sequence`
       )
-      .all(runId);
+      .all(runId, sequence);
     return rows.map((row) => ({
       sequence: sqliteInteger(row, "sequence", "stored checkpoint event"),
       eventType: sqliteText(row, "event_type", "stored checkpoint event"),
@@ -4917,6 +5882,14 @@ export class Checkpointer implements Disposable {
              AND NOT EXISTS (
                SELECT 1 FROM kb_run_artifacts a
                WHERE a.run_id = r.run_id
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM child_workflow_calls c
+               WHERE c.child_run_id = r.run_id
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM child_workflow_calls c
+               WHERE c.parent_run_id = r.run_id AND c.lifecycle <> 'consumed'
              )`
         )
         .all(...terminalStatuses, ...keepIds)
@@ -4931,6 +5904,123 @@ export class Checkpointer implements Disposable {
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
+    }
+  }
+
+  private contextForChildWorkflowCall(runId: string): RunContext {
+    const row = this.selectRun(runId);
+    if (row === undefined) {
+      throw new CheckpointIdentityError(`child-workflow linked run '${runId}' is absent`);
+    }
+    const context = this.contextFromRunRow(row);
+    this.assertIdentityRow(context.identity, row);
+    return context;
+  }
+
+  private projectIdForChildWorkflowCall(): string {
+    const row = this.db.prepare("SELECT project_id FROM store_metadata WHERE singleton = 1").get();
+    if (row === undefined) {
+      throw new CheckpointIdentityError("child-workflow control store lacks a project binding");
+    }
+    return sqliteText(row, "project_id", "child-workflow control-store project binding");
+  }
+
+  private assertRegistrationDigest(context: RunContext, expected: string, label: string): void {
+    const binding = context.registrationContractBinding;
+    if (
+      binding === undefined ||
+      binding.registration_name !== context.identity.playbook ||
+      binding.registration_sha256 !== expected
+    ) {
+      throw new CheckpointIdentityError(`${label} is absent or does not match the durable run`);
+    }
+  }
+
+  private assertChildWorkflowCallLinkage(record: ChildWorkflowCallRecord): void {
+    const parent = this.contextForChildWorkflowCall(record.parent_identity.run_id);
+    const child = this.contextForChildWorkflowCall(record.child_identity.run_id);
+    this.assertIdentity(record.parent_identity, parent.identity);
+    this.assertIdentity(record.child_identity, child.identity);
+    this.assertRegistrationDigest(
+      parent,
+      record.parent_registration_sha256,
+      "stored parent child-workflow registration"
+    );
+    this.assertRegistrationDigest(
+      child,
+      record.child_registration_sha256,
+      "stored child child-workflow registration"
+    );
+    if (
+      child.projectRoot !== parent.projectRoot ||
+      child.trustProfile !== parent.trustProfile ||
+      (record.schema_version === 1 && child.maxSteps !== record.budget.max_steps)
+    ) {
+      throw new CheckpointIdentityError(
+        "stored child-workflow run diverged from its parent trust boundary or legacy step allocation"
+      );
+    }
+    if (this.projectIdForChildWorkflowCall() !== record.policy_binding.project_id) {
+      throw new CheckpointIdentityError(
+        "stored child-workflow policy project does not match the control-store project"
+      );
+    }
+    const parentCancellationIsDurable =
+      parent.status === "cancelled" && parent.terminalDirective?.action === "cancelled";
+    if (
+      (record.lifecycle === "reserved" ||
+        record.lifecycle === "running" ||
+        record.lifecycle === "waiting_user" ||
+        record.lifecycle === "paused") &&
+      canonicalJson(parent.pendingDirective) !== canonicalJson(record.directive) &&
+      !parentCancellationIsDurable
+    ) {
+      throw new CheckpointIdentityError(
+        "stored child-workflow call is not the parent's exact pending directive"
+      );
+    }
+    if (
+      !this.stateVisits(record.parent_identity.run_id).some(
+        (visit) =>
+          visit.event_sequence === record.parent_visit_sequence &&
+          visit.offset === record.parent_visit_offset &&
+          visit.state_id === record.parent_state_id
+      )
+    ) {
+      throw new CheckpointIdentityError(
+        "stored child-workflow call does not reference an exact durable parent visit"
+      );
+    }
+  }
+
+  private assertInitialChildWorkflowContext(
+    context: RunContext,
+    record: ChildWorkflowCallRecord
+  ): void {
+    this.assertNewRunCompletionProtocol(context);
+    this.assertIdentity(record.child_identity, context.identity);
+    this.assertRegistrationDigest(
+      context,
+      record.child_registration_sha256,
+      "initial child-workflow registration"
+    );
+    const visits = context.pendingStateVisits();
+    if (
+      context.status !== "running" ||
+      context.stateId !== "intake" ||
+      context.previousState !== null ||
+      context.stepCount !== 0 ||
+      (record.schema_version === 1 && context.maxSteps !== record.budget.max_steps) ||
+      context.met ||
+      context.pendingDirective !== null ||
+      context.pendingBranches.length !== 0 ||
+      context.terminalDirective !== null ||
+      canonicalJson(visits) !==
+        canonicalJson([{ schema_version: 1, state_id: "intake", source: "create" }])
+    ) {
+      throw new ChildWorkflowCallConflictError(
+        "child-workflow context is not the exact unstarted ordinary run"
+      );
     }
   }
 

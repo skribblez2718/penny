@@ -330,7 +330,7 @@ function fixture(label: string): CallbackFixture {
   checkpointer.saveRun(context, "content_review_fixture_waiting", { run_id: runId });
   const engine = new OrchestrationEngine(checkpointer, {
     receiptAuthority: TEST_RECEIPT_AUTHORITY,
-    projectRoot,
+    projectRoot: projectRoot,
     maxSteps: 40,
     playbookName: "knowledge-base",
   });

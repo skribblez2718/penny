@@ -588,7 +588,9 @@ describe("P4 production skill entrypoint", () => {
       },
     });
     expect(providerBoundary.captures).toHaveLength(1);
-    expect(providerBoundary.captures[0]?.prompt).toContain("HOST-ENFORCED LIVENESS BUDGET:");
+    expect(providerBoundary.captures[0]?.prompt).toContain(
+      "HOST-ENFORCED RENEWABLE INACTIVITY LEASE:"
+    );
     expectOnlyLocalObservabilityDiagnostics(network.mock.calls);
 
     const checkpointer = Checkpointer.openExisting(state.paths.orchestration.database, undefined, {

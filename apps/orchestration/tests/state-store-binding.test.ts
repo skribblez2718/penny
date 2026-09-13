@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe("project-bound orchestration stores", () => {
-  it("binds orchestration.db to one opaque project ID at schema v10", () => {
+  it("binds orchestration.db to one opaque project ID at schema v12", () => {
     const root = mkdtempSync(path.join(tmpdir(), "penny-orchestration-binding-test-"));
     roots.push(root);
     const databasePath = path.join(root, "orchestration.db");
@@ -41,7 +41,7 @@ describe("project-bound orchestration stores", () => {
       "orchestration project binding row"
     );
     database.close();
-    expect(requireNumber(version["user_version"], "schema user_version")).toBe(10);
+    expect(requireNumber(version["user_version"], "schema user_version")).toBe(12);
     expect(requireString(binding["project_id"], "store project_id")).toBe(firstProject);
   });
 });

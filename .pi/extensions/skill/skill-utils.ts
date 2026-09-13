@@ -39,6 +39,17 @@ export interface SkillResult {
   errors: string[];
   /** Stable pre-session ingress refusal when registration/config/package admission fails. */
   refusal_code?: SkillIngressRefusalCode;
+  /** Structured retained-state preflight failure, before any worker dispatch. */
+  state_failure?: {
+    readonly code: string;
+    readonly details: {
+      readonly component: string;
+      readonly actualSchemaVersion?: number;
+      readonly requiredSchemaVersion?: number;
+      readonly upgradeSupported?: boolean;
+      readonly recoveryAction?: string;
+    };
+  };
   /** Complete TypeScript engine terminal result, preserved without reconstruction. */
   result?: Record<string, unknown>;
   /** Exact terminal output selected by the skill's execution owner. */

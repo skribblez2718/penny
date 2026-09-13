@@ -7,6 +7,11 @@
     "rootDir": ".",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "smoke/**/*.ts", "vitest.kb-model-smoke.config.ts"],
+  "include": [
+    "src/**/*.ts",
+    "smoke/**/*.ts",
+    "vitest.kb-model-smoke.config.ts",
+    "vitest.child-workflow-model-smoke.config.ts"
+  ],
   "exclude": ["dist", "node_modules"]
 }

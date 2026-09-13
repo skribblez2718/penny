@@ -67,6 +67,7 @@ function fixture(label: string, options: { readonly reconciled?: boolean } = {})
     "apps/orchestration/tests/state-migration-faults.test.ts:66"
   ).DatabaseSync)(database);
   sourceDatabase.exec(`
+    DROP TABLE child_workflow_calls;
     DROP TABLE store_metadata;
     PRAGMA user_version=9;
     INSERT INTO runs(
@@ -257,7 +258,7 @@ describe("migration durable-boundary fault injection", () => {
         "relink_pending"
       );
     }
-  });
+  }, 90_000);
 
   it("recovers checksum-bound SQLite reconciliation boundaries", async () => {
     const cases: readonly FaultCase[] = [

@@ -26,30 +26,191 @@ metadata:
 
 This is a model-visible, registered universal package. Pi native discovery and Penny's model-facing catalog may describe it, and explicit `skill` invocation is routed through the sole executable playbook registry with its bound contract. Model visibility does not bypass host-owned authorization or consequence boundaries.
 
+<!-- PENNY:GENERATED-INVOCATION:START -->
+
 ## Invocation
 
+This block is generated from the active runtime registration, its real caller constraints schema, and contract I/O. Do not edit it by hand.
+
+<!-- prettier-ignore -->
 ```ts
 skill({
   skill_name: "assess",
   goal: "Assess whether the supplied note satisfies the communication criteria.",
-  constraints: {
-    schema_version: 1,
-    target: "Hello, team. The maintenance window is Tuesday at 09:00 UTC.",
-    criteria: [
-      { statement: "States the maintenance time clearly.", importance: "required" },
-      { statement: "Uses a courteous tone.", importance: "advisory" },
-    ],
-    supplied_evidence: [
-      { statement: "The note names Tuesday at 09:00 UTC.", source_label: "caller observation" },
-    ],
-    hard_constraints: [{ statement: "Do not externally verify the schedule." }],
-    non_goals: [{ statement: "Do not rewrite or send the note." }],
-    known_uncertainties: [{ statement: "The intended audience was not specified." }],
-  },
+  constraints: {"criteria":[{"importance":"required","statement":"States the maintenance time clearly."}],"hard_constraints":[{"statement":"Do not externally verify the schedule."}],"known_uncertainties":[],"non_goals":[{"statement":"Do not rewrite or send the note."}],"schema_version":1,"supplied_evidence":[],"target":"Hello, team. The maintenance window is Tuesday at 09:00 UTC."},
 });
 ```
 
-`target` is either one nonempty inline string or one to 64 `{ statement }` items. Assess accepts no caller artifacts, including an empty artifact envelope.
+The request port is `penny.assessment-request.v1` v1. Accepts no caller artifacts; assess only caller-supplied evidence.
+
+### Contract I/O
+
+- `assessment_request` — input/inline_request; schema `penny.assessment-request.v1` v1; 1..1 item(s).
+- `assessment` — output/artifact; schema `penny.assessment.v2` v2; 1..1 item(s); artifact kind semantic-core.
+
+### Runtime constraints schema
+
+<!-- prettier-ignore -->
+```json
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "target",
+    "criteria",
+    "supplied_evidence",
+    "hard_constraints",
+    "non_goals",
+    "known_uncertainties"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "target": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "statement"
+            ],
+            "properties": {
+              "statement": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 64
+        }
+      ]
+    },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement",
+          "importance"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "importance": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "required"
+              },
+              {
+                "type": "string",
+                "const": "advisory"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 64
+    },
+    "supplied_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "source_label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    },
+    "hard_constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    },
+    "non_goals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    },
+    "known_uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+<!-- PENNY:GENERATED-INVOCATION:END -->
 
 ## Orchestrated Flow
 
@@ -69,7 +230,7 @@ Vera `analysis_gap` or `evidence_gap` returns through Annie and then Carren. `as
 
 The host canonicalizes and persists `AssessmentRequestV1`. Ordinary workflow phases omit `allowed_tools`, so each phase uses its assigned catalog agent's exact YAML tool list. `artifact_read` remains mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Memory, temporary files, repository search, historical sessions, and name-only pointers are never fallback handoff channels. Other YAML tools may be used only when materially relevant, permitted by the caller and task, and within the phase consequence boundary; they cannot enlarge the closed supplied-evidence boundary.
 
-Normal-phase liveness permits at most eight external calls per worker and 64 per run; routing-only repair remains at zero. These are resource ceilings, not authority to browse, externally verify supplied evidence, execute, or mutate. The owner captures and re-reads exact bytes before routing, and memory availability cannot affect correctness.
+Normal permitted work has no model-turn, phase-admission, tool-call, or external-call quota. A calibrated renewable inactivity lease stops stalled workers, an independent host-operation deadline remains an upper bound, and routing-only repair remains separately count-bounded and grants no authority to browse, externally verify supplied evidence, execute, or mutate. The owner captures and re-reads exact bytes before routing, and memory availability cannot affect correctness.
 
 ## Output and Terminal Truth
 

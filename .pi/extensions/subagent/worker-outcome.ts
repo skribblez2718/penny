@@ -187,6 +187,24 @@ export function classifyWorkerDelivery(result: SingleResult): WorkerDeliveryClas
   return { status: "not_attempted" };
 }
 
+export function workerDiagnosticLines(result: SingleResult): readonly string[] {
+  const lines: string[] = [];
+  const execution = result.errorMessage || result.stderr || undefined;
+  if (execution) lines.push(`Execution: ${execution}`);
+  if (result.outputArtifactError && result.outputArtifactError !== execution) {
+    lines.push(`Artifact delivery: ${result.outputArtifactError}`);
+  }
+  if (result.updateDeliveryError) {
+    lines.push(`Optional streaming update: ${result.updateDeliveryError}`);
+  }
+  return lines;
+}
+
+export function formatWorkerDiagnostics(result: SingleResult): string | undefined {
+  const lines = workerDiagnosticLines(result);
+  return lines.length === 0 ? undefined : lines.join("\n");
+}
+
 export function classifyWorkerStreamingDelivery(
   result: SingleResult
 ): WorkerStreamingDeliveryClassification {

@@ -13,6 +13,12 @@ Parallel branches may receive independent explicit IDs; downstream fan-in can co
 outputs from several branches/runs. Chain steps receive the prior ID automatically and may
 add extra IDs.
 
+For a stored child call, `ChildWorkflowStateOwner` mints custody from one concrete
+`ArtifactStore`. The checkpointer proves that store and its own control database have
+the same project binding, then re-reads the canonical request and every input by exact manifest ref,
+length, digest, store ref, and object bytes before atomically recording linkage. The call row stores
+compact refs/digests and control metadata, never payload bodies.
+
 ## Memory boundary
 
 Durable memory is advisory recall and curated cross-session knowledge. It is never stage
@@ -24,6 +30,11 @@ recovery. Memory outage cannot change workflow correctness.
 Checkpoints retain compact refs. Compaction carries prose plus code-proven current-session
 subagent/skill refs, exact reused inputs, or one handoff-index ID. No semantic memory or
 global artifact scan participates.
+
+Child-call storage recovery follows the same boundary. A committed exact call may be adopted after
+restart; artifact-only bytes, memory, logs, or prose never synthesize a call row or child run. The
+current storage slice does not dispatch children, accept results, or establish child artifact,
+receipt, or session-cohort retention.
 
 ## Invariants
 

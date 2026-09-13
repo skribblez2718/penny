@@ -11,6 +11,8 @@ describe("native skill prompt alignment", () => {
     const aligned = alignNativeSkillInstruction(prompt);
 
     expect(aligned).toContain(PENNY_SKILL_INSTRUCTION);
+    expect(PENNY_SKILL_INSTRUCTION).toContain("unfamiliar listed skill");
+    expect(PENNY_SKILL_INSTRUCTION).toContain("SKILL.md Invocation contract");
     expect(aligned).not.toContain(PI_NATIVE_SKILL_INSTRUCTION);
   });
 

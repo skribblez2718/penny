@@ -35,15 +35,23 @@
  * An accidental or unauthorized registration fails closed.
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+
 import type { TSchema } from "typebox";
 
 import {
+  ChildWorkflowBudgetAllocationV1Schema,
+  ChildWorkflowOutputContractV1Schema,
+  JsonValueSchema,
   SkillContractSchema,
   validateContract,
   type ArtifactRef,
+  type ChildWorkflowBudgetAllocationV1,
+  type ChildWorkflowOutputContractV1,
   type InputArtifacts,
   type JsonValue,
-  type LivenessPolicyV1,
+  type LivenessPolicy,
   type SkillContract,
   type StartRequest,
 } from "../contracts.js";
@@ -56,12 +64,45 @@ import type {
 import type { ResearchContextOwnerV2 } from "../research-context.js";
 import {
   canonicalizeResearchRequest,
+  ResearchCallerConstraintsV1Schema,
   researchRuntimeConstraints,
   validateResearchRequest,
 } from "../skill-contracts/research.js";
-import { researchBootstrapLivenessPolicy, researchLivenessPolicy } from "../liveness.js";
+import { childExecutionProgressLeaseBinding } from "../liveness-profiles.js";
+import {
+  legacyResearchLivenessPolicy,
+  researchBootstrapLivenessPolicy,
+  researchLivenessPolicy,
+} from "../liveness.js";
 import { validateRegisteredBrowserNetworkAllowlist } from "../browser-policy-carrier.js";
+import {
+  CATALOG_AGENT_NAME_PATTERN,
+  parseSsotTools,
+  type GenericChildCatalogAgentYamlMaximumCarrierV1,
+} from "../model-client.js";
+import {
+  validateChildProviderDescriptor,
+  type ChildProviderDescriptorV1,
+} from "../child-workflows/registration.js";
+import {
+  ChildWorkflowBudgetCeilingV1Schema,
+  validateChildWorkflowPolicy,
+  validateChildWorkflowRequest,
+  type ChildWorkflowBudgetCeilingV1,
+  type ChildWorkflowPolicyV1,
+} from "../child-workflows/contracts.js";
+import {
+  assessmentRequestConstraints,
+  validateAssessmentRequest,
+} from "../skill-contracts/assess.js";
+import { decisionRequestConstraints, validateDecisionRequest } from "../skill-contracts/decide.js";
+import {
+  diagnosisRequestConstraints,
+  validateDiagnosisRequest,
+} from "../skill-contracts/diagnose.js";
 import type { EffectEvidenceProviderV1 } from "../skill-contracts/effects.js";
+import { planRequestConstraints, validatePlanRequest } from "../skill-contracts/plan.js";
+import { produceRequestConstraints, validateProduceRequest } from "../skill-contracts/produce.js";
 import type { CompletionReceiptPredicateV1, PlaybookV1 } from "./playbook.js";
 import {
   AGENT_BY_STATE,
@@ -187,11 +228,139 @@ export interface StartAdmissionV1 {
   ): readonly ArtifactRef[];
 }
 
+/**
+ * Documentation is bound to the same structural constraints schema and admission seam as
+ * execution. It is presentation metadata, deliberately excluded from registration digests.
+ */
+export interface CallerDocumentationV1 {
+  readonly constraints_schema: TSchema;
+  readonly example: {
+    readonly goal: string;
+    readonly constraints: Readonly<Record<string, JsonValue>>;
+  };
+  readonly semantic_caveat: string;
+}
+
 export interface RegistrationLivenessV1 {
   readonly resolver_id: string;
-  resolve(context: import("../context.js").RunContext): LivenessPolicyV1 | undefined;
+  resolve(
+    context: import("../context.js").RunContext,
+    boundPolicy?: LivenessPolicy
+  ): LivenessPolicy | undefined;
   readonly thinking_policy: "agent_ssot" | "research_preset";
 }
+
+export type GenericChildToolAuthorityV1 =
+  | GenericChildCatalogAgentYamlMaximumCarrierV1
+  | {
+      readonly carrier: "registration_strict_subset";
+      readonly allowed_tools: readonly string[];
+    };
+
+export interface GenericChildProviderPhaseV1 {
+  readonly schema_version: 1;
+  readonly state_id: string;
+  readonly agent: string;
+  readonly result_schema_id: string;
+  readonly result_schema_version: 1;
+  readonly result_schema: TSchema;
+  /** Exact fixed worker/model-client authority carrier; never request-selected. */
+  readonly tool_authority: GenericChildToolAuthorityV1;
+  /** The only registered destination policy. Null means the existing phase has none. */
+  readonly browser_network_allowlist: readonly string[] | null;
+}
+
+export interface GenericChildProviderDeclarationV1 {
+  readonly schema_version: 1;
+  readonly provider_name: string;
+  readonly ingress: "skill";
+  readonly model_visibility: "model_visible_ordinary";
+  /** Registry-owned authority used by the internal depth-one runtime; not qualification status. */
+  readonly availability: "active_internal_runtime";
+  readonly operator_authorization: "explicit_static";
+  /** Internal host-only, depth-one dispatch through ChildWorkflowRuntimeOwner. */
+  readonly dispatch_capability: "depth_one";
+  /** Gate 2 and live-provider evidence remain deliberately separate and unrun. */
+  readonly qualification: {
+    readonly gate_id: "gate_2_live_provider";
+    readonly status: "not_run";
+    readonly evidence: null;
+  };
+  readonly native_request: {
+    readonly validator_id: string;
+    readonly port: SkillContract["io"]["request"];
+  };
+  readonly input_ports: readonly SkillContract["io"]["input_ports"][number][];
+  readonly terminal_output_port: SkillContract["io"]["active_output_ports"][number];
+  readonly expected_output: ChildWorkflowOutputContractV1;
+  readonly phases: readonly GenericChildProviderPhaseV1[];
+}
+
+export interface GenericChildTargetV1 {
+  readonly schema_version: 1;
+  readonly child_name: string;
+  readonly native_request: {
+    readonly schema_id: string;
+    readonly schema_version: number;
+  };
+  readonly expected_output: ChildWorkflowOutputContractV1;
+  readonly budget: ChildWorkflowBudgetAllocationV1;
+}
+
+export interface GenericChildParentPolicyV1 {
+  readonly schema_version: 1;
+  readonly authorization_id: "operator.generic-child.universal-v1";
+  readonly request_envelope: {
+    readonly schema_id: "penny.child-workflow-request.v1";
+    readonly schema_version: 1;
+  };
+  readonly max_nesting_depth: 1;
+  readonly max_active_children: 1;
+  readonly max_calls: 1;
+  readonly project_concurrency_limit: 1;
+  readonly aggregate_budget: ChildWorkflowBudgetCeilingV1;
+  readonly parent_sealing_reserve: ChildWorkflowBudgetCeilingV1;
+  readonly targets: readonly GenericChildTargetV1[];
+}
+
+export interface GenericChildAuthorityV1 {
+  readonly schema_version: 1;
+  readonly parent_policy: GenericChildParentPolicyV1;
+  readonly provider: GenericChildProviderDeclarationV1;
+}
+
+export interface GenericChildTargetV2 {
+  readonly schema_version: 2;
+  readonly child_name: string;
+  readonly native_request: {
+    readonly schema_id: string;
+    readonly schema_version: number;
+  };
+  readonly expected_output: ChildWorkflowOutputContractV1;
+  readonly progress_lease: ReturnType<typeof childExecutionProgressLeaseBinding>;
+}
+
+export interface GenericChildParentPolicyV2 {
+  readonly schema_version: 2;
+  readonly authorization_id: "operator.generic-child.universal-v2";
+  readonly request_envelope: {
+    readonly schema_id: "penny.child-workflow-request.v1";
+    readonly schema_version: 1;
+  };
+  readonly max_nesting_depth: 1;
+  readonly max_active_children: 1;
+  readonly max_calls: 1;
+  readonly project_concurrency_limit: 1;
+  readonly targets: readonly GenericChildTargetV2[];
+}
+
+export interface GenericChildAuthorityV2 {
+  readonly schema_version: 2;
+  readonly parent_policy: GenericChildParentPolicyV2;
+  readonly provider: GenericChildProviderDeclarationV1;
+}
+
+export type GenericChildAuthority = GenericChildAuthorityV1 | GenericChildAuthorityV2;
 
 export interface PlaybookRegistrationV1 {
   readonly name: string;
@@ -201,18 +370,295 @@ export interface PlaybookRegistrationV1 {
   readonly ingress: "skill" | "dedicated_tool";
   /** Required for every skill-ingress registration and forbidden for dedicated tools. */
   readonly start_admission?: StartAdmissionV1;
+  /** Required for generic skill ingress; generated SKILL.md source of truth. */
+  readonly caller_documentation?: CallerDocumentationV1;
   /** Registration-owned finite execution and thinking posture. */
   readonly liveness: RegistrationLivenessV1;
   /** W6: exact active worker identity, guidance, transport, model, and phase contracts. */
   readonly worker: WorkerRegistrationV1;
   /** Deterministic non-worker states that registered repair routes may target. */
   readonly host_states?: readonly string[];
+  /**
+   * Optional only for non-active/synthetic registrations. Absence is a generic-child deny.
+   * Every ordinary registration in PLAYBOOK_REGISTRY carries the explicit static projection.
+   */
+  readonly generic_child?: GenericChildAuthority;
   /** W7: host-owned predicates named by the closed completion gate. */
   readonly completionReceiptPredicates: ReadonlyMap<string, CompletionReceiptPredicateV1>;
   construct(options: PlaybookConstructionOptionsV1): PlaybookV1;
 }
 
 export type PlaybookRegistryV1 = ReadonlyMap<string, PlaybookRegistrationV1>;
+
+export const GENERIC_CHILD_WORKFLOW_NAMES = Object.freeze([
+  "assess",
+  "decide",
+  "diagnose",
+  "plan",
+  "produce",
+  "research",
+] as const);
+
+export type GenericChildWorkflowName = (typeof GENERIC_CHILD_WORKFLOW_NAMES)[number];
+
+/** One depth-one call, no external requests, and a bounded local/model envelope. */
+export const GENERIC_CHILD_TARGET_BUDGET_V1 = Object.freeze({
+  schema_version: 1,
+  model_turns: 8,
+  tool_calls: 16,
+  external_calls: 0,
+  wall_clock_ms: 120_000,
+  max_steps: 8,
+  output_bytes: 1_048_576,
+} as const satisfies ChildWorkflowBudgetAllocationV1);
+
+/** Capacity retained only for exact legacy V1 replay. */
+export const GENERIC_CHILD_PARENT_SEALING_RESERVE_V1 = Object.freeze({
+  schema_version: 1,
+  model_turns: 2,
+  tool_calls: 2,
+  external_calls: 0,
+  wall_clock_ms: 30_000,
+  max_steps: 2,
+  output_bytes: 65_536,
+} as const satisfies ChildWorkflowBudgetCeilingV1);
+
+export const GENERIC_CHILD_AGGREGATE_BUDGET_V1 = Object.freeze({
+  schema_version: 1,
+  model_turns: 10,
+  tool_calls: 18,
+  external_calls: 0,
+  wall_clock_ms: 150_000,
+  max_steps: 10,
+  output_bytes: 1_114_112,
+} as const satisfies ChildWorkflowBudgetCeilingV1);
+
+/**
+ * Non-shipping child-workflow qualification shape. It remains separate from the active static
+ * authority declaration and never mutates a production registration or its digest.
+ */
+export interface ChildWorkflowCandidateRegistrationV1 {
+  readonly registration: PlaybookRegistrationV1;
+  readonly parent_policy: ChildWorkflowPolicyV1;
+  readonly provider?: ChildProviderDescriptorV1;
+}
+
+export function validateChildWorkflowCandidateRegistration(
+  value: ChildWorkflowCandidateRegistrationV1
+): ChildWorkflowCandidateRegistrationV1 {
+  validateRegistrationContract(value.registration);
+  const registration = value.registration;
+  const parentPolicy = validateChildWorkflowPolicy(value.parent_policy);
+  if (value.provider === undefined) {
+    return { registration: value.registration, parent_policy: parentPolicy };
+  }
+  const provider = validateChildProviderDescriptor(value.provider);
+  if (registration.name !== provider.provider_name) {
+    throw new Error(
+      `candidate provider '${provider.provider_name}' does not match registration '${registration.name}'`
+    );
+  }
+  if (registration.ingress !== provider.ingress) {
+    throw new Error(`candidate provider '${provider.provider_name}' has incompatible ingress`);
+  }
+  if (
+    registration.start_admission === undefined ||
+    registration.start_admission.schema_id !== provider.request.schema_id ||
+    registration.start_admission.schema_version !== provider.request.schema_version
+  ) {
+    throw new Error(`candidate provider '${provider.provider_name}' request admission diverges`);
+  }
+  return { registration: value.registration, parent_policy: parentPolicy, provider };
+}
+
+interface GenericChildNativeRequestValidatorV1 {
+  readonly validator_id: string;
+  validate(value: unknown): unknown;
+  /**
+   * Registration-owned inverse of the ordinary ingress canonicalizer. It preserves each
+   * provider's native request semantics while constructing the child engine's closed start
+   * envelope; the generic dispatcher never switches on a provider name.
+   */
+  start(value: unknown): { readonly goal: string; readonly constraints: Record<string, JsonValue> };
+}
+
+function expectedChildOutput(
+  port: SkillContract["io"]["active_output_ports"][number]
+): ChildWorkflowOutputContractV1 {
+  if (port.artifact_kind === null) {
+    throw new Error(`generic child output port '${port.name}' must be an artifact`);
+  }
+  return Object.freeze({
+    schema_version: 1,
+    port_name: port.name,
+    schema_id: port.schema_id,
+    schema_version_required: port.schema_version_required,
+    artifact_kind: port.artifact_kind,
+  });
+}
+
+/**
+ * Read the exact ordinary catalog maximum used by an active child-authority projection.
+ * The same caller project catalog is re-read during validation, so YAML edits refuse rather
+ * than silently widening a digest-bound phase.
+ */
+function hasCatalogAgentDefinitions(catalogProjectRoot: string): boolean {
+  return existsSync(path.join(catalogProjectRoot, ".pi", "agents"));
+}
+
+function catalogAgentYamlMaximum(catalogProjectRoot: string, agent: string): readonly string[] {
+  if (!CATALOG_AGENT_NAME_PATTERN.test(agent)) {
+    throw new Error(`generic child provider has non-canonical catalog agent '${agent}'`);
+  }
+  const definitionPath = path.join(catalogProjectRoot, ".pi", "agents", `${agent}.md`);
+  let definition: string;
+  try {
+    definition = readFileSync(definitionPath, "utf8");
+  } catch {
+    throw new Error(
+      `generic child provider agent '${agent}' has no readable YAML tool maximum in the project catalog`
+    );
+  }
+  return Object.freeze([...parseSsotTools(definition, agent)]);
+}
+
+function projectGenericChildProvider(
+  registration: PlaybookRegistrationV1,
+  validator: GenericChildNativeRequestValidatorV1,
+  catalogProjectRoot?: string
+): GenericChildProviderDeclarationV1 {
+  if (
+    registration.ingress !== "skill" ||
+    registration.start_admission === undefined ||
+    registration.worker.kind !== "catalog-agent"
+  ) {
+    throw new Error(
+      `registration '${registration.name}' is not an ordinary generic-child provider`
+    );
+  }
+  const output = registration.contract.io.active_output_ports[0];
+  if (output === undefined || registration.contract.io.active_output_ports.length !== 1) {
+    throw new Error(
+      `generic child provider '${registration.name}' must declare exactly one active output port`
+    );
+  }
+  const phases = [...registration.worker.phases.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([state_id, phase]) =>
+      Object.freeze({
+        schema_version: 1 as const,
+        state_id,
+        agent: phase.agent,
+        result_schema_id: phase.result_schema_id,
+        result_schema_version: phase.result_schema_version,
+        result_schema: phase.schema,
+        tool_authority: Object.freeze(
+          phase.allowed_tools === undefined
+            ? {
+                carrier: "catalog_agent_yaml_maximum" as const,
+                allowed_tools:
+                  catalogProjectRoot === undefined ||
+                  !hasCatalogAgentDefinitions(catalogProjectRoot)
+                    ? null
+                    : catalogAgentYamlMaximum(catalogProjectRoot, phase.agent),
+              }
+            : {
+                carrier: "registration_strict_subset" as const,
+                allowed_tools: phase.allowed_tools,
+              }
+        ),
+        browser_network_allowlist: phase.browser_network_allowlist ?? null,
+      })
+    );
+  return Object.freeze({
+    schema_version: 1,
+    provider_name: registration.name,
+    ingress: "skill",
+    model_visibility: "model_visible_ordinary",
+    availability: "active_internal_runtime",
+    operator_authorization: "explicit_static",
+    dispatch_capability: "depth_one",
+    qualification: Object.freeze({
+      gate_id: "gate_2_live_provider",
+      status: "not_run",
+      evidence: null,
+    }),
+    native_request: Object.freeze({
+      validator_id: validator.validator_id,
+      port: registration.contract.io.request,
+    }),
+    input_ports: Object.freeze([...registration.contract.io.input_ports]),
+    terminal_output_port: output,
+    expected_output: expectedChildOutput(output),
+    phases: Object.freeze(phases),
+  });
+}
+
+function buildLegacyGenericChildParentPolicy(
+  providers: readonly GenericChildProviderDeclarationV1[]
+): GenericChildParentPolicyV1 {
+  const targets = [...providers]
+    .sort((left, right) => left.provider_name.localeCompare(right.provider_name))
+    .map((provider) =>
+      Object.freeze({
+        schema_version: 1 as const,
+        child_name: provider.provider_name,
+        native_request: Object.freeze({
+          schema_id: provider.native_request.port.schema_id,
+          schema_version: provider.native_request.port.schema_version_required,
+        }),
+        expected_output: provider.expected_output,
+        budget: GENERIC_CHILD_TARGET_BUDGET_V1,
+      })
+    );
+  return Object.freeze({
+    schema_version: 1,
+    authorization_id: "operator.generic-child.universal-v1",
+    request_envelope: Object.freeze({
+      schema_id: "penny.child-workflow-request.v1",
+      schema_version: 1,
+    }),
+    max_nesting_depth: 1,
+    max_active_children: 1,
+    max_calls: 1,
+    project_concurrency_limit: 1,
+    aggregate_budget: GENERIC_CHILD_AGGREGATE_BUDGET_V1,
+    parent_sealing_reserve: GENERIC_CHILD_PARENT_SEALING_RESERVE_V1,
+    targets: Object.freeze(targets),
+  });
+}
+
+function buildGenericChildParentPolicy(
+  providers: readonly GenericChildProviderDeclarationV1[]
+): GenericChildParentPolicyV2 {
+  const targets = [...providers]
+    .sort((left, right) => left.provider_name.localeCompare(right.provider_name))
+    .map((provider) =>
+      Object.freeze({
+        schema_version: 2 as const,
+        child_name: provider.provider_name,
+        native_request: Object.freeze({
+          schema_id: provider.native_request.port.schema_id,
+          schema_version: provider.native_request.port.schema_version_required,
+        }),
+        expected_output: provider.expected_output,
+        progress_lease: childExecutionProgressLeaseBinding(),
+      })
+    );
+  return Object.freeze({
+    schema_version: 2,
+    authorization_id: "operator.generic-child.universal-v2",
+    request_envelope: Object.freeze({
+      schema_id: "penny.child-workflow-request.v1",
+      schema_version: 1,
+    }),
+    max_nesting_depth: 1,
+    max_active_children: 1,
+    max_calls: 1,
+    project_concurrency_limit: 1,
+    targets: Object.freeze(targets),
+  });
+}
 
 /** The default shipped playbook when the caller does not select one explicitly. */
 export const DEFAULT_PLAYBOOK_NAME = "research";
@@ -402,12 +848,31 @@ const RESEARCH_REGISTRATION: PlaybookRegistrationV1 = {
   contract: RESEARCH_SKILL_CONTRACT,
   ingress: "skill",
   start_admission: RESEARCH_START_ADMISSION,
+  caller_documentation: {
+    constraints_schema: ResearchCallerConstraintsV1Schema,
+    example: {
+      goal: "Research the supplied question.",
+      constraints: {
+        mode: "quick",
+        scope: { include: [], exclude: [] },
+      },
+    },
+    semantic_caveat:
+      "Caller artifacts must be exact admitted ports; ordinary constraints cannot set host liveness.",
+  },
   liveness: {
     resolver_id: "researchLivenessPolicy",
-    resolve: (context) =>
-      context.research.mode.length === 0
+    resolve: (context, boundPolicy) => {
+      const selected = context.research.mode.length === 0 ? undefined : context.research.mode;
+      // A durable V1 Research bootstrap upgrades only to a V1 selected preset. New
+      // bootstraps upgrade to V2, while non-bootstrap policies are retained by the controller.
+      if (boundPolicy?.schema_version === 1) {
+        return selected === undefined ? undefined : legacyResearchLivenessPolicy(selected);
+      }
+      return selected === undefined
         ? researchBootstrapLivenessPolicy()
-        : researchLivenessPolicy(context.research.mode),
+        : researchLivenessPolicy(selected);
+    },
     thinking_policy: "research_preset",
   },
   worker: {
@@ -483,15 +948,209 @@ const KNOWLEDGE_BASE_REGISTRATION: PlaybookRegistrationV1 = {
     ),
 };
 
-/** Every executable registered playbook. Model visibility is a manifest-only concern. */
+const GENERIC_CHILD_NATIVE_REQUEST_VALIDATORS: ReadonlyMap<
+  GenericChildWorkflowName,
+  GenericChildNativeRequestValidatorV1
+> = new Map([
+  [
+    "assess",
+    {
+      validator_id: "penny.assessment-request.v1.validator",
+      validate: validateAssessmentRequest,
+      start: (value) => {
+        const request = validateAssessmentRequest(value);
+        return {
+          goal: request.assessment_purpose,
+          constraints: assessmentRequestConstraints(request),
+        };
+      },
+    },
+  ],
+  [
+    "decide",
+    {
+      validator_id: "penny.decision-request.v1.validator",
+      validate: validateDecisionRequest,
+      start: (value) => {
+        const request = validateDecisionRequest(value);
+        return {
+          goal: request.decision_question,
+          constraints: decisionRequestConstraints(request),
+        };
+      },
+    },
+  ],
+  [
+    "diagnose",
+    {
+      validator_id: "penny.diagnosis-request.v1.validator",
+      validate: validateDiagnosisRequest,
+      start: (value) => {
+        const request = validateDiagnosisRequest(value);
+        return {
+          goal: request.problem_statement,
+          constraints: diagnosisRequestConstraints(request),
+        };
+      },
+    },
+  ],
+  [
+    "plan",
+    {
+      validator_id: "penny.plan-request.v1.validator",
+      validate: validatePlanRequest,
+      start: (value) => {
+        const request = validatePlanRequest(value);
+        return { goal: request.goal, constraints: planRequestConstraints(request) };
+      },
+    },
+  ],
+  [
+    "produce",
+    {
+      validator_id: "penny.produce-request.v1.validator",
+      validate: validateProduceRequest,
+      start: (value) => {
+        const request = validateProduceRequest(value);
+        return {
+          goal: request.purpose_statement,
+          constraints: produceRequestConstraints(request),
+        };
+      },
+    },
+  ],
+  [
+    "research",
+    {
+      validator_id: "penny.research-request.v1.validator",
+      validate: validateResearchRequest,
+      start: (value) => {
+        const request = validateResearchRequest(value);
+        return {
+          goal: request.question,
+          constraints: {
+            mode: request.mode,
+            scope: request.scope,
+            verification_model_override: request.verification_model_override,
+            budget_overrides: request.budget_overrides,
+            context_bindings: request.context_bindings,
+          },
+        };
+      },
+    },
+  ],
+]);
+
+const ORDINARY_BASE_REGISTRATIONS = [
+  ASSESS_PLAYBOOK_REGISTRATION,
+  DECIDE_PLAYBOOK_REGISTRATION,
+  DIAGNOSE_PLAYBOOK_REGISTRATION,
+  PLAN_PLAYBOOK_REGISTRATION,
+  PRODUCE_PLAYBOOK_REGISTRATION,
+  RESEARCH_REGISTRATION,
+] as const;
+
+function isGenericChildWorkflowName(value: string): value is GenericChildWorkflowName {
+  return GENERIC_CHILD_WORKFLOW_NAMES.some((name) => name === value);
+}
+
+function genericChildValidator(name: string): GenericChildNativeRequestValidatorV1 {
+  if (!isGenericChildWorkflowName(name)) {
+    throw new Error(`generic child provider '${name}' has no static native request validator`);
+  }
+  const validator = GENERIC_CHILD_NATIVE_REQUEST_VALIDATORS.get(name);
+  if (validator === undefined) {
+    throw new Error(`generic child provider '${name}' has no static native request validator`);
+  }
+  return validator;
+}
+
+const GENERIC_CHILD_PROVIDERS = ORDINARY_BASE_REGISTRATIONS.map((registration) =>
+  projectGenericChildProvider(registration, genericChildValidator(registration.name))
+);
+const LEGACY_GENERIC_CHILD_PARENT_POLICY =
+  buildLegacyGenericChildParentPolicy(GENERIC_CHILD_PROVIDERS);
+const GENERIC_CHILD_PARENT_POLICY = buildGenericChildParentPolicy(GENERIC_CHILD_PROVIDERS);
+
+function withGenericChildAuthority(registration: PlaybookRegistrationV1): PlaybookRegistrationV1 {
+  const provider = GENERIC_CHILD_PROVIDERS.find(
+    (candidate) => candidate.provider_name === registration.name
+  );
+  if (provider === undefined) {
+    throw new Error(`ordinary registration '${registration.name}' lacks a generic child provider`);
+  }
+  return Object.freeze({
+    ...registration,
+    generic_child: Object.freeze({
+      schema_version: 2,
+      parent_policy: GENERIC_CHILD_PARENT_POLICY,
+      provider,
+    }),
+  });
+}
+
+/**
+ * Bind an ordinary registry template to the caller project catalog before it becomes active.
+ * Templates deliberately retain `null` YAML carriers so import/discovery needs no caller path.
+ * A caller without an agent catalog stays unbound and cannot start a catalog model session; once a
+ * catalog is present, the active registration carries its exact lists in the runtime digest.
+ */
+export function bindGenericChildYamlAuthority(
+  registration: PlaybookRegistrationV1,
+  catalogProjectRoot: string
+): PlaybookRegistrationV1 {
+  if (registration.generic_child === undefined) return registration;
+  if (!path.isAbsolute(catalogProjectRoot)) {
+    throw new Error("generic child catalog project root must be absolute");
+  }
+  if (!hasCatalogAgentDefinitions(catalogProjectRoot)) return registration;
+  const yamlMaximums = registration.generic_child.provider.phases.filter(
+    (phase) => phase.tool_authority.carrier === "catalog_agent_yaml_maximum"
+  );
+  if (yamlMaximums.some((phase) => phase.tool_authority.allowed_tools !== null)) {
+    validateRegistrationContract(registration, catalogProjectRoot);
+    return registration;
+  }
+  const provider = projectGenericChildProvider(
+    registration,
+    genericChildValidator(registration.name),
+    catalogProjectRoot
+  );
+  const bound = Object.freeze({
+    ...registration,
+    generic_child: Object.freeze({
+      ...registration.generic_child,
+      provider,
+    }),
+  });
+  validateRegistrationContract(bound, catalogProjectRoot);
+  return bound;
+}
+
+const ACTIVE_ORDINARY_REGISTRATIONS = new Map(
+  ORDINARY_BASE_REGISTRATIONS.map((registration) => {
+    const active = withGenericChildAuthority(registration);
+    return [active.name, active] as const;
+  })
+);
+
+function activeOrdinaryRegistration(name: GenericChildWorkflowName): PlaybookRegistrationV1 {
+  const registration = ACTIVE_ORDINARY_REGISTRATIONS.get(name);
+  if (registration === undefined) {
+    throw new Error(`active ordinary registration '${name}' is absent`);
+  }
+  return registration;
+}
+
+/** Every executable registered playbook. Model visibility alone still grants no authority. */
 export const PLAYBOOK_REGISTRY: PlaybookRegistryV1 = new Map([
-  [ASSESS_PLAYBOOK_REGISTRATION.name, ASSESS_PLAYBOOK_REGISTRATION],
-  [DECIDE_PLAYBOOK_REGISTRATION.name, DECIDE_PLAYBOOK_REGISTRATION],
-  [DIAGNOSE_PLAYBOOK_REGISTRATION.name, DIAGNOSE_PLAYBOOK_REGISTRATION],
+  ["assess", activeOrdinaryRegistration("assess")],
+  ["decide", activeOrdinaryRegistration("decide")],
+  ["diagnose", activeOrdinaryRegistration("diagnose")],
   [KNOWLEDGE_BASE_REGISTRATION.name, KNOWLEDGE_BASE_REGISTRATION],
-  [PLAN_PLAYBOOK_REGISTRATION.name, PLAN_PLAYBOOK_REGISTRATION],
-  [PRODUCE_PLAYBOOK_REGISTRATION.name, PRODUCE_PLAYBOOK_REGISTRATION],
-  [RESEARCH_REGISTRATION.name, RESEARCH_REGISTRATION],
+  ["plan", activeOrdinaryRegistration("plan")],
+  ["produce", activeOrdinaryRegistration("produce")],
+  [DEFAULT_PLAYBOOK_NAME, activeOrdinaryRegistration(DEFAULT_PLAYBOOK_NAME)],
 ]);
 
 export function skillContractSha256(contractValue: SkillContract): string {
@@ -501,8 +1160,9 @@ export function skillContractSha256(contractValue: SkillContract): string {
 
 /**
  * Canonical runtime registration digest. Catalog phase `allowed_tools` is serialized as either
- * its exact list or null. The optional browser policy is serialized only when registered, so
- * ordinary pre-policy registration digests remain stable while policy drift changes the binding.
+ * its exact list or null. The optional browser policy is serialized only when registered. The full
+ * static generic-child parent/provider declaration is included, so any authority drift changes the
+ * binding while declaration-absent synthetic/dedicated registrations carry an explicit null.
  */
 export function runtimeRegistrationSha256(registration: PlaybookRegistrationV1): string {
   const worker =
@@ -559,6 +1219,7 @@ export function runtimeRegistrationSha256(registration: PlaybookRegistrationV1):
       },
       worker,
       host_states: [...(registration.host_states ?? [])],
+      generic_child: registration.generic_child ?? null,
       completion_receipt_predicate_ids: [...registration.completionReceiptPredicates.keys()].sort(),
     })
   );
@@ -578,6 +1239,312 @@ export function isRegisteredPlaybook(
   return registry.has(name);
 }
 
+function validateGenericChildParentPolicy(
+  registrationName: string,
+  policy: GenericChildParentPolicyV1 | GenericChildParentPolicyV2
+): void {
+  const legacy = policy.schema_version === 1;
+  if (
+    policy.authorization_id !==
+      (legacy ? "operator.generic-child.universal-v1" : "operator.generic-child.universal-v2") ||
+    policy.request_envelope.schema_id !== "penny.child-workflow-request.v1" ||
+    policy.request_envelope.schema_version !== 1 ||
+    policy.max_nesting_depth !== 1 ||
+    policy.max_active_children !== 1 ||
+    policy.max_calls !== 1 ||
+    policy.project_concurrency_limit !== 1
+  ) {
+    throw new Error(
+      `generic child parent policy for '${registrationName}' is not the fixed depth-one policy`
+    );
+  }
+  if (legacy) {
+    validateContract(
+      ChildWorkflowBudgetCeilingV1Schema,
+      policy.aggregate_budget,
+      `legacy generic child aggregate budget for '${registrationName}'`
+    );
+    validateContract(
+      ChildWorkflowBudgetCeilingV1Schema,
+      policy.parent_sealing_reserve,
+      `legacy generic child parent reserve for '${registrationName}'`
+    );
+    if (
+      canonicalJson(policy.aggregate_budget) !== canonicalJson(GENERIC_CHILD_AGGREGATE_BUDGET_V1) ||
+      canonicalJson(policy.parent_sealing_reserve) !==
+        canonicalJson(GENERIC_CHILD_PARENT_SEALING_RESERVE_V1)
+    ) {
+      throw new Error(
+        `legacy generic child parent policy for '${registrationName}' changed its fixed replay budget`
+      );
+    }
+  }
+  const names = policy.targets.map((target) => target.child_name);
+  if (
+    canonicalJson(names) !== canonicalJson(GENERIC_CHILD_WORKFLOW_NAMES) ||
+    new Set(names).size !== names.length
+  ) {
+    throw new Error(
+      `generic child parent policy for '${registrationName}' must target exactly the six ordinary workflows`
+    );
+  }
+  for (const target of policy.targets) {
+    const targetLegacy = target.schema_version === 1;
+    if (targetLegacy !== legacy) {
+      throw new Error(
+        `generic child target '${registrationName}:${target.child_name}' changed policy generation`
+      );
+    }
+    if (targetLegacy) {
+      validateContract(
+        ChildWorkflowBudgetAllocationV1Schema,
+        target.budget,
+        `legacy generic child target budget '${registrationName}:${target.child_name}'`
+      );
+    }
+    validateContract(
+      ChildWorkflowOutputContractV1Schema,
+      target.expected_output,
+      `generic child target output '${registrationName}:${target.child_name}'`
+    );
+    if (
+      target.native_request.schema_id.trim().length === 0 ||
+      !Number.isSafeInteger(target.native_request.schema_version) ||
+      target.native_request.schema_version < 1 ||
+      (targetLegacy &&
+        canonicalJson(target.budget) !== canonicalJson(GENERIC_CHILD_TARGET_BUDGET_V1)) ||
+      (!targetLegacy &&
+        canonicalJson(target.progress_lease) !==
+          canonicalJson(childExecutionProgressLeaseBinding()))
+    ) {
+      throw new Error(
+        `generic child target '${registrationName}:${target.child_name}' has a non-fixed contract or lease`
+      );
+    }
+  }
+  const expectedPolicy = legacy ? LEGACY_GENERIC_CHILD_PARENT_POLICY : GENERIC_CHILD_PARENT_POLICY;
+  if (canonicalJson(policy) !== canonicalJson(expectedPolicy)) {
+    throw new Error(
+      `generic child parent policy for '${registrationName}' diverges from the fixed all-six projection`
+    );
+  }
+}
+
+function validateGenericChildAuthority(
+  registration: PlaybookRegistrationV1,
+  catalogProjectRoot?: string
+): void {
+  const authority = registration.generic_child;
+  if (authority === undefined) return;
+  if (
+    (authority.schema_version !== 1 && authority.schema_version !== 2) ||
+    registration.ingress !== "skill" ||
+    registration.start_admission === undefined ||
+    registration.worker.kind !== "catalog-agent" ||
+    !isGenericChildWorkflowName(registration.name)
+  ) {
+    throw new Error(
+      `registration '${registration.name}' cannot declare ordinary generic child authority`
+    );
+  }
+  const validator = genericChildValidator(registration.name);
+  const expectedProvider = projectGenericChildProvider(registration, validator, catalogProjectRoot);
+  validateGenericChildParentPolicy(registration.name, authority.parent_policy);
+  const expectedPolicy =
+    authority.schema_version === 1
+      ? LEGACY_GENERIC_CHILD_PARENT_POLICY
+      : GENERIC_CHILD_PARENT_POLICY;
+  if (
+    canonicalJson(authority) !==
+    canonicalJson({
+      schema_version: authority.schema_version,
+      parent_policy: expectedPolicy,
+      provider: expectedProvider,
+    })
+  ) {
+    throw new Error(
+      `generic child authority for '${registration.name}' diverges from its native fixed projection`
+    );
+  }
+}
+
+function targetMatchesProvider(
+  target: GenericChildTargetV1 | GenericChildTargetV2,
+  provider: GenericChildProviderDeclarationV1
+): boolean {
+  return (
+    target.child_name === provider.provider_name &&
+    target.native_request.schema_id === provider.native_request.port.schema_id &&
+    target.native_request.schema_version === provider.native_request.port.schema_version_required &&
+    canonicalJson(target.expected_output) === canonicalJson(provider.expected_output) &&
+    (target.schema_version === 1
+      ? canonicalJson(target.budget) === canonicalJson(GENERIC_CHILD_TARGET_BUDGET_V1)
+      : canonicalJson(target.progress_lease) ===
+        canonicalJson(childExecutionProgressLeaseBinding()))
+  );
+}
+
+/**
+ * Pure static authorization lookup. It grants no dispatch, model call, result acceptance, or
+ * aggregate charging capability; unknown, dedicated, malformed, and declaration-absent entries deny.
+ */
+export function isGenericChildWorkflowEligible(
+  parentName: string,
+  childName: string,
+  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY,
+  catalogProjectRoot?: string
+): boolean {
+  const parent = registry.get(parentName);
+  const child = registry.get(childName);
+  if (
+    parent?.generic_child === undefined ||
+    child?.generic_child === undefined ||
+    !isGenericChildWorkflowName(parentName) ||
+    !isGenericChildWorkflowName(childName)
+  ) {
+    return false;
+  }
+  try {
+    validateRegistrationContract(parent, catalogProjectRoot);
+    validateRegistrationContract(child, catalogProjectRoot);
+    const target = parent.generic_child.parent_policy.targets.find(
+      (candidate) => candidate.child_name === childName
+    );
+    return target !== undefined && targetMatchesProvider(target, child.generic_child.provider);
+  } catch {
+    return false;
+  }
+}
+
+/** Validate one authorized envelope against the selected provider's exact native request parser. */
+export function validateGenericChildProviderRequest(
+  parentName: string,
+  value: unknown,
+  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY,
+  catalogProjectRoot?: string
+): JsonValue {
+  const request = validateChildWorkflowRequest(value);
+  if (
+    !isGenericChildWorkflowEligible(parentName, request.child_name, registry, catalogProjectRoot)
+  ) {
+    throw new Error(
+      `generic child request '${parentName}->${request.child_name}' is not statically authorized`
+    );
+  }
+  const registration = registry.get(request.child_name);
+  const provider = registration?.generic_child?.provider;
+  if (provider === undefined) {
+    throw new Error(`generic child provider '${request.child_name}' is absent`);
+  }
+  if (
+    request.provider_request_schema_id !== provider.native_request.port.schema_id ||
+    request.provider_request_schema_version !== provider.native_request.port.schema_version_required
+  ) {
+    throw new Error(
+      `generic child provider '${request.child_name}' refuses a non-native request contract`
+    );
+  }
+  const validator = genericChildValidator(request.child_name);
+  if (provider.native_request.validator_id !== validator.validator_id) {
+    throw new Error(`generic child provider '${request.child_name}' validator binding diverged`);
+  }
+  const nativeRequest = validateContract(
+    JsonValueSchema,
+    validator.validate(request.provider_request),
+    `native generic child request for '${request.child_name}'`
+  );
+  if (canonicalJson(nativeRequest) !== canonicalJson(request.provider_request)) {
+    throw new Error(
+      `generic child provider '${request.child_name}' request parser changed canonical values`
+    );
+  }
+  return nativeRequest;
+}
+
+/**
+ * Registration-owned native request adapter for the internal child start path. The caller still
+ * validates the canonical request artifact and exact input refs separately; this adapter only
+ * reconstructs the ordinary provider ingress fields and contains no engine dispatch policy.
+ */
+export function genericChildStartParts(
+  parentName: string,
+  value: unknown,
+  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY,
+  catalogProjectRoot?: string
+): {
+  readonly child_name: string;
+  readonly goal: string;
+  readonly constraints: Record<string, JsonValue>;
+} {
+  const request = validateChildWorkflowRequest(value);
+  const nativeRequest = validateGenericChildProviderRequest(
+    parentName,
+    request,
+    registry,
+    catalogProjectRoot
+  );
+  const adapter = genericChildValidator(request.child_name);
+  const start = adapter.start(nativeRequest);
+  if (canonicalJson(adapter.validate(nativeRequest)) !== canonicalJson(nativeRequest)) {
+    throw new Error(
+      `generic child provider '${request.child_name}' start adapter changed native bytes`
+    );
+  }
+  return { child_name: request.child_name, ...start };
+}
+
+/** Exact all-six production projection check; Gate 2/live qualification remains intentionally absent. */
+export function assertGenericChildAuthorityProjection(
+  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY,
+  catalogProjectRoot?: string
+): void {
+  const knowledgeBase = registry.get("knowledge-base");
+  if (knowledgeBase?.generic_child !== undefined) {
+    throw new Error("knowledge-base cannot enter generic child parent/provider authority");
+  }
+  for (const [name, registration] of registry) {
+    if (registration.generic_child !== undefined && !isGenericChildWorkflowName(name)) {
+      throw new Error(`unapproved generic child authority declaration '${name}'`);
+    }
+  }
+  const registrations = GENERIC_CHILD_WORKFLOW_NAMES.map((name) => {
+    const registration = registry.get(name);
+    if (registration?.generic_child === undefined) {
+      throw new Error(`ordinary registration '${name}' lacks explicit generic child authority`);
+    }
+    validateRegistrationContract(registration, catalogProjectRoot);
+    return registration;
+  });
+  const providers = registrations.map((registration) => registration.generic_child?.provider);
+  if (providers.some((provider) => provider === undefined)) {
+    throw new Error("generic child provider projection is incomplete");
+  }
+  const completeProviders = providers.flatMap((provider) =>
+    provider === undefined ? [] : [provider]
+  );
+  const expectedPolicy = buildGenericChildParentPolicy(completeProviders);
+  for (const registration of registrations) {
+    const authority = registration.generic_child;
+    if (
+      authority === undefined ||
+      canonicalJson(authority.parent_policy) !== canonicalJson(expectedPolicy)
+    ) {
+      throw new Error(
+        `generic child parent policy for '${registration.name}' diverges from the all-six provider projection`
+      );
+    }
+    for (const childName of GENERIC_CHILD_WORKFLOW_NAMES) {
+      if (
+        !isGenericChildWorkflowEligible(registration.name, childName, registry, catalogProjectRoot)
+      ) {
+        throw new Error(
+          `generic child eligibility '${registration.name}->${childName}' is not exact`
+        );
+      }
+    }
+  }
+}
+
 /**
  * Resolve a registration, or `undefined` when the name is unregistered.
  *
@@ -590,8 +1557,9 @@ export function resolvePlaybook(
   registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY
 ): PlaybookRegistrationV1 | undefined {
   const registration = registry.get(name);
-  if (registration !== undefined && registry === PLAYBOOK_REGISTRY) {
-    validateRegistrationContract(registration);
+  if (registry === PLAYBOOK_REGISTRY) {
+    assertGenericChildAuthorityProjection(registry);
+    if (registration !== undefined) validateRegistrationContract(registration);
   }
   return registration;
 }
@@ -604,7 +1572,10 @@ export function resolvePlaybook(
  * constructed. The contract is authority metadata, so an invalid one is a hard error
  * rather than a warning.
  */
-export function validateRegistrationContract(registration: PlaybookRegistrationV1): SkillContract {
+export function validateRegistrationContract(
+  registration: PlaybookRegistrationV1,
+  catalogProjectRoot?: string
+): SkillContract {
   const contract = validateContract(
     SkillContractSchema,
     registration.contract,
@@ -755,6 +1726,7 @@ export function validateRegistrationContract(registration: PlaybookRegistrationV
       }
     }
   }
+  validateGenericChildAuthority(registration, catalogProjectRoot);
   const hostStates = registration.host_states ?? [];
   if (
     hostStates.some((state) => state.trim().length === 0) ||
@@ -836,4 +1808,5 @@ export function assertExpectedRegistrations(
   for (const registration of registry.values()) {
     validateRegistrationContract(registration);
   }
+  if (registry === PLAYBOOK_REGISTRY) assertGenericChildAuthorityProjection(registry);
 }

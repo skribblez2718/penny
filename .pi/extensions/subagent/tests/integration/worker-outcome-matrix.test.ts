@@ -146,12 +146,14 @@ describe("subagent JSON-mode worker outcome matrix", () => {
   let tool: RegisteredSubagentTool;
   let shutdownHandler: (() => Promise<void>) | undefined;
   let spawnedProcess: ReturnType<typeof fakeJsonProcess> | undefined;
+  let orchestrationDatabase: string;
   const previousStateRoot = process.env.PENNY_STATE_ROOT;
 
   beforeEach(async () => {
     sandbox = mkdtempSync(path.join(tmpdir(), "penny-worker-outcome-matrix-"));
     process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
-    initializePennyState(process.cwd(), { env: process.env });
+    const state = initializePennyState(process.cwd(), { env: process.env });
+    orchestrationDatabase = state.paths.orchestration.database;
     mockSpawn.mockReset();
     shutdownHandler = undefined;
     spawnedProcess = undefined;
@@ -212,6 +214,55 @@ describe("subagent JSON-mode worker outcome matrix", () => {
       })
     );
   }
+
+  it("reports stale state before spawn without masking it as artifact delivery failure", async () => {
+    const sqlite = process.getBuiltinModule("node:sqlite");
+    if (sqlite === undefined) throw new Error("node:sqlite unavailable");
+    {
+      using database = new sqlite.DatabaseSync(orchestrationDatabase);
+      database.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+    }
+
+    const result = await tool.execute(
+      "stale-state",
+      {
+        agent: "echo",
+        task: "must not spawn",
+        input_artifacts: [`art_${"0".repeat(64)}`],
+      },
+      undefined,
+      undefined,
+      context()
+    );
+
+    expect(result.isError).toBe(true);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(result.content.map((part) => part.text).join("\n")).toContain(
+      "STATE_SCHEMA_INCOMPATIBLE: subagent state preflight failed before spawn"
+    );
+    expect(result.content.map((part) => part.text).join("\n")).not.toContain(
+      "ARTIFACT_CONFIG_INVALID"
+    );
+    const worker = result.details.results[0];
+    if (worker === undefined) throw new Error("stale-state result omitted its worker record");
+    expect(worker).toMatchObject({
+      processState: "setup_failed",
+      outputArtifactRequired: false,
+      stateFailure: {
+        code: "STATE_SCHEMA_INCOMPATIBLE",
+        details: {
+          component: "orchestration",
+          actualSchemaVersion: 10,
+          requiredSchemaVersion: 12,
+          upgradeSupported: true,
+          recoveryAction: "penny-state-upgrade",
+        },
+      },
+      terminalOutcome: { status: "failed", reason: "process_lifecycle" },
+    });
+    expect(worker.outputArtifactState).toBeUndefined();
+    expect(worker.outputArtifactError).toBeUndefined();
+  });
 
   it("exposes completed, cancelled, and failed terminal envelopes in input order", async () => {
     const result = await tool.execute(

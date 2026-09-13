@@ -3,12 +3,13 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   PLAYBOOK_REGISTRY,
   initializePennyState,
   skillContractSha256,
+  upgradePennyState,
   type OrchestrationProgressEvent,
 } from "@penny/orchestration/source";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -142,6 +143,7 @@ vi.mock("@earendil-works/pi-tui", () => ({
 
 let registeredTool: RegisteredSkillTool | undefined;
 let testProjectRoot: string;
+let orchestrationDatabase: string;
 
 function isRegisteredSkillTool(value: unknown): value is RegisteredSkillTool {
   if (!isRecord(value)) return false;
@@ -313,7 +315,9 @@ beforeEach(async () => {
   delete process.env.PENNY_SKILL_CHAIN_STATE_ROOT;
   delete process.env.PENNY_ARTIFACT_ROOT;
   process.env.PROJECT_ROOT = testProjectRoot;
-  initializePennyState(testProjectRoot, { env: process.env });
+  orchestrationDatabase = initializePennyState(testProjectRoot, {
+    env: process.env,
+  }).paths.orchestration.database;
   const extension = await import("../../index.js");
   extension.default(pi());
 });
@@ -342,7 +346,54 @@ describe("TypeScript-only skill engine path", () => {
     expect(skillTool().parameters.properties.engine).toBeUndefined();
   });
 
-  it("routes every generic registered skill through the skill tool with its exact registration", async () => {
+  it("returns a structured stale-state failure before dispatch", async () => {
+    const sqlite = process.getBuiltinModule("node:sqlite");
+    if (sqlite === undefined) throw new Error("node:sqlite unavailable");
+    using stale = new sqlite.DatabaseSync(orchestrationDatabase);
+    stale.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+
+    const response = await skillTool().execute(
+      "stale-state",
+      { skill_name: "research", goal: "must not dispatch", session_id: "stale-state" },
+      undefined,
+      undefined,
+      context()
+    );
+
+    expect(response.details).toMatchObject({
+      success: false,
+      state: "error",
+      errors: [expect.stringContaining("STATE_SCHEMA_INCOMPATIBLE")],
+      state_failure: {
+        code: "STATE_SCHEMA_INCOMPATIBLE",
+        details: {
+          component: "orchestration",
+          actualSchemaVersion: 10,
+          requiredSchemaVersion: 12,
+          upgradeSupported: true,
+          recoveryAction: "penny-state-upgrade",
+        },
+      },
+    });
+    expect(mockTypeScriptExecute).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("routes every generic registered skill through the upgraded shared state", async () => {
+    const sqlite = process.getBuiltinModule("node:sqlite");
+    if (sqlite === undefined) throw new Error("node:sqlite unavailable");
+    {
+      using stale = new sqlite.DatabaseSync(orchestrationDatabase);
+      stale.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+    }
+    const backupDirectory = join(dirname(testProjectRoot), "backups");
+    mkdirSync(backupDirectory, { mode: 0o700 });
+    await upgradePennyState({
+      projectRoot: testProjectRoot,
+      backupDirectory,
+      rootOptions: { env: process.env },
+    });
+
     const extension = await import("../../index.js");
     const genericRegistrations = [...PLAYBOOK_REGISTRY.values()].filter(
       (registration) => registration.ingress === "skill"

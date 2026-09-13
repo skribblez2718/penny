@@ -14,7 +14,7 @@ import {
   PolicyRefusal,
   type ProviderModelTuple,
 } from "../src/kb/policy.js";
-import { defaultDenyPolicy, type KbPolicy } from "../src/kb/contracts.js";
+import { defaultDenyPolicy, type KbPolicyV2 } from "../src/kb/contracts.js";
 
 const LOCAL: ProviderModelTuple = {
   provider: "ollama",
@@ -28,7 +28,7 @@ const REMOTE: ProviderModelTuple = {
   locality: "remote",
 };
 
-function policyWith(overrides: Partial<KbPolicy>): KbPolicy {
+function policyWith(overrides: Partial<KbPolicyV2>): KbPolicyV2 {
   return { ...defaultDenyPolicy("kb_001"), ...overrides };
 }
 
@@ -120,7 +120,7 @@ describe("KB §5.3 derived answer delivery", () => {
 
 describe("§5.3 identity-based admission (resolved tuples, never aliases)", () => {
   const PARENT = { provider: "ollama", model: "qwen327b:latest" };
-  const base = (over: Partial<KbPolicy> = {}): KbPolicy => ({
+  const base = (over: Partial<KbPolicyV2> = {}): KbPolicyV2 => ({
     ...defaultDenyPolicy("kbp-identity"),
     allowed_parent_models: [{ ...PARENT, locality: "local" }],
     allowed_child_models: [{ ...PARENT, locality: "local" }],

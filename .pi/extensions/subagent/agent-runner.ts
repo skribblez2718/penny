@@ -22,6 +22,7 @@ import {
   ensureOwnerDirectory,
   PennyStateResolutionError,
   resolvePennyRuntimeState,
+  type PennyStateResolutionDetails,
 } from "@penny/orchestration/source";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 import {
@@ -528,6 +529,16 @@ export interface SingleResult {
   outputArtifactState?: "pending" | "persisted" | "failed";
   /** Bounded owner-persistence diagnostic; no artifact reference is invented. */
   outputArtifactError?: string;
+  /** Structured delivery cause retained separately from process/model truth. */
+  outputArtifactFailure?: {
+    readonly code: string;
+    readonly metadata: Readonly<Record<string, unknown>>;
+  };
+  /** Structured pre-spawn state cause, when state readiness prevented worker creation. */
+  stateFailure?: {
+    readonly code: string;
+    readonly details: PennyStateResolutionDetails;
+  };
 }
 
 export function createPendingSingleResult(agent: string, task: string): SingleResult {
@@ -549,6 +560,59 @@ export function createPendingSingleResult(agent: string, task: string): SingleRe
       cost: 0,
       contextTokens: 0,
       turns: 0,
+    },
+  };
+}
+
+/** Build the shared structured terminal for a retained-state failure before process spawn. */
+export function createStatePreflightFailureResult(input: {
+  readonly agent: string;
+  readonly agentSource: SingleResult["agentSource"];
+  readonly task: string;
+  readonly error: unknown;
+  readonly stateFailure?: NonNullable<SingleResult["stateFailure"]>;
+  readonly step?: number;
+}): SingleResult {
+  const code =
+    input.stateFailure?.code ??
+    (input.error instanceof PennyStateResolutionError ? input.error.code : "STATE_CUSTODY_INVALID");
+  const message = input.error instanceof Error ? input.error.message : String(input.error);
+  const cause = message.startsWith(`${code}: `) ? message.slice(code.length + 2) : message;
+  const diagnostic = `${code}: subagent state preflight failed before spawn. ${cause}`;
+  return {
+    agent: input.agent,
+    agentSource: input.agentSource,
+    task: input.task,
+    exitCode: 1,
+    messages: [],
+    stderr: diagnostic,
+    errorMessage: diagnostic,
+    stopReason: "error",
+    processState: "setup_failed",
+    processExitObserved: false,
+    processCloseObserved: false,
+    agentEndObserved: false,
+    updateDeliveryState: "not_attempted",
+    outputArtifactRequired: false,
+    ...(input.stateFailure !== undefined
+      ? { stateFailure: input.stateFailure }
+      : input.error instanceof PennyStateResolutionError
+        ? { stateFailure: { code: input.error.code, details: input.error.details } }
+        : {}),
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      contextTokens: 0,
+      turns: 0,
+    },
+    ...(input.step === undefined ? {} : { step: input.step }),
+    terminalOutcome: {
+      schema_version: 1,
+      status: "failed",
+      reason: "process_lifecycle",
     },
   };
 }
@@ -1034,28 +1098,13 @@ export async function runSingleAgent(
       env: ownerEnvironment ?? process.env,
     });
   } catch (error) {
-    const code = error instanceof PennyStateResolutionError ? error.code : "STATE_CUSTODY_INVALID";
-    const message = error instanceof Error ? error.message : String(error);
-    return {
+    return createStatePreflightFailureResult({
       agent: agentName,
       agentSource: agent.source,
       task,
-      exitCode: 1,
-      messages: [],
-      stderr: `${code}: subagent state preflight failed before spawn. ${message}`,
-      errorMessage: `${code}: subagent state preflight failed before spawn. ${message}`,
-      stopReason: "error",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: 0,
-        contextTokens: 0,
-        turns: 0,
-      },
-      step,
-    };
+      error,
+      ...(step === undefined ? {} : { step }),
+    });
   }
   const sessionAgentName = agentName.replace(/[^A-Za-z0-9._-]+/gu, "_");
   const durableSessionDir = path.join(

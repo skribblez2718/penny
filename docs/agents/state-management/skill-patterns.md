@@ -47,6 +47,27 @@ Parallel skills are independent TypeScript runs. Chains persist exact terminal b
 direct cross-run terminal IDs plus optional explicit fan-in. Chain resume reconstructs the failed step from its durable
 checkpoint and never substitutes payload text into `{previous}`.
 
+## Child reservation and active depth-one dispatch
+
+Use the current child-call owner only when implementing the durable storage seam. Persist the
+canonical request and inputs in one concrete project-bound artifact store first. Then reserve the
+exact parent visit/call key, parent pending directive, ordinary unstarted child run, initial events,
+and canonical call row in one control-store transaction. A repeated exact call adopts the existing
+record and lifecycle; changed operands or incomplete/mismatched linkage conflict. Never reconstruct
+a call from artifacts, memory, logs, prose, or search.
+
+A normal service constructs the depth-one child owner; a host may explicitly disable it. The owner
+runs the reserved child through the ordinary engine/runner, validates its terminal, persists a
+child-result artifact, and atomically consumes it into the parent. New calls carry no predicted
+turn/tool/external/output/step/time allocation, aggregate capacity, or parent reserve. The child uses
+its registered repair/liveness policy and the service-wide step backstop, plus a digest-bound
+content-free inactivity lease renewed from fenced host-observed worker activity or workflow
+convergence. The owner also enforces fixed call/active/project admission, lease expiry, and
+runner-signal/concurrent durable parent-cancel propagation. It does not yet cover child gates,
+arbitrary post-capture restart
+reconciliation, cohort artifact/receipt/session retention, promotion, or live qualification. Gate 2
+remains `not_run`; active runtime execution does not fabricate qualification evidence.
+
 ## Testing
 
 Drive real `OrchestrationEngine` requests against temporary Node SQLite and artifact

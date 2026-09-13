@@ -1,13 +1,30 @@
 import { canonicalJson, sha256, type Checkpointer } from "./checkpointer.js";
 import type { RunContext } from "./context.js";
 import {
+  ChildWorkflowProgressLeaseBindingV1Schema,
+  LivenessPolicySchema,
   LivenessPolicyV1Schema,
+  LivenessPolicyV2Schema,
+  LivenessPolicyV3Schema,
   LivenessSnapshotV1Schema,
+  type ChildWorkflowProgressLeaseBindingV1,
+  type LivenessPolicy,
   type LivenessPolicyV1,
+  type LivenessPolicyV2,
+  type LivenessPolicyV3,
   type LivenessSnapshotV1,
+  type JsonValue,
   type LivenessTerminalReason,
   validateContract,
 } from "./contracts.js";
+import {
+  LIVENESS_CALIBRATION_ID,
+  LIVENESS_CALIBRATION_SHA256,
+  LIVENESS_LEASE_REGISTRY_ID,
+  LIVENESS_LEASE_REGISTRY_SHA256,
+  fallbackWorkerLeaseProfile,
+  workerProgressLeaseBinding,
+} from "./liveness-profiles.js";
 import type {
   AgentSessionLivenessEventV1,
   AgentSessionProtocolErrorCodeV1,
@@ -19,15 +36,21 @@ const MALFORMED_RESULT_LIMIT = 2 as const;
 const IDENTICAL_MALFORMED_LIMIT = 2 as const;
 const PROTOCOL_ERROR_LIMIT = 4 as const;
 const IDENTICAL_PROTOCOL_LIMIT = 2 as const;
-const ROUTING_REPAIR_POLICY = {
+const LEGACY_ROUTING_REPAIR_POLICY = {
   max_invocations_per_state_branch: 1,
   model_turns_per_worker: 4,
   tool_calls_per_worker: 2,
   external_calls_per_worker: 0,
   worker_wall_clock_ms: 120_000,
 } as const;
+const LEASE_ROUTING_REPAIR_POLICY = {
+  max_invocations_per_state_branch: 1,
+  model_turns_per_worker: 4,
+  tool_calls_per_worker: 2,
+  external_calls_per_worker: 0,
+} as const;
 
-export const RESEARCH_LIVENESS_PRESETS = {
+const LEGACY_RESEARCH_LIVENESS_PRESETS = {
   quick: {
     total_phase_repair_invocations: 6,
     model_turns_per_worker: 16,
@@ -60,6 +83,19 @@ export const RESEARCH_LIVENESS_PRESETS = {
     external_calls_per_run: 96,
     worker_wall_clock_ms: 15 * 60_000,
     run_wall_clock_ms: 180 * 60_000,
+  },
+} as const;
+
+/** V2 retains finite active-work containment without count-based ordinary-work stops. */
+export const RESEARCH_LIVENESS_PRESETS = {
+  quick: { worker_active_work_budget_ms: 5 * 60_000, run_active_work_budget_ms: 15 * 60_000 },
+  standard: {
+    worker_active_work_budget_ms: 10 * 60_000,
+    run_active_work_budget_ms: 60 * 60_000,
+  },
+  deep: {
+    worker_active_work_budget_ms: 15 * 60_000,
+    run_active_work_budget_ms: 180 * 60_000,
   },
 } as const;
 
@@ -101,8 +137,39 @@ export interface WorkerPromptBudgetV1 {
   readonly external_requests: WorkerPromptBudgetCounterV1;
 }
 
+/** New-policy prompt projection: count telemetry is not a remaining-work quota. */
+export interface WorkerPromptBudgetV2 {
+  readonly schema_version: 2;
+  readonly preset: string;
+  readonly purpose: ExecutionPurpose;
+  readonly active_work: {
+    readonly worker_remaining_ms: number;
+    readonly run_remaining_ms: number;
+    readonly effective_remaining_ms: number;
+  };
+}
+/** New-run projection: the worker may run longer than this interval while trusted progress renews it. */
+export interface WorkerPromptBudgetV3 {
+  readonly schema_version: 3;
+  readonly preset: string;
+  readonly purpose: ExecutionPurpose;
+  readonly inactivity_lease: {
+    readonly registry_id: string;
+    readonly profile_id: string;
+    readonly profile_sha256: string;
+    readonly interval_ms: number;
+    readonly remaining_ms: number;
+    readonly last_progress_at_ms: number;
+    readonly accepted_progress_signals: number;
+  };
+}
+export type WorkerPromptBudget = WorkerPromptBudgetV1 | WorkerPromptBudgetV2 | WorkerPromptBudgetV3;
+
 export type LivenessClock = () => number;
-export type LivenessPolicyResolver = (context: RunContext) => LivenessPolicyV1 | undefined;
+export type LivenessPolicyResolver = (
+  context: RunContext,
+  boundPolicy?: LivenessPolicy
+) => LivenessPolicy | undefined;
 
 export class LivenessExhaustedError extends Error {
   constructor(readonly reason: LivenessTerminalReason) {
@@ -119,7 +186,7 @@ function checkedNow(clock: LivenessClock): number {
   return value;
 }
 
-function basePolicy(input: {
+function legacyPolicy(input: {
   scope: LivenessPolicyV1["scope"];
   preset: string;
   total_phase_repair_invocations: number;
@@ -141,28 +208,81 @@ function basePolicy(input: {
       identical_malformed_digest_limit: IDENTICAL_MALFORMED_LIMIT,
       protocol_errors_per_worker: PROTOCOL_ERROR_LIMIT,
       identical_protocol_digest_limit: IDENTICAL_PROTOCOL_LIMIT,
-      routing_repair: ROUTING_REPAIR_POLICY,
+      routing_repair: LEGACY_ROUTING_REPAIR_POLICY,
     },
-    "liveness policy"
+    "legacy liveness policy"
   );
 }
 
-export function researchLivenessPolicy(mode: string): LivenessPolicyV1 {
-  const preset: ResearchPreset =
-    mode === "quick" || mode === "deep" || mode === "standard" ? mode : "standard";
-  return basePolicy({ scope: "research", preset, ...RESEARCH_LIVENESS_PRESETS[preset] });
+export function activeWorkLivenessPolicy(input: {
+  readonly scope: LivenessPolicyV2["scope"];
+  readonly preset: string;
+  readonly worker_active_work_budget_ms: number;
+  readonly run_active_work_budget_ms: number;
+}): LivenessPolicyV2 {
+  return validateContract(
+    LivenessPolicyV2Schema,
+    {
+      schema_version: 2,
+      ...input,
+      malformed_results_per_state_branch: MALFORMED_RESULT_LIMIT,
+      identical_malformed_digest_limit: IDENTICAL_MALFORMED_LIMIT,
+      protocol_errors_per_worker: PROTOCOL_ERROR_LIMIT,
+      identical_protocol_digest_limit: IDENTICAL_PROTOCOL_LIMIT,
+      routing_repair: LEGACY_ROUTING_REPAIR_POLICY,
+    },
+    "active-work liveness policy"
+  );
 }
 
-/**
- * An unspecified research mode gets the standard planning envelope under a
- * distinct bootstrap binding. The model-declared preset replaces it durably
- * before the next worker; all bootstrap charges remain in the same event log.
- */
-export function researchBootstrapLivenessPolicy(): LivenessPolicyV1 {
-  return basePolicy({
+/** Bind the immutable calibrated profile registry for one new ordinary run. */
+export function ordinaryLivenessPolicy(input: {
+  readonly scope: LivenessPolicyV3["scope"];
+  readonly preset: string;
+}): LivenessPolicyV3 {
+  return validateContract(
+    LivenessPolicyV3Schema,
+    {
+      schema_version: 3,
+      ...input,
+      lease_registry_id: LIVENESS_LEASE_REGISTRY_ID,
+      lease_registry_sha256: LIVENESS_LEASE_REGISTRY_SHA256,
+      calibration_id: LIVENESS_CALIBRATION_ID,
+      calibration_sha256: LIVENESS_CALIBRATION_SHA256,
+      unknown_provider_phase_inactivity_ms:
+        fallbackWorkerLeaseProfile("phase").inactivity_interval_ms,
+      unknown_provider_routing_repair_inactivity_ms:
+        fallbackWorkerLeaseProfile("routing_repair").inactivity_interval_ms,
+      renewal_policy: "trusted_host_activity_or_convergence_v1",
+      malformed_results_per_state_branch: MALFORMED_RESULT_LIMIT,
+      identical_malformed_digest_limit: IDENTICAL_MALFORMED_LIMIT,
+      protocol_errors_per_worker: PROTOCOL_ERROR_LIMIT,
+      identical_protocol_digest_limit: IDENTICAL_PROTOCOL_LIMIT,
+      routing_repair: LEASE_ROUTING_REPAIR_POLICY,
+    },
+    "ordinary progress-lease liveness policy"
+  );
+}
+
+export function researchLivenessPolicy(mode: string): LivenessPolicyV3 {
+  const preset: ResearchPreset =
+    mode === "quick" || mode === "deep" || mode === "standard" ? mode : "standard";
+  return ordinaryLivenessPolicy({ scope: "research", preset });
+}
+
+/** New-run bootstrap; upgraded to its selected V3 preset after planning. */
+export function researchBootstrapLivenessPolicy(): LivenessPolicyV3 {
+  return ordinaryLivenessPolicy({ scope: "research", preset: "bootstrap" });
+}
+
+/** Exact V1 resolver retained only for durable V1 Research bootstrap continuation. */
+export function legacyResearchLivenessPolicy(mode: string): LivenessPolicyV1 {
+  const preset: ResearchPreset =
+    mode === "quick" || mode === "deep" || mode === "standard" ? mode : "standard";
+  return legacyPolicy({
     scope: "research",
-    preset: "bootstrap",
-    ...RESEARCH_LIVENESS_PRESETS.standard,
+    preset,
+    ...LEGACY_RESEARCH_LIVENESS_PRESETS[preset],
   });
 }
 
@@ -180,25 +300,16 @@ const KB_INVOCATION_LIMITS = {
 } as const;
 
 export function kbLivenessPolicy(input: {
-  action: keyof typeof KB_INVOCATION_LIMITS;
-  readerMaxCallsPerPhase: number;
-}): LivenessPolicyV1 {
-  const boundedReaderCalls = Math.min(Math.max(1, input.readerMaxCallsPerPhase), 64);
-  const toolCallsPerWorker = boundedReaderCalls + 6;
-  const modelTurnsPerWorker = boundedReaderCalls + 8;
+  readonly action: keyof typeof KB_INVOCATION_LIMITS;
+  /** Legacy caller input, deliberately ignored under V2 (no reader-call quota). */
+  readonly readerMaxCallsPerPhase?: number;
+}): LivenessPolicyV2 {
   const action = KB_INVOCATION_LIMITS[input.action];
-  return basePolicy({
+  return activeWorkLivenessPolicy({
     scope: "knowledge-base",
     preset: `kb-${input.action}`,
-    total_phase_repair_invocations: action.invocations,
-    model_turns_per_worker: modelTurnsPerWorker,
-    model_turns_per_run: modelTurnsPerWorker * action.invocations,
-    tool_calls_per_worker: toolCallsPerWorker,
-    tool_calls_per_run: toolCallsPerWorker * action.invocations,
-    external_calls_per_worker: 0,
-    external_calls_per_run: 0,
-    worker_wall_clock_ms: 15 * 60_000,
-    run_wall_clock_ms: action.runWallMs,
+    worker_active_work_budget_ms: 15 * 60_000,
+    run_active_work_budget_ms: action.runWallMs,
   });
 }
 
@@ -249,6 +360,9 @@ interface FoldedWorker {
   readonly purpose: ExecutionPurpose;
   readonly startedAtMs: number;
   endedAtMs: number | undefined;
+  lastProgressAtMs: number;
+  acceptedProgressSignals: number;
+  leaseBinding: ChildWorkflowProgressLeaseBindingV1 | undefined;
   modelTurns: number;
   toolCalls: number;
   externalCalls: number;
@@ -257,7 +371,7 @@ interface FoldedWorker {
 }
 
 interface FoldedLiveness {
-  policy: LivenessPolicyV1 | undefined;
+  policy: LivenessPolicy | undefined;
   phaseInvocations: number;
   repairInvocations: number;
   modelTurns: number;
@@ -271,6 +385,11 @@ interface FoldedLiveness {
   readonly malformedByBinding: Map<string, number>;
   readonly malformedDigests: Map<string, number>;
   readonly workers: Map<string, FoldedWorker>;
+}
+
+interface CachedFoldedLiveness {
+  readonly folded: FoldedLiveness;
+  throughSequence: number;
 }
 
 function emptyFold(): FoldedLiveness {
@@ -318,7 +437,8 @@ function integerField(payload: Readonly<Record<string, unknown>>, key: string): 
 }
 
 function purposeField(payload: Readonly<Record<string, unknown>>): ExecutionPurpose {
-  return payload.purpose === "routing_repair" ? "routing_repair" : "phase";
+  if (payload.purpose === "routing_repair" || payload.purpose === "phase") return payload.purpose;
+  throw new Error("stored liveness event has invalid purpose");
 }
 
 function bindingKey(stateId: string, branchId: string | null): string {
@@ -373,6 +493,12 @@ function terminalReason(value: unknown): LivenessTerminalReason | null {
 
 export class LivenessController {
   private resolver: LivenessPolicyResolver | undefined;
+  /**
+   * Cache the already-validated fold and consume only its indexed durable suffix. This keeps
+   * high-frequency provider deltas O(n) overall while still observing engine events written
+   * outside this controller and rebuilding exact state after process recovery.
+   */
+  private readonly foldedRuns = new Map<string, CachedFoldedLiveness>();
 
   constructor(
     private readonly checkpointer: Checkpointer,
@@ -383,100 +509,151 @@ export class LivenessController {
     this.resolver = resolver;
   }
 
-  private fold(runId: string): FoldedLiveness {
-    const folded = emptyFold();
-    for (const event of this.checkpointer.events(runId)) {
-      const payload = event.payload;
-      switch (event.eventType) {
-        case "liveness_policy_bound":
-          folded.policy = validateContract(
-            LivenessPolicyV1Schema,
-            payload.policy,
-            "stored liveness policy"
-          );
-          break;
-        case "liveness_invocation_admitted": {
-          const purpose = purposeField(payload);
-          const key = bindingKey(
-            stringField(payload, "state_id"),
-            nullableStringField(payload, "branch_id")
-          );
-          folded.phaseInvocations += 1;
-          increment(folded.phaseAttemptsByBinding, key);
-          if (purpose === "routing_repair") {
-            folded.repairInvocations += 1;
-            increment(folded.repairByBinding, key);
-          }
-          break;
+  private applyEvent(
+    folded: FoldedLiveness,
+    eventType: string,
+    payload: Readonly<Record<string, unknown>>
+  ): void {
+    switch (eventType) {
+      case "liveness_policy_bound":
+        folded.policy = validateContract(
+          LivenessPolicySchema,
+          payload.policy,
+          "stored liveness policy"
+        );
+        break;
+      case "liveness_invocation_admitted": {
+        const purpose = purposeField(payload);
+        const key = bindingKey(
+          stringField(payload, "state_id"),
+          nullableStringField(payload, "branch_id")
+        );
+        folded.phaseInvocations += 1;
+        increment(folded.phaseAttemptsByBinding, key);
+        if (purpose === "routing_repair") {
+          folded.repairInvocations += 1;
+          increment(folded.repairByBinding, key);
         }
-        case "liveness_worker_started": {
-          const workerId = stringField(payload, "worker_id");
-          if (folded.workers.has(workerId)) throw new Error("duplicate liveness worker start");
-          folded.workers.set(workerId, {
-            workerId,
-            stateId: stringField(payload, "state_id"),
-            branchId: nullableStringField(payload, "branch_id"),
-            purpose: purposeField(payload),
-            startedAtMs: integerField(payload, "at_ms"),
-            endedAtMs: undefined,
-            modelTurns: 0,
-            toolCalls: 0,
-            externalCalls: 0,
-            protocolErrors: 0,
-            protocolDigests: new Map(),
-          });
-          break;
+        break;
+      }
+      case "liveness_worker_started": {
+        const workerId = stringField(payload, "worker_id");
+        if (folded.workers.has(workerId)) throw new Error("duplicate liveness worker start");
+        const startedAtMs = integerField(payload, "at_ms");
+        folded.workers.set(workerId, {
+          workerId,
+          stateId: stringField(payload, "state_id"),
+          branchId: nullableStringField(payload, "branch_id"),
+          purpose: purposeField(payload),
+          startedAtMs,
+          endedAtMs: undefined,
+          lastProgressAtMs: startedAtMs,
+          acceptedProgressSignals: 0,
+          leaseBinding: undefined,
+          modelTurns: 0,
+          toolCalls: 0,
+          externalCalls: 0,
+          protocolErrors: 0,
+          protocolDigests: new Map(),
+        });
+        break;
+      }
+      case "liveness_worker_lease_bound": {
+        const worker = folded.workers.get(stringField(payload, "worker_id"));
+        if (worker === undefined || worker.endedAtMs !== undefined || worker.leaseBinding) {
+          throw new Error("liveness worker lease binding has no unique open worker");
         }
-        case "liveness_worker_ended": {
-          const worker = folded.workers.get(stringField(payload, "worker_id"));
-          if (worker === undefined || worker.endedAtMs !== undefined) {
-            throw new Error("liveness worker end has no unique open lease");
-          }
-          worker.endedAtMs = integerField(payload, "at_ms");
-          break;
+        worker.leaseBinding = validateContract(
+          ChildWorkflowProgressLeaseBindingV1Schema,
+          payload.binding,
+          "stored worker progress lease binding"
+        );
+        break;
+      }
+      case "liveness_progress_observed": {
+        const worker = folded.workers.get(stringField(payload, "worker_id"));
+        if (worker === undefined || worker.endedAtMs !== undefined) {
+          throw new Error("liveness progress has no open worker lease");
         }
-        case "liveness_model_turn_charged": {
-          const worker = folded.workers.get(stringField(payload, "worker_id"));
-          if (worker === undefined) throw new Error("model turn has no worker lease");
-          worker.modelTurns += 1;
-          folded.modelTurns += 1;
-          break;
+        const atMs = integerField(payload, "at_ms");
+        if (atMs < worker.lastProgressAtMs) {
+          throw new Error("liveness progress time regressed");
         }
-        case "liveness_tool_call_charged": {
-          const worker = folded.workers.get(stringField(payload, "worker_id"));
-          if (worker === undefined) throw new Error("tool call has no worker lease");
-          worker.toolCalls += 1;
-          folded.toolCalls += 1;
-          if (payload.external === true) {
-            worker.externalCalls += 1;
-            folded.externalCalls += 1;
-          }
-          break;
+        const observedUnits = integerField(payload, "observed_units");
+        if (observedUnits === 0 || observedUnits > 16_777_216) {
+          throw new Error("stored liveness progress has invalid observed_units");
         }
-        case "liveness_malformed_charged": {
-          const stateId = stringField(payload, "state_id");
-          const branchId = nullableStringField(payload, "branch_id");
-          const digest = stringField(payload, "digest");
-          folded.malformedResults += 1;
-          increment(folded.malformedByBinding, bindingKey(stateId, branchId));
-          increment(folded.malformedDigests, `${bindingKey(stateId, branchId)}:${digest}`);
-          break;
+        stringField(payload, "activity_class");
+        worker.lastProgressAtMs = atMs;
+        worker.acceptedProgressSignals += 1;
+        break;
+      }
+      case "liveness_worker_ended": {
+        const worker = folded.workers.get(stringField(payload, "worker_id"));
+        if (worker === undefined || worker.endedAtMs !== undefined) {
+          throw new Error("liveness worker end has no unique open lease");
         }
-        case "liveness_protocol_error_charged": {
-          const worker = folded.workers.get(stringField(payload, "worker_id"));
-          if (worker === undefined) throw new Error("protocol error has no worker lease");
-          worker.protocolErrors += 1;
-          folded.protocolErrors += 1;
-          increment(worker.protocolDigests, stringField(payload, "digest"));
-          break;
+        worker.endedAtMs = integerField(payload, "at_ms");
+        break;
+      }
+      case "liveness_model_turn_charged": {
+        const worker = folded.workers.get(stringField(payload, "worker_id"));
+        if (worker === undefined) throw new Error("model turn has no worker lease");
+        worker.modelTurns += 1;
+        folded.modelTurns += 1;
+        break;
+      }
+      case "liveness_tool_call_charged": {
+        const worker = folded.workers.get(stringField(payload, "worker_id"));
+        if (worker === undefined) throw new Error("tool call has no worker lease");
+        worker.toolCalls += 1;
+        folded.toolCalls += 1;
+        if (payload.external === true) {
+          worker.externalCalls += 1;
+          folded.externalCalls += 1;
         }
-        default: {
-          const reason = terminalReason(payload.terminal_reason);
-          if (reason !== null) folded.terminalReason = reason;
-        }
+        break;
+      }
+      case "liveness_malformed_charged": {
+        const stateId = stringField(payload, "state_id");
+        const branchId = nullableStringField(payload, "branch_id");
+        const digest = stringField(payload, "digest");
+        folded.malformedResults += 1;
+        increment(folded.malformedByBinding, bindingKey(stateId, branchId));
+        increment(folded.malformedDigests, `${bindingKey(stateId, branchId)}:${digest}`);
+        break;
+      }
+      case "liveness_protocol_error_charged": {
+        const worker = folded.workers.get(stringField(payload, "worker_id"));
+        if (worker === undefined) throw new Error("protocol error has no worker lease");
+        const digest = stringField(payload, "digest");
+        worker.protocolErrors += 1;
+        folded.protocolErrors += 1;
+        increment(worker.protocolDigests, digest);
+        break;
+      }
+      default: {
+        const reason = terminalReason(payload.terminal_reason);
+        if (reason !== null) folded.terminalReason = reason;
       }
     }
-    return folded;
+  }
+
+  private fold(runId: string): FoldedLiveness {
+    let cached = this.foldedRuns.get(runId);
+    if (cached === undefined) {
+      cached = { folded: emptyFold(), throughSequence: 0 };
+      this.foldedRuns.set(runId, cached);
+    }
+    for (const event of this.checkpointer.eventsAfter(runId, cached.throughSequence)) {
+      this.applyEvent(cached.folded, event.eventType, event.payload);
+      cached.throughSequence = event.sequence;
+    }
+    return cached.folded;
+  }
+
+  private appendEvent(runId: string, eventType: string, payload: Record<string, JsonValue>): void {
+    this.checkpointer.appendLivenessEvent(runId, eventType, payload);
   }
 
   hasPolicy(runId: string): boolean {
@@ -488,23 +665,31 @@ export class LivenessController {
     return this.resolver?.(context) !== undefined;
   }
 
-  policy(runId: string): LivenessPolicyV1 | undefined {
+  policy(runId: string): LivenessPolicy | undefined {
     return this.fold(runId).policy;
   }
 
-  bindPolicy(context: RunContext): LivenessPolicyV1 {
+  bindPolicy(context: RunContext): LivenessPolicy {
     const folded = this.fold(context.identity.run_id);
     const current = folded.policy;
-    const resolved = this.resolver?.(context);
+    // Every historical V1/V2 policy is authoritative, including a bootstrap record. Only a V3
+    // bootstrap may resolve to another V3 preset within the same immutable lease registry.
+    if (current !== undefined && (current.schema_version !== 3 || current.preset !== "bootstrap")) {
+      return current;
+    }
+    const resolved = this.resolver?.(context, current);
     if (resolved === undefined) {
       throw new Error(`run '${context.identity.run_id}' has no host liveness policy`);
     }
-    validateContract(LivenessPolicyV1Schema, resolved, "resolved liveness policy");
+    validateContract(LivenessPolicySchema, resolved, "resolved liveness policy");
     if (current !== undefined && canonicalJson(current) === canonicalJson(resolved)) return current;
     if (current !== undefined && current.preset !== "bootstrap") {
       throw new Error("a bound liveness policy may only replace the bootstrap policy");
     }
-    this.checkpointer.appendLivenessEvent(context.identity.run_id, "liveness_policy_bound", {
+    if (current !== undefined && current.schema_version !== resolved.schema_version) {
+      throw new Error("bootstrap liveness policy version may not change during a run");
+    }
+    this.appendEvent(context.identity.run_id, "liveness_policy_bound", {
       schema_version: 1,
       at_ms: checkedNow(this.clock),
       policy: resolved,
@@ -523,23 +708,23 @@ export class LivenessController {
     const folded = this.fold(input.runId);
     const policy = this.requirePolicy(folded);
     this.assertWall(policy, folded, atMs);
-    if (folded.phaseInvocations >= policy.total_phase_repair_invocations) {
-      throw new LivenessExhaustedError("model_turn_budget_exhausted");
-    }
     const attemptKey = bindingKey(input.stateId, input.branchId);
     if (
-      (folded.phaseAttemptsByBinding.get(attemptKey) ?? 0) >= policy.total_phase_repair_invocations
+      policy.schema_version === 1 &&
+      (folded.phaseInvocations >= policy.total_phase_repair_invocations ||
+        (folded.phaseAttemptsByBinding.get(attemptKey) ?? 0) >=
+          policy.total_phase_repair_invocations)
     ) {
       throw new LivenessExhaustedError("model_turn_budget_exhausted");
     }
     if (
       input.purpose === "routing_repair" &&
-      (folded.repairByBinding.get(bindingKey(input.stateId, input.branchId)) ?? 0) >=
+      (folded.repairByBinding.get(attemptKey) ?? 0) >=
         policy.routing_repair.max_invocations_per_state_branch
     ) {
       throw new LivenessExhaustedError("malformed_result_budget_exhausted");
     }
-    this.checkpointer.appendLivenessEvent(input.runId, "liveness_invocation_admitted", {
+    this.appendEvent(input.runId, "liveness_invocation_admitted", {
       schema_version: 1,
       at_ms: atMs,
       state_id: input.stateId,
@@ -559,7 +744,7 @@ export class LivenessController {
     const atMs = checkedNow(this.clock);
     const folded = this.fold(input.runId);
     this.assertWall(this.requirePolicy(folded), folded, atMs);
-    this.checkpointer.appendLivenessEvent(input.runId, "liveness_worker_started", {
+    this.appendEvent(input.runId, "liveness_worker_started", {
       schema_version: 1,
       at_ms: atMs,
       worker_id: input.workerId,
@@ -569,11 +754,65 @@ export class LivenessController {
     });
   }
 
+  bindWorkerProgressLease(input: {
+    runId: string;
+    workerId: string;
+    providerId: string;
+    modelId: string;
+  }): ChildWorkflowProgressLeaseBindingV1 {
+    const atMs = checkedNow(this.clock);
+    const folded = this.fold(input.runId);
+    const policy = this.requirePolicy(folded);
+    if (policy.schema_version !== 3) {
+      throw new Error("only a V3 liveness policy can bind a progress lease");
+    }
+    if (
+      policy.lease_registry_id !== LIVENESS_LEASE_REGISTRY_ID ||
+      policy.lease_registry_sha256 !== LIVENESS_LEASE_REGISTRY_SHA256 ||
+      policy.calibration_id !== LIVENESS_CALIBRATION_ID ||
+      policy.calibration_sha256 !== LIVENESS_CALIBRATION_SHA256
+    ) {
+      throw new Error("bound V3 liveness registry is unavailable for exact replay");
+    }
+    const worker = folded.workers.get(input.workerId);
+    if (worker === undefined || worker.endedAtMs !== undefined) {
+      throw new Error("worker progress lease binding requires an open worker");
+    }
+    if (worker.leaseBinding !== undefined) {
+      if (
+        worker.leaseBinding.provider_id !== input.providerId ||
+        worker.leaseBinding.model_id !== input.modelId
+      ) {
+        throw new Error("worker progress lease is already bound to another model");
+      }
+      return worker.leaseBinding;
+    }
+    const binding = validateContract(
+      ChildWorkflowProgressLeaseBindingV1Schema,
+      workerProgressLeaseBinding({
+        providerId: input.providerId,
+        modelId: input.modelId,
+        purpose: worker.purpose,
+      }),
+      "resolved worker progress lease binding"
+    );
+    if (atMs - worker.lastProgressAtMs >= binding.inactivity_interval_ms) {
+      throw new LivenessExhaustedError("worker_inactivity_lease_expired");
+    }
+    this.appendEvent(input.runId, "liveness_worker_lease_bound", {
+      schema_version: 1,
+      at_ms: atMs,
+      worker_id: input.workerId,
+      binding,
+    });
+    return binding;
+  }
+
   endWorker(runId: string, workerId: string, outcome: "complete" | "error" | "cancelled"): void {
     const folded = this.fold(runId);
     const worker = folded.workers.get(workerId);
     if (worker === undefined || worker.endedAtMs !== undefined) return;
-    this.checkpointer.appendLivenessEvent(runId, "liveness_worker_ended", {
+    this.appendEvent(runId, "liveness_worker_ended", {
       schema_version: 1,
       at_ms: checkedNow(this.clock),
       worker_id: workerId,
@@ -602,14 +841,20 @@ export class LivenessController {
     }
     this.assertWall(policy, folded, atMs, worker);
     const repair = worker.purpose === "routing_repair";
+    if (event.kind === "activity") {
+      this.recordProgress(input.runId, input.workerId, atMs, event);
+      return;
+    }
     if (event.kind === "model_turn") {
-      const workerLimit = repair
-        ? policy.routing_repair.model_turns_per_worker
-        : policy.model_turns_per_worker;
-      if (worker.modelTurns >= workerLimit || folded.modelTurns >= policy.model_turns_per_run) {
+      const exhausted = repair
+        ? worker.modelTurns >= policy.routing_repair.model_turns_per_worker
+        : policy.schema_version === 1 &&
+          (worker.modelTurns >= policy.model_turns_per_worker ||
+            folded.modelTurns >= policy.model_turns_per_run);
+      if (exhausted) {
         throw new LivenessExhaustedError("model_turn_budget_exhausted");
       }
-      this.checkpointer.appendLivenessEvent(input.runId, "liveness_model_turn_charged", {
+      this.appendEvent(input.runId, "liveness_model_turn_charged", {
         schema_version: 1,
         at_ms: atMs,
         worker_id: input.workerId,
@@ -619,29 +864,34 @@ export class LivenessController {
     }
     if (event.kind === "tool_call") {
       const external = isExternalCallTool(event.tool_name);
-      const workerToolLimit = repair
-        ? policy.routing_repair.tool_calls_per_worker
-        : policy.tool_calls_per_worker;
-      const workerExternalLimit = repair
-        ? policy.routing_repair.external_calls_per_worker
-        : policy.external_calls_per_worker;
-      if (worker.toolCalls >= workerToolLimit || folded.toolCalls >= policy.tool_calls_per_run) {
+      const toolExhausted = repair
+        ? worker.toolCalls >= policy.routing_repair.tool_calls_per_worker
+        : policy.schema_version === 1 &&
+          (worker.toolCalls >= policy.tool_calls_per_worker ||
+            folded.toolCalls >= policy.tool_calls_per_run);
+      if (toolExhausted) {
         throw new LivenessExhaustedError("tool_call_budget_exhausted");
       }
-      if (
+      const externalExhausted =
         external &&
-        (worker.externalCalls >= workerExternalLimit ||
-          folded.externalCalls >= policy.external_calls_per_run)
-      ) {
+        (repair
+          ? worker.externalCalls >= policy.routing_repair.external_calls_per_worker
+          : policy.schema_version === 1 &&
+            (worker.externalCalls >= policy.external_calls_per_worker ||
+              folded.externalCalls >= policy.external_calls_per_run));
+      if (externalExhausted) {
         throw new LivenessExhaustedError("external_request_budget_exhausted");
       }
-      this.checkpointer.appendLivenessEvent(input.runId, "liveness_tool_call_charged", {
+      this.appendEvent(input.runId, "liveness_tool_call_charged", {
         schema_version: 1,
         at_ms: atMs,
         worker_id: input.workerId,
         tool_name: event.tool_name,
         external,
       });
+      if (event.progress !== undefined) {
+        this.recordProgress(input.runId, input.workerId, atMs, event.progress);
+      }
       return;
     }
     const digest = kbProtocolErrorDigest({
@@ -649,7 +899,7 @@ export class LivenessController {
       toolName: event.tool_name,
       errorCode: event.error_code,
     });
-    this.checkpointer.appendLivenessEvent(input.runId, "liveness_protocol_error_charged", {
+    this.appendEvent(input.runId, "liveness_protocol_error_charged", {
       schema_version: 1,
       at_ms: atMs,
       worker_id: input.workerId,
@@ -658,6 +908,9 @@ export class LivenessController {
       error_code: event.error_code,
       digest,
     });
+    if (event.progress !== undefined) {
+      this.recordProgress(input.runId, input.workerId, atMs, event.progress);
+    }
     const after = this.fold(input.runId);
     const charged = after.workers.get(input.workerId);
     if (charged === undefined) throw new Error("charged protocol worker is absent");
@@ -676,7 +929,7 @@ export class LivenessController {
     digest: string;
   }): LivenessTerminalReason | null {
     const policy = this.requirePolicy(this.fold(input.runId));
-    this.checkpointer.appendLivenessEvent(input.runId, "liveness_malformed_charged", {
+    this.appendEvent(input.runId, "liveness_malformed_charged", {
       schema_version: 1,
       at_ms: checkedNow(this.clock),
       state_id: input.stateId,
@@ -697,19 +950,50 @@ export class LivenessController {
     return null;
   }
 
-  remainingWorkerWallMs(runId: string, workerId: string): number {
+  /** Historical V1/V2 fixed-duration remainder. V3 has no elapsed-work gate. */
+  remainingWorkerWallMs(runId: string, workerId: string): number | undefined {
     const nowMs = checkedNow(this.clock);
     const folded = this.fold(runId);
     const policy = this.requirePolicy(folded);
+    if (policy.schema_version === 3) return undefined;
     const worker = folded.workers.get(workerId);
     if (worker === undefined) throw new Error("worker lease is absent");
-    const workerLimit =
-      worker.purpose === "routing_repair"
-        ? policy.routing_repair.worker_wall_clock_ms
-        : policy.worker_wall_clock_ms;
+    const workerLimit = this.workerActiveWorkBudget(policy, worker);
     const workerRemaining = workerLimit - Math.max(0, nowMs - worker.startedAtMs);
-    const runRemaining = policy.run_wall_clock_ms - unionDuration(activeIntervals(folded, nowMs));
+    const runRemaining =
+      this.runActiveWorkBudget(policy) - unionDuration(activeIntervals(folded, nowMs));
     return Math.max(0, Math.min(workerRemaining, runRemaining));
+  }
+
+  /** Current V3 inactivity remainder. Every accepted trusted progress signal renews one interval. */
+  workerInactivityLease(
+    runId: string,
+    workerId: string
+  ):
+    | {
+        readonly intervalMs: number;
+        readonly remainingMs: number;
+        readonly lastProgressAtMs: number;
+        readonly acceptedProgressSignals: number;
+        readonly binding?: ChildWorkflowProgressLeaseBindingV1;
+      }
+    | undefined {
+    const nowMs = checkedNow(this.clock);
+    const folded = this.fold(runId);
+    const policy = this.requirePolicy(folded);
+    if (policy.schema_version !== 3) return undefined;
+    const worker = folded.workers.get(workerId);
+    if (worker === undefined || worker.endedAtMs !== undefined) {
+      throw new Error("worker inactivity lease requires an open worker");
+    }
+    const intervalMs = this.workerInactivityInterval(policy, worker);
+    return {
+      intervalMs,
+      remainingMs: Math.max(0, intervalMs - Math.max(0, nowMs - worker.lastProgressAtMs)),
+      lastProgressAtMs: worker.lastProgressAtMs,
+      acceptedProgressSignals: worker.acceptedProgressSignals,
+      ...(worker.leaseBinding === undefined ? {} : { binding: worker.leaseBinding }),
+    };
   }
 
   cancelOpenWorkers(runId: string): void {
@@ -724,32 +1008,76 @@ export class LivenessController {
     const folded = this.fold(runId);
     const policy = folded.policy;
     if (policy === undefined) return null;
+    if (policy.schema_version === 3) {
+      // Process downtime is not trusted worker inactivity. Fence the interrupted sessions and let
+      // normal recovery reissue work under fresh worker IDs and leases.
+      for (const worker of folded.workers.values()) {
+        if (worker.endedAtMs === undefined) this.endWorker(runId, worker.workerId, "error");
+      }
+      return null;
+    }
     let reason: LivenessTerminalReason | null = null;
     for (const worker of folded.workers.values()) {
       if (worker.endedAtMs !== undefined) continue;
-      const limit =
-        worker.purpose === "routing_repair"
-          ? policy.routing_repair.worker_wall_clock_ms
-          : policy.worker_wall_clock_ms;
+      const limit = this.workerActiveWorkBudget(policy, worker);
       if (atMs - worker.startedAtMs >= limit) reason = "worker_wall_clock_exhausted";
       this.endWorker(runId, worker.workerId, "error");
     }
     const reconciled = this.fold(runId);
-    if (unionDuration(activeIntervals(reconciled, atMs)) >= policy.run_wall_clock_ms) {
+    if (unionDuration(activeIntervals(reconciled, atMs)) >= this.runActiveWorkBudget(policy)) {
       return "run_wall_clock_exhausted";
     }
     return reason;
   }
 
-  /** Read-only host projection from the bound policy and durable worker/run counters. */
-  workerPromptBudget(runId: string, workerId: string): WorkerPromptBudgetV1 {
+  /** Read-only host projection. V2 exposes fixed time; V3 exposes renewable inactivity only. */
+  workerPromptBudget(runId: string, workerId: string): WorkerPromptBudget {
+    const nowMs = checkedNow(this.clock);
     const folded = this.fold(runId);
     const policy = this.requirePolicy(folded);
     const worker = folded.workers.get(workerId);
     if (worker === undefined || worker.endedAtMs !== undefined) {
       throw new Error("prompt budget requires an open worker lease");
     }
-    const repair = worker.purpose === "routing_repair";
+    if (policy.schema_version === 3) {
+      const lease = this.workerInactivityLease(runId, workerId);
+      if (lease === undefined) throw new Error("V3 worker lease projection is absent");
+      const fallback = fallbackWorkerLeaseProfile(worker.purpose);
+      return {
+        schema_version: 3,
+        preset: policy.preset,
+        purpose: worker.purpose,
+        inactivity_lease: {
+          registry_id: policy.lease_registry_id,
+          profile_id: lease.binding?.profile_id ?? fallback.profile_id,
+          profile_sha256: lease.binding?.profile_sha256 ?? fallback.profile_sha256,
+          interval_ms: lease.intervalMs,
+          remaining_ms: lease.remainingMs,
+          last_progress_at_ms: lease.lastProgressAtMs,
+          accepted_progress_signals: lease.acceptedProgressSignals,
+        },
+      };
+    }
+    if (policy.schema_version === 2 && worker.purpose === "phase") {
+      const workerRemaining = Math.max(
+        0,
+        this.workerActiveWorkBudget(policy, worker) - Math.max(0, nowMs - worker.startedAtMs)
+      );
+      const runRemaining = Math.max(
+        0,
+        this.runActiveWorkBudget(policy) - unionDuration(activeIntervals(folded, nowMs))
+      );
+      return {
+        schema_version: 2,
+        preset: policy.preset,
+        purpose: worker.purpose,
+        active_work: {
+          worker_remaining_ms: workerRemaining,
+          run_remaining_ms: runRemaining,
+          effective_remaining_ms: Math.min(workerRemaining, runRemaining),
+        },
+      };
+    }
     const remaining = (
       workerLimit: number,
       workerUsed: number,
@@ -764,24 +1092,52 @@ export class LivenessController {
         effective_remaining: Math.min(workerRemaining, runRemaining),
       };
     };
+    if (worker.purpose === "routing_repair") {
+      return {
+        schema_version: 1,
+        preset: policy.preset,
+        purpose: worker.purpose,
+        model_turns: remaining(
+          policy.routing_repair.model_turns_per_worker,
+          worker.modelTurns,
+          policy.routing_repair.model_turns_per_worker,
+          worker.modelTurns
+        ),
+        tool_calls: remaining(
+          policy.routing_repair.tool_calls_per_worker,
+          worker.toolCalls,
+          policy.routing_repair.tool_calls_per_worker,
+          worker.toolCalls
+        ),
+        external_requests: remaining(
+          policy.routing_repair.external_calls_per_worker,
+          worker.externalCalls,
+          policy.routing_repair.external_calls_per_worker,
+          worker.externalCalls
+        ),
+      };
+    }
+    if (policy.schema_version !== 1) {
+      throw new Error("ordinary V2 prompt projection must carry active-work budget");
+    }
     return {
       schema_version: 1,
       preset: policy.preset,
       purpose: worker.purpose,
       model_turns: remaining(
-        repair ? policy.routing_repair.model_turns_per_worker : policy.model_turns_per_worker,
+        policy.model_turns_per_worker,
         worker.modelTurns,
         policy.model_turns_per_run,
         folded.modelTurns
       ),
       tool_calls: remaining(
-        repair ? policy.routing_repair.tool_calls_per_worker : policy.tool_calls_per_worker,
+        policy.tool_calls_per_worker,
         worker.toolCalls,
         policy.tool_calls_per_run,
         folded.toolCalls
       ),
       external_requests: remaining(
-        repair ? policy.routing_repair.external_calls_per_worker : policy.external_calls_per_worker,
+        policy.external_calls_per_worker,
         worker.externalCalls,
         policy.external_calls_per_run,
         folded.externalCalls
@@ -789,7 +1145,25 @@ export class LivenessController {
     };
   }
 
-  /** P2 value-preserving projection from existing durable invocation events. */
+  /** Durable, content-free resource usage for child allocation settlement and status. */
+  resourceUsage(runId: string): {
+    readonly model_turns: number;
+    readonly tool_calls: number;
+    readonly external_calls: number;
+    readonly active_wall_clock_ms: number;
+  } {
+    const atMs = checkedNow(this.clock);
+    const folded = this.fold(runId);
+    this.requirePolicy(folded);
+    return {
+      model_turns: folded.modelTurns,
+      tool_calls: folded.toolCalls,
+      external_calls: folded.externalCalls,
+      active_wall_clock_ms: unionDuration(activeIntervals(folded, atMs)),
+    };
+  }
+
+  /** Value-preserving invocation telemetry; V2 never interprets it as an admission ceiling. */
   phaseAttemptProjection(runId: string): Readonly<Record<string, number>> {
     return Object.fromEntries([...this.fold(runId).phaseAttemptsByBinding.entries()].sort());
   }
@@ -820,28 +1194,79 @@ export class LivenessController {
     );
   }
 
-  private requirePolicy(folded: FoldedLiveness): LivenessPolicyV1 {
+  private requirePolicy(folded: FoldedLiveness): LivenessPolicy {
     if (folded.policy === undefined) throw new Error("legacy_unmetered");
     return folded.policy;
   }
 
+  private recordProgress(
+    runId: string,
+    workerId: string,
+    atMs: number,
+    progress: { readonly activity_class: string; readonly observed_units: number }
+  ): void {
+    if (
+      !Number.isSafeInteger(progress.observed_units) ||
+      progress.observed_units <= 0 ||
+      progress.observed_units > 16_777_216
+    ) {
+      throw new Error("liveness progress observed_units must be a bounded positive integer");
+    }
+    this.appendEvent(runId, "liveness_progress_observed", {
+      schema_version: 1,
+      at_ms: atMs,
+      worker_id: workerId,
+      activity_class: progress.activity_class,
+      observed_units: progress.observed_units,
+    });
+  }
+
+  private workerInactivityInterval(policy: LivenessPolicyV3, worker: FoldedWorker): number {
+    if (worker.leaseBinding !== undefined) return worker.leaseBinding.inactivity_interval_ms;
+    return worker.purpose === "routing_repair"
+      ? policy.unknown_provider_routing_repair_inactivity_ms
+      : policy.unknown_provider_phase_inactivity_ms;
+  }
+
+  private workerActiveWorkBudget(
+    policy: LivenessPolicyV1 | LivenessPolicyV2,
+    worker: FoldedWorker
+  ): number {
+    if (worker.purpose === "routing_repair") return policy.routing_repair.worker_wall_clock_ms;
+    return policy.schema_version === 1
+      ? policy.worker_wall_clock_ms
+      : policy.worker_active_work_budget_ms;
+  }
+
+  private runActiveWorkBudget(policy: LivenessPolicyV1 | LivenessPolicyV2): number {
+    return policy.schema_version === 1
+      ? policy.run_wall_clock_ms
+      : policy.run_active_work_budget_ms;
+  }
+
   private assertWall(
-    policy: LivenessPolicyV1,
+    policy: LivenessPolicy,
     folded: FoldedLiveness,
     atMs: number,
     worker?: FoldedWorker
   ): void {
-    if (unionDuration(activeIntervals(folded, atMs)) >= policy.run_wall_clock_ms) {
+    if (policy.schema_version === 3) {
+      if (
+        worker !== undefined &&
+        atMs - worker.lastProgressAtMs >= this.workerInactivityInterval(policy, worker)
+      ) {
+        throw new LivenessExhaustedError("worker_inactivity_lease_expired");
+      }
+      return;
+    }
+    if (unionDuration(activeIntervals(folded, atMs)) >= this.runActiveWorkBudget(policy)) {
       throw new LivenessExhaustedError("run_wall_clock_exhausted");
     }
-    if (worker !== undefined) {
-      const workerLimit =
-        worker.purpose === "routing_repair"
-          ? policy.routing_repair.worker_wall_clock_ms
-          : policy.worker_wall_clock_ms;
-      if (atMs - worker.startedAtMs >= workerLimit) {
-        throw new LivenessExhaustedError("worker_wall_clock_exhausted");
-      }
+    if (
+      worker !== undefined &&
+      atMs - worker.startedAtMs >= this.workerActiveWorkBudget(policy, worker)
+    ) {
+      throw new LivenessExhaustedError("worker_wall_clock_exhausted");
     }
   }
 }

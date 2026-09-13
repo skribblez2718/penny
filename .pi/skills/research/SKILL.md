@@ -29,51 +29,357 @@ metadata:
 - Implementation when sufficient evidence exists: proceed directly.
 - The user requests immediate execution and research would not change the result.
 
+<!-- PENNY:GENERATED-INVOCATION:START -->
+
 ## Invocation
 
-Invoke through the `skill` tool:
+This block is generated from the active runtime registration, its real caller constraints schema, and contract I/O. Do not edit it by hand.
 
-```text
+<!-- prettier-ignore -->
+```ts
 skill({
   skill_name: "research",
-  goal: "Your research query here"
-})
+  goal: "Research the supplied question.",
+  constraints: {"mode":"quick","scope":{"exclude":[],"include":[]}},
+});
 ```
 
-| Parameter | Required | Description |
-|---|---:|---|
-| `skill_name` | yes | Must be `research`. |
-| `goal` | yes | Research question; normalized into `ResearchRequestV1`. |
-| `session_id` | no | Generated when omitted. |
-| `constraints` | no | Closed research mode, scope, budget, context, and output-shape fields below. |
-| `model` | no | Optional test/caller override; production defaults remain in agent SSOT. |
+The request port is `penny.research-request.v1` v1. Caller artifacts must be exact admitted ports; ordinary constraints cannot set host liveness.
 
-### Current constraints
+### Contract I/O
 
-| Constraint | Default | Meaning |
-|---|---:|---|
-| `mode` | unset | `quick`, `standard`, or `deep`; omit to let Piper declare it. Only explicit caller `quick` skips planning. |
-| `scope.include` / `scope.exclude` | empty | Distinct bounded scope lists. |
-| `report_format` | unset | **Deprecated compatibility field.** Becomes caller-owned `output_shape_guidance` for Synthia, report Carren, and Vera. |
-| `max_sub_queries` | 4 | Decomposition width, effectively `min(max_sub_queries, max_fan_width)`. |
-| `max_fan_width` | 8 | Maximum parallel Echo branches. |
-| `verification_model_override` | unset | Canonical Vera-only model policy; legacy alias: `validate_model`. |
-| `critique_passes` | by mode | `0` none, `1` report critique, `2` plan plus report critique. |
-| `total_research_rounds` | by mode | Initial plus evidence-seeking rounds; legacy alias: `max_research_rounds`. |
-| `max_evaluator_attempts_per_loop` | 3 | Evaluator attempts; legacy alias: `max_iterations`. Repairs are attempts minus one. |
-| `context_bindings` | empty | Identifier-only versioned-document, pre-resolved approved-KB, or caller output-shape bindings. |
+- `request` — input/inline_request; schema `penny.research-request.v1` v1; 1..1 item(s).
+- `prior_grounded_synthesis` — input/artifact; schema `penny.grounded-synthesis.v1` v1; 0..8 item(s); artifact kind semantic-core.
+- `legacy_context` — input/artifact; schema `penny.research-legacy-agent-output.v1` v1; 0..64 item(s); artifact kind agent-output.
+- `grounded_synthesis` — output/artifact; schema `penny.grounded-synthesis.v1` v1; 1..1 item(s); artifact kind semantic-core.
 
-`rigor_escalation` is rejected. Caller input cannot set host liveness ceilings or counters.
+### Runtime constraints schema
 
-### Presets
+<!-- prettier-ignore -->
+```json
+{
+  "type": "object",
+  "properties": {
+    "mode": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "quick"
+        },
+        {
+          "type": "string",
+          "const": "standard"
+        },
+        {
+          "type": "string",
+          "const": "deep"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "required": [
+        "include",
+        "exclude"
+      ],
+      "properties": {
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 32768
+          },
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 32768
+          },
+          "maxItems": 32,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "verification_model_override": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "validate_model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "budget_overrides": {
+      "type": "object",
+      "properties": {
+        "max_sub_queries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "max_fan_width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "total_research_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "max_evaluator_attempts_per_loop": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "critique_passes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "max_sub_queries": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "max_fan_width": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "total_research_rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "max_research_rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "max_evaluator_attempts_per_loop": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "max_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "critique_passes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2
+    },
+    "context_bindings": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "slot",
+              "binding_kind",
+              "selected_by",
+              "source_id",
+              "document_id",
+              "revision_id",
+              "expected_sha256"
+            ],
+            "properties": {
+              "slot": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "domain_guidance"
+                  },
+                  {
+                    "type": "string",
+                    "const": "standard_guidance"
+                  },
+                  {
+                    "type": "string",
+                    "const": "output_shape_guidance"
+                  }
+                ]
+              },
+              "binding_kind": {
+                "type": "string",
+                "const": "versioned_document"
+              },
+              "selected_by": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "caller"
+                  },
+                  {
+                    "type": "string",
+                    "const": "host"
+                  }
+                ]
+              },
+              "source_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "document_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "revision_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "expected_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "slot",
+              "binding_kind",
+              "selected_by",
+              "source_id",
+              "kb_profile_id",
+              "result_id",
+              "expected_sha256"
+            ],
+            "properties": {
+              "slot": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "domain_guidance"
+                  },
+                  {
+                    "type": "string",
+                    "const": "standard_guidance"
+                  },
+                  {
+                    "type": "string",
+                    "const": "output_shape_guidance"
+                  }
+                ]
+              },
+              "binding_kind": {
+                "type": "string",
+                "const": "approved_kb_result"
+              },
+              "selected_by": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "caller"
+                  },
+                  {
+                    "type": "string",
+                    "const": "host"
+                  }
+                ]
+              },
+              "source_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "kb_profile_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "result_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "expected_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "slot",
+              "binding_kind",
+              "selected_by",
+              "source_id",
+              "content"
+            ],
+            "properties": {
+              "slot": {
+                "type": "string",
+                "const": "output_shape_guidance"
+              },
+              "binding_kind": {
+                "type": "string",
+                "const": "caller_input"
+              },
+              "selected_by": {
+                "type": "string",
+                "const": "caller"
+              },
+              "source_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "content": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32768
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "maxItems": 9
+    },
+    "report_format": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32768
+    }
+  },
+  "additionalProperties": false
+}
+```
 
-| Mode | Plan critique | Report critique | Total research rounds | Evaluator attempts |
-|---|---:|---:|---:|---:|
-| quick | no | no | 2 | 3 |
-| standard | no | no | 2 | 3 |
-| deep | yes | yes | 3 | 3 |
+<!-- PENNY:GENERATED-INVOCATION:END -->
 
-P1 liveness values remain unchanged. Deterministic liveness, cancellation, and best-partial behavior are locally certified. The live-model PG4 Quick gate passed in verified run `p4-qr-live-20260827-009`; no provider rerun is required.
+New V3 runs use host-enforced renewable inactivity leases rather than ordinary model-turn, phase-admission, tool-call, external-call, or total elapsed-work quotas. Trusted non-empty Pi generation/tool activity and durable workflow convergence renew the lease; independent host-operation deadlines, routing repair, malformed/protocol protections, cancellation, and exact V1/V2 continuation remain bounded. Deterministic offline liveness and cancellation behavior are locally certified. The live-model PG4 Quick gate passed in verified run `p4-qr-live-20260827-009`; no provider rerun is required.
 
 ## Exact Artifact Handoff
 

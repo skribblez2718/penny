@@ -30,6 +30,7 @@ import { Type, type Static } from "typebox";
 import {
   adaptPiJsonMessage,
   createPendingSingleResult,
+  createStatePreflightFailureResult,
   formatUsageStats,
   getFinalOutput,
   mapWithConcurrencyLimit,
@@ -75,6 +76,7 @@ import {
 import { createChildLifecycleScope, type ChildLifecycleScope } from "./child-lifecycle.js";
 import {
   classifyWorkerResult,
+  formatWorkerDiagnostics,
   formatWorkerOutcomeBoundary,
   formatWorkerOutcomeSummaryBoundary,
   sealWorkerTerminalOutcome,
@@ -393,7 +395,41 @@ const SubagentParams = Type.Object({
 type SubagentToolParams = Static<typeof SubagentParams>;
 
 /** Raised when a caller-supplied artifact ID fails existence/integrity preflight. */
-class InputArtifactError extends Error {}
+class InputArtifactError extends Error {
+  constructor(
+    message: string,
+    readonly stateFailure?: NonNullable<SingleResult["stateFailure"]>
+  ) {
+    super(message);
+    this.name = "InputArtifactError";
+  }
+}
+
+function artifactStateFailure(
+  error: ArtifactClientError
+): NonNullable<SingleResult["stateFailure"]> | undefined {
+  const metadata = error.metadata;
+  const code = metadata["state_error_code"];
+  if (typeof code !== "string") return undefined;
+  return {
+    code,
+    details: {
+      ...(metadata["component"] === "orchestration" ? { component: "orchestration" as const } : {}),
+      ...(typeof metadata["actual_schema_version"] === "number"
+        ? { actualSchemaVersion: metadata["actual_schema_version"] }
+        : {}),
+      ...(typeof metadata["required_schema_version"] === "number"
+        ? { requiredSchemaVersion: metadata["required_schema_version"] }
+        : {}),
+      ...(typeof metadata["upgrade_supported"] === "boolean"
+        ? { upgradeSupported: metadata["upgrade_supported"] }
+        : {}),
+      ...(metadata["recovery_action"] === "penny-state-upgrade"
+        ? { recoveryAction: "penny-state-upgrade" as const }
+        : {}),
+    },
+  };
+}
 
 interface HostToolCatalog {
   getAllTools(): unknown;
@@ -438,8 +474,14 @@ export default function (pi: ExtensionAPI) {
         (read) => read.ref
       );
     } catch (error) {
-      const code = error instanceof ArtifactClientError ? error.code : "ARTIFACT_MISSING";
-      throw new InputArtifactError(`${code}: input artifact existence/integrity preflight failed`);
+      if (error instanceof ArtifactClientError) {
+        const stateFailure = artifactStateFailure(error);
+        if (stateFailure !== undefined) throw new InputArtifactError(error.message, stateFailure);
+        throw new InputArtifactError(
+          `${error.code}: input artifact existence/integrity preflight failed`
+        );
+      }
+      throw new InputArtifactError("ARTIFACT_MISSING: input artifact preflight failed");
     }
     logger.info("subagent_input_artifacts_verified", {
       count: refs.length,
@@ -464,13 +506,15 @@ export default function (pi: ExtensionAPI) {
   }): Promise<void> => {
     for (const result of options.results) {
       sealWorkerTerminalOutcome(result);
-      result.outputArtifactRequired = true;
-      result.outputArtifactState = "pending";
+      const preSpawnFailure =
+        result.processState === "setup_failed" && result.messages.length === 0;
+      result.outputArtifactRequired = !preSpawnFailure;
+      result.outputArtifactState = preSpawnFailure ? undefined : "pending";
     }
 
     for (let index = 0; index < options.results.length; index += 1) {
       const result = options.results[index];
-      if (result === undefined) continue;
+      if (result === undefined || result.outputArtifactRequired !== true) continue;
       try {
         result.outputArtifactRef = await persistDirectChainOutput({
           metadata: directAgentOutputMetadata({
@@ -498,6 +542,10 @@ export default function (pi: ExtensionAPI) {
             0,
             240
           );
+        result.outputArtifactFailure = {
+          code,
+          metadata: error instanceof ArtifactClientError ? error.metadata : {},
+        };
         logger.warn("subagent_output_persist_failed", {
           errorCode: code,
           agent: result.agent,
@@ -617,6 +665,39 @@ export default function (pi: ExtensionAPI) {
           )
         );
       } catch (error) {
+        if (error instanceof InputArtifactError && error.stateFailure !== undefined) {
+          const blocked = params.agent
+            ? [{ agent: params.agent, task: params.task ?? "" }]
+            : params.tasks && params.tasks.length > 0
+              ? params.tasks
+              : (params.chain?.slice(0, 1) ?? []);
+          const results = blocked.map((item, index) =>
+            createStatePreflightFailureResult({
+              agent: item.agent,
+              agentSource:
+                agents.find((candidate) => candidate.name === item.agent)?.source ?? "unknown",
+              task: item.task,
+              error,
+              stateFailure: error.stateFailure,
+              ...(requestedMode === "chain" ? { step: index } : {}),
+            })
+          );
+          const outcome = summarizeWorkerResults(results);
+          return {
+            content: [
+              {
+                type: "text",
+                text: [
+                  `Parent outcome: ${formatWorkerOutcomeSummaryBoundary(outcome)}`,
+                  "Delegation did not start because retained state is unavailable.",
+                  ...results.map((result) => `Diagnostic: ${formatWorkerDiagnostics(result)}`),
+                ].join("\n"),
+              },
+            ],
+            details: makeDetails(requestedMode)(results),
+            isError: true,
+          };
+        }
         if (!(error instanceof InputArtifactError)) throw error;
         return {
           content: [{ type: "text", text: `Delegation preflight failed. ${error.message}` }],
@@ -747,40 +828,47 @@ export default function (pi: ExtensionAPI) {
           );
           sealWorkerTerminalOutcome(result);
           const exactOutput = getFinalOutput(result.messages);
-          result.outputArtifactRequired = true;
-          result.outputArtifactState = "pending";
-          try {
-            const persisted = await persistDirectChainOutput({
-              metadata: outputMetadata,
-              output: exactOutput,
-              cwd: ctx.cwd,
-              env: process.env,
-            });
-            result.outputArtifactRef = persisted;
-            result.outputArtifactState = "persisted";
-            logger.info("subagent_output_artifact_verified", {
-              mode: "chain",
-              agent: step.agent,
-              step: i + 1,
-              artifactId: persisted.artifact_id,
-            });
-          } catch (error) {
-            const code =
-              error instanceof ArtifactClientError ? error.code : "ARTIFACT_PERSIST_FAILED";
-            result.outputArtifactState = "failed";
-            result.outputArtifactError =
-              `${code}: exact output for '${result.agent}' could not be persisted and re-read`.slice(
-                0,
-                240
-              );
+          const preSpawnFailure =
+            result.processState === "setup_failed" && result.messages.length === 0;
+          result.outputArtifactRequired = !preSpawnFailure;
+          result.outputArtifactState = preSpawnFailure ? undefined : "pending";
+          if (!preSpawnFailure) {
+            try {
+              const persisted = await persistDirectChainOutput({
+                metadata: outputMetadata,
+                output: exactOutput,
+                cwd: ctx.cwd,
+                env: process.env,
+              });
+              result.outputArtifactRef = persisted;
+              result.outputArtifactState = "persisted";
+              logger.info("subagent_output_artifact_verified", {
+                mode: "chain",
+                agent: step.agent,
+                step: i + 1,
+                artifactId: persisted.artifact_id,
+              });
+            } catch (error) {
+              const code =
+                error instanceof ArtifactClientError ? error.code : "ARTIFACT_PERSIST_FAILED";
+              result.outputArtifactState = "failed";
+              result.outputArtifactError =
+                `${code}: exact output for '${result.agent}' could not be persisted and re-read`.slice(
+                  0,
+                  240
+                );
+              result.outputArtifactFailure = {
+                code,
+                metadata: error instanceof ArtifactClientError ? error.metadata : {},
+              };
+            }
           }
           results.push(result);
 
           if (workerResultHasError(result)) {
             const outcomeSummary = summarizeWorkerResults(results);
             const details = makeDetails("chain")(results);
-            const diagnostic =
-              result.outputArtifactError || result.errorMessage || result.stderr || "none";
+            const diagnostic = formatWorkerDiagnostics(result) || "none";
             const refBlock = result.outputArtifactRef
               ? exactOutputBlock(result.outputArtifactRef)
               : "";
@@ -956,8 +1044,10 @@ export default function (pi: ExtensionAPI) {
           const suffix = result.outputArtifactRef
             ? inlineArtifactMarker(result.outputArtifactRef)
             : "";
-          const diagnosticText = result.outputArtifactError || result.errorMessage;
-          const diagnostic = diagnosticText ? `; diagnostic=${diagnosticText}` : "";
+          const diagnosticText = formatWorkerDiagnostics(result);
+          const diagnostic = diagnosticText
+            ? `; diagnostic=${diagnosticText.replaceAll("\n", "; ")}`
+            : "";
           return `[${result.agent}] ${formatWorkerOutcomeBoundary(result)}; preview=${preview || "(no output)"}${diagnostic}${suffix}`;
         });
         const parallelText =
@@ -1017,7 +1107,7 @@ export default function (pi: ExtensionAPI) {
         });
 
         const exactOutput = getFinalOutput(result.messages) || "(no output)";
-        const diagnostic = result.outputArtifactError || result.errorMessage || result.stderr;
+        const diagnostic = formatWorkerDiagnostics(result);
         const outcomeSummary = summarizeWorkerResults([result]);
         const details = makeDetails("single")([result]);
         const terminalText = [
@@ -1140,7 +1230,7 @@ export default function (pi: ExtensionAPI) {
               : theme.fg("success", "✓");
         const displayItems = getDisplayItems(r.messages);
         const finalOutput = getFinalOutput(r.messages);
-        const terminalError = r.outputArtifactError || r.errorMessage;
+        const terminalError = formatWorkerDiagnostics(r);
         const statusLabel = `[${summary.status}; worker=${workerOutcome.status}]`;
         const statusText = parentHasError
           ? theme.fg("error", statusLabel)
@@ -1281,7 +1371,7 @@ export default function (pi: ExtensionAPI) {
             container.addChild(
               new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0)
             );
-            const diagnostic = r.outputArtifactError || r.errorMessage;
+            const diagnostic = formatWorkerDiagnostics(r);
             if (workerResultHasError(r) && diagnostic) {
               container.addChild(new Text(theme.fg("error", `Error: ${diagnostic}`), 0, 0));
             }
@@ -1338,7 +1428,7 @@ export default function (pi: ExtensionAPI) {
           const displayItems = getDisplayItems(r.messages);
           text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
           text += `\n${theme.fg("muted", formatWorkerOutcomeBoundary(r))}`;
-          const diagnostic = r.outputArtifactError || r.errorMessage;
+          const diagnostic = formatWorkerDiagnostics(r);
           if (workerResultHasError(r) && diagnostic)
             text += `\n${theme.fg("error", `Error: ${diagnostic}`)}`;
           if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
@@ -1393,7 +1483,7 @@ export default function (pi: ExtensionAPI) {
             container.addChild(
               new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0)
             );
-            const diagnostic = r.outputArtifactError || r.errorMessage;
+            const diagnostic = formatWorkerDiagnostics(r);
             if (workerResultHasError(r) && diagnostic) {
               container.addChild(new Text(theme.fg("error", `Error: ${diagnostic}`), 0, 0));
             }
@@ -1443,7 +1533,7 @@ export default function (pi: ExtensionAPI) {
           const displayItems = getDisplayItems(r.messages);
           text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
           text += `\n${theme.fg("muted", formatWorkerOutcomeBoundary(r))}`;
-          const diagnostic = r.outputArtifactError || r.errorMessage;
+          const diagnostic = formatWorkerDiagnostics(r);
           if (workerResultHasError(r) && diagnostic)
             text += `\n${theme.fg("error", `Error: ${diagnostic}`)}`;
           if (displayItems.length === 0)

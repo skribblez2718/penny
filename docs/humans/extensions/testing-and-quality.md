@@ -87,14 +87,17 @@ A newly added but unmapped test fails inventory rather than silently disappearin
 
 ## Live-model gate
 
-The sole live-model configuration is
-`apps/orchestration/vitest.kb-model-smoke.config.ts`. The aggregate TypeScript test coordinator must
-route it through the permanent `test:kb-model-smoke:aggregate` script. That script skips with an
-explicit message unless `PENNY_KB_MODEL_SMOKE=1`.
+Live-model configurations are explicitly gated. The KB cohort,
+`apps/orchestration/vitest.kb-model-smoke.config.ts`, is routed through
+`test:kb-model-smoke:aggregate` and skips unless `PENNY_KB_MODEL_SMOKE=1`. The disposable active
+child-workflow cohort, `apps/orchestration/vitest.child-workflow-model-smoke.config.ts`, is routed
+through `test:child-workflow-model-smoke:aggregate` and skips unless
+`PENNY_CHILD_WORKFLOW_MODEL_SMOKE=1`. Its Ollama model defaults to `qwen3.8:latest` and can be pinned
+explicitly with `PENNY_CHILD_WORKFLOW_MODEL_SMOKE_MODEL`.
 
-Setting `PENNY_KB_MODEL_SMOKE=1` opts into the predeclared live KB model cohort and requires separate
-authorization because it can contact an external model and incur cost. Default local and offline gates
-do not silently set it. A skipped live cohort is reported as skipped, never counted as an executed
+Each variable opts into only its predeclared bounded cohort and requires separate authorization
+because it can contact a model and incur cost. Default local and offline gates do not silently set
+either variable. A skipped live cohort is reported as skipped, never counted as an executed
 live-model pass. Browser-backed Playwright suites and live YouTube transcript checks are separate
 external gates: set `PENNY_PLAYWRIGHT_BROWSER_TESTS=1` or `PENNY_YOUTUBE_NETWORK_TESTS=1` only when
 Chromium or network access is deliberately authorized.

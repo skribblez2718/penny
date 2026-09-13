@@ -3,18 +3,34 @@ import path from "node:path";
 import { deleteStateMigrationLegacy, prepareStateMigrationDeletion } from "./deletion.js";
 import { createStateMigrationPlan } from "./migration-plan.js";
 import { applyStateMigration, finalizeStateMigration, verifyStateMigration } from "./migration.js";
-import { initializePennyState, relinkPennyProject, resolvePennyStateStatus } from "./setup.js";
+import {
+  initializePennyState,
+  relinkPennyProject,
+  resolvePennyRuntimeState,
+  resolvePennyStateStatus,
+} from "./setup.js";
+import { upgradePennyState } from "./upgrade.js";
 
 export type StateCommandResult =
   | {
       readonly schema_version: 1;
-      readonly action: "init" | "status" | "relink";
+      readonly action: "init" | "readiness" | "status" | "relink";
       readonly project_id: string;
       readonly state_root: string;
       readonly project_state_root: string;
       readonly orchestration_database: string;
       readonly orchestration_receipt_key: string;
       readonly artifact_manifest_database: string;
+    }
+  | {
+      readonly schema_version: 1;
+      readonly action: "upgrade";
+      readonly project_id: string;
+      readonly source_schema_version: number;
+      readonly target_schema_version: number;
+      readonly changed: boolean;
+      readonly backup_root: string | null;
+      readonly backup_database: string | null;
     }
   | {
       readonly schema_version: 1;
@@ -35,6 +51,7 @@ export type StateCommandResult =
       readonly semantic_verification?: {
         readonly historical_receipts_verified: number;
         readonly artifact_object_bindings_verified: number;
+        readonly child_workflow_call_artifact_refs_verified: number;
         readonly skill_chain_artifact_refs_verified: number;
         readonly kb_authorities: readonly unknown[];
       };
@@ -44,7 +61,9 @@ export type StateCommandResult =
 const HELP = [
   "Usage:",
   "  penny-state init --project-root=PATH",
+  "  penny-state readiness --project-root=PATH",
   "  penny-state status --project-root=PATH",
+  "  penny-state upgrade --project-root=PATH --backup-dir=PATH",
   "  penny-state relink --project-id=ID --current-project-root=PATH --replacement-project-root=PATH",
   "  penny-state migrate plan --project-root=PATH --source-manifest=PATH --output=PATH",
   "  penny-state migrate apply --project-root=PATH --source-manifest=PATH --plan=PATH",
@@ -56,7 +75,8 @@ const HELP = [
   "State location:",
   "  ${PENNY_STATE_ROOT:-<Pi getAgentDir()>/penny}",
   "",
-  "Init/status never inspect or import legacy roots; only explicit migrate phases read named sources.",
+  "Init/readiness/status never mutate or import retained state; upgrade handles only a recognized active-project schema.",
+  "Only explicit migrate phases read named legacy sources.",
 ].join("\n");
 
 function option(arguments_: readonly string[], name: string): string | undefined {
@@ -73,7 +93,7 @@ function requiredAbsoluteOption(arguments_: readonly string[], name: string): st
 }
 
 function result(
-  action: "init" | "status" | "relink",
+  action: "init" | "readiness" | "status" | "relink",
   binding: ReturnType<typeof initializePennyState>
 ): StateCommandResult {
   return {
@@ -100,9 +120,32 @@ export async function executeStateCommand(
     const projectRoot = requiredAbsoluteOption(arguments_, "project-root");
     return result("init", initializePennyState(projectRoot, { env }));
   }
+  if (command === "readiness") {
+    const projectRoot = requiredAbsoluteOption(arguments_, "project-root");
+    return result("readiness", resolvePennyRuntimeState(projectRoot, { env }));
+  }
   if (command === "status") {
     const projectRoot = requiredAbsoluteOption(arguments_, "project-root");
     return result("status", resolvePennyStateStatus(projectRoot, { env }));
+  }
+  if (command === "upgrade") {
+    const projectRoot = requiredAbsoluteOption(arguments_, "project-root");
+    const backupDirectory = requiredAbsoluteOption(arguments_, "backup-dir");
+    const upgraded = await upgradePennyState({
+      projectRoot,
+      backupDirectory,
+      rootOptions: { env },
+    });
+    return {
+      schema_version: 1,
+      action: "upgrade",
+      project_id: upgraded.projectId,
+      source_schema_version: upgraded.sourceVersion,
+      target_schema_version: upgraded.targetVersion,
+      changed: upgraded.changed,
+      backup_root: upgraded.backupRoot,
+      backup_database: upgraded.backupDatabase,
+    };
   }
   if (command === "migrate") {
     const phase = arguments_[1];

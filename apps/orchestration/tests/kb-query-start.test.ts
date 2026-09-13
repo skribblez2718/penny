@@ -264,7 +264,7 @@ function buildStack(projectRoot: string): Stack {
   const checkpointer = new Checkpointer(dbPath);
   const engine = new OrchestrationEngine(checkpointer, {
     receiptAuthority: TEST_RECEIPT_AUTHORITY,
-    projectRoot,
+    projectRoot: projectRoot,
     maxSteps: 8,
     playbookName: "knowledge-base",
   });
@@ -694,7 +694,7 @@ describe("engine-owned query start (§5.6)", () => {
     const reopened = new Checkpointer(path.join(projectRoot, ".penny", "orchestration-qstart.db"));
     const reopenedEngine = new OrchestrationEngine(reopened, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: 8,
       playbookName: "knowledge-base",
     });
@@ -954,7 +954,7 @@ describe("engine-owned query start (§5.6)", () => {
     const checkpointer = new Checkpointer(dbPath);
     const engine = new OrchestrationEngine(checkpointer, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: 8,
       playbookName: "knowledge-base",
     });
@@ -1062,7 +1062,7 @@ describe("engine-owned query start (§5.6)", () => {
     const checkpointer = new Checkpointer(dbPath);
     const engine = new OrchestrationEngine(checkpointer, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: 8,
       playbookName: "knowledge-base",
     });

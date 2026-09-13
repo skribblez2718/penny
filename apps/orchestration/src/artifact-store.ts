@@ -17,7 +17,7 @@ import {
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
-import { canonicalJson, sha256 } from "./checkpointer.js";
+import { canonicalJson, sha256 } from "./canonical-json.js";
 import {
   ArtifactRefSchema,
   OutputArtifactMetadataSchema,
@@ -681,6 +681,11 @@ export class ArtifactStore implements Disposable {
       "artifact selection projection"
     );
     return artifactId === undefined ? undefined : this.refById(artifactId);
+  }
+
+  /** Verify that this actual artifact store belongs to one exact Penny project partition. */
+  assertBoundProject(projectId: string): void {
+    this.assertProjectBinding(projectId);
   }
 
   /** Compatibility wrapper. The former consumer argument is intentionally ignored. */

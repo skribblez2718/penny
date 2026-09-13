@@ -4,6 +4,7 @@ import { Checkpointer } from "./checkpointer.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
 import type { Directive } from "./contracts.js";
 import { OrchestrationEngine } from "./engine.js";
+import { ChildWorkflowRuntimeOwner } from "./child-workflows/owner.js";
 import { KbWorkerClient } from "./kb/kb-worker-client.js";
 import { PiAgentClient, type ModelClient, type InlineExtension } from "./model-client.js";
 import { ReceiptAuthority } from "./receipts.js";
@@ -15,9 +16,11 @@ import {
 import { ObservabilityClient } from "./observability.js";
 import { OrchestrationRunner, WorkerExecutor, type OrchestrationProgressSink } from "./worker.js";
 import {
+  PLAYBOOK_REGISTRY,
   resolvePlaybook,
   validateRegistrationContract,
   type PlaybookRegistrationV1,
+  type PlaybookRegistryV1,
 } from "./playbooks/registry.js";
 
 export interface OrchestrationServiceOptions {
@@ -41,6 +44,12 @@ export interface OrchestrationServiceOptions {
   readonly researchContextProviders?: ResearchContextProviderHandlers;
   /** Optional trusted immutable effect-trace snapshot provider. Absence means unknown. */
   readonly effectEvidenceProvider?: EffectEvidenceProviderV1;
+  /** Enable/disable internal depth-one child execution. Ordinary skill services default on. */
+  readonly enableChildWorkflows?: boolean;
+  /** @deprecated Compatibility alias; true still enables the same production owner. */
+  readonly enableCandidateChildWorkflows?: true;
+  /** Exact registry used by the depth-one child owner; tests may supply isolated fixtures. */
+  readonly childWorkflowRegistry?: PlaybookRegistryV1;
 }
 
 export class OrchestrationService implements Disposable {
@@ -51,6 +60,7 @@ export class OrchestrationService implements Disposable {
   readonly engine: OrchestrationEngine;
   readonly researchContext: ResearchContextOwnerV2 | undefined;
   readonly workers: WorkerExecutor;
+  readonly childWorkflows: ChildWorkflowRuntimeOwner | undefined;
   readonly runner: OrchestrationRunner;
   private activeExecutions = 0;
   private closed = false;
@@ -149,7 +159,7 @@ export class OrchestrationService implements Disposable {
     this.workers = new WorkerExecutor(client, this.artifacts, {
       projectRoot: this.config.projectRoot,
       parallelConcurrency: this.config.parallelConcurrency,
-      workerTimeoutMs: this.config.workerTimeoutMs,
+      hostOperationDeadlineMs: this.config.hostOperationDeadlineMs,
       registration: this.engine.registration,
       ...(this.researchContext === undefined ? {} : { researchContext: this.researchContext }),
     });
@@ -158,7 +168,58 @@ export class OrchestrationService implements Disposable {
     // receipt gate.
     this.workers.setReceiptAuthority(this.engine.receiptAuthority);
     this.workers.setLivenessController(this.engine.liveness);
-    this.runner = new OrchestrationRunner(this.engine, this.workers);
+    const childWorkflowsEnabled =
+      options.enableChildWorkflows ??
+      (options.enableCandidateChildWorkflows === true || selectedRegistration.ingress === "skill");
+    this.childWorkflows =
+      childWorkflowsEnabled && selectedRegistration.ingress === "skill"
+        ? new ChildWorkflowRuntimeOwner({
+            checkpointer: this.checkpointer,
+            artifacts: this.artifacts,
+            registry: options.childWorkflowRegistry ?? PLAYBOOK_REGISTRY,
+            projectRoot: this.config.projectRoot,
+            executionEnabled: true,
+            engines: {
+              create: ({ registration, maxSteps }) => {
+                const childMaxSteps = maxSteps ?? this.config.maxSteps;
+                const childEngine = new OrchestrationEngine(this.checkpointer, {
+                  projectRoot: this.config.projectRoot,
+                  maxSteps: childMaxSteps,
+                  receiptAuthority: this.engine.receiptAuthority,
+                  artifactRevisions: this.artifacts,
+                  artifactStore: this.artifacts,
+                  artifactReader: this.artifacts,
+                  ...(this.researchContext === undefined
+                    ? {}
+                    : { researchContext: this.researchContext }),
+                  ...(options.dispatchMode ? { dispatchMode: options.dispatchMode } : {}),
+                  ...(options.effectEvidenceProvider === undefined
+                    ? {}
+                    : { effectEvidenceProvider: options.effectEvidenceProvider }),
+                  playbookRegistration: registration,
+                  playbookRegistry: options.childWorkflowRegistry ?? PLAYBOOK_REGISTRY,
+                });
+                const childWorkers = new WorkerExecutor(client, this.artifacts, {
+                  projectRoot: this.config.projectRoot,
+                  parallelConcurrency: this.config.parallelConcurrency,
+                  hostOperationDeadlineMs: this.config.hostOperationDeadlineMs,
+                  registration: childEngine.registration,
+                  ...(this.researchContext === undefined
+                    ? {}
+                    : { researchContext: this.researchContext }),
+                });
+                childWorkers.setReceiptAuthority(childEngine.receiptAuthority);
+                childWorkers.setLivenessController(childEngine.liveness);
+                return {
+                  engine: childEngine,
+                  runner: new OrchestrationRunner(childEngine, childWorkers),
+                  maxSteps: childMaxSteps,
+                };
+              },
+            },
+          })
+        : undefined;
+    this.runner = new OrchestrationRunner(this.engine, this.workers, this.childWorkflows);
   }
 
   handle(request: unknown): Directive {

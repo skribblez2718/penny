@@ -1,5 +1,9 @@
 export * from "./artifact-store.js";
 export * from "./checkpointer.js";
+export * from "./child-workflows/contracts.js";
+export * from "./child-workflows/owner.js";
+export * from "./child-workflows/registration.js";
+export * from "./child-workflows/storage.js";
 export * from "./composition.js";
 export * from "./config.js";
 export * from "./context.js";
@@ -7,6 +11,7 @@ export * from "./contracts.js";
 export * from "./engine.js";
 export * from "./loans.js";
 export * from "./liveness.js";
+export * from "./liveness-profiles.js";
 export * from "./model-client.js";
 export * from "./observability.js";
 export * from "./kb/workflows.js";

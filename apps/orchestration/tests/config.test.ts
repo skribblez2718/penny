@@ -102,12 +102,13 @@ describe("TypeScript orchestration runtime configuration", () => {
     const config = loadRuntimeConfig(projectRoot, {
       ...env,
       PENNY_ORCHESTRATION_MAX_STEPS: "12",
-      PENNY_ORCHESTRATION_WORKER_TIMEOUT_MS: "30000",
+      PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS: "30000",
       PENNY_ORCHESTRATION_PARALLEL_CONCURRENCY: "2",
       PENNY_ORCHESTRATION_MAX_RETAINED_RUNS: "100",
     });
     expect(config.maxSteps).toBe(12);
-    expect(config.workerTimeoutMs).toBe(30_000);
+    expect(config.hostOperationDeadlineMs).toBe(30_000);
+    expect(config.workerTimeoutMs).toBe(30_000); // compatibility alias
     expect(config.parallelConcurrency).toBe(2);
     expect(config.maxRetainedRuns).toBe(100);
     expect(() =>
@@ -115,10 +116,14 @@ describe("TypeScript orchestration runtime configuration", () => {
     ).toThrow("positive integer");
   });
 
-  it("rejects the versioned limit selectors", () => {
+  it.each([
+    "PENNY_ORCH_V2_MAX_STEPS",
+    "PENNY_ORCHESTRATION_WORKER_ACTIVE_WORK_BUDGET_MS",
+    "PENNY_ORCHESTRATION_RUN_ACTIVE_WORK_BUDGET_MS",
+  ])("rejects retired liveness/limit selector %s", (name) => {
     const { projectRoot, env } = fixture();
-    expect(() => loadRuntimeConfig(projectRoot, { ...env, PENNY_ORCH_V2_MAX_STEPS: "12" })).toThrow(
-      "PENNY_ORCH_V2_MAX_STEPS is retired"
+    expect(() => loadRuntimeConfig(projectRoot, { ...env, [name]: "12" })).toThrow(
+      `${name} is retired`
     );
   });
 });

@@ -115,6 +115,7 @@ Observability is enabled by default. Setup validates the canonical database and 
 ```bash
 make doctor            # Read-only core readiness check (never initializes state)
 make state-status      # Read-only canonical state and persistence check
+make verify-runtime    # Rebuild, then check retained invocation state (no model calls)
 make memory-status     # Read-only supervised/authenticated hub check
 make setup-browser     # Explicitly provision optional Playwright Chromium
 make setup-dev         # Install development/check dependency extras
@@ -125,6 +126,10 @@ make format            # Format supported files
 make clean             # Remove code dependencies but preserve memory data
 bun run pi:update      # Validate and update Pi safely
 ```
+
+After orchestration changes, run `make verify-runtime` before declaring the installation ready for agent or skill calls. Run it when workflow workers and tests using the compiled runtime are stopped: the build replaces `dist`, and separate build processes are not serialized. It uses the shared frozen/offline build path, then checks the actual retained checkpoint, artifact, and receipt state against that build. It fails on missing or incompatible state without initializing, upgrading, or repairing it. A successful build or isolated test suite is not evidence that an existing installation's state is compatible. This check makes no model calls; provider execution and complete workflow behavior still need separately authorized live smoke tests.
+
+For `STATE_SCHEMA_INCOMPATIBLE`, stop active workflow writers and follow the reported explicit `penny-state upgrade --project-root=PATH --backup-dir=PATH` recovery action with a caller-selected private backup directory outside both the project and state roots. Then rerun `make verify-runtime`. Do not reset retained state or change its version marker by hand to bypass the error.
 
 Use `bun run pi:update` instead of running `pi update` directly from this repository. The updater checks the published Pi package in a clean temporary project, tests the candidate against Penny, and changes the global installation only when those checks pass. It does not add missing upstream dependencies or commit files.
 

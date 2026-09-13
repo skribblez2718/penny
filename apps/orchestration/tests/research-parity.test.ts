@@ -829,9 +829,10 @@ describe("research behavioral parity", () => {
       }
       expect(observedThinkingLevel).toBe("low");
       expect(engine.liveness.policy(runIdentity.run_id)).toMatchObject({
+        schema_version: 3,
         preset: "quick",
-        worker_wall_clock_ms: 5 * 60_000,
-        run_wall_clock_ms: 15 * 60_000,
+        renewal_policy: "trusted_host_activity_or_convergence_v1",
+        unknown_provider_phase_inactivity_ms: 10 * 60_000,
       });
       expect(
         checkpointer

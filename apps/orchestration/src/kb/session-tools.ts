@@ -135,7 +135,8 @@ export interface KbPhaseInvocation {
   readonly readerLimits?: {
     readonly max_call_utf8_bytes: number;
     readonly max_phase_utf8_bytes: number;
-    readonly max_calls_per_phase: number;
+    /** Present only for durable V1 policy profiles. */
+    readonly max_calls_per_phase?: number;
   };
   readonly readPhaseBrief?: () => string;
   readonly allowedPriorArtifacts?: readonly ArtifactHandle[];
@@ -363,10 +364,11 @@ export function kbSessionSpec(input: {
     (invocation.allowedPriorArtifacts ?? []).map((handle) => [handle.artifact_id, handle])
   );
   const staged = new Map<string, ArtifactHandle>();
+  // V2 intentionally has no ordinary reader-call ceiling. Legacy test/active V1
+  // profiles may still project their exact count limit alongside byte protections.
   const readerLimits = invocation.readerLimits ?? {
     max_call_utf8_bytes: 1_048_576,
     max_phase_utf8_bytes: 8_388_608,
-    max_calls_per_phase: 64,
   };
   let readerCalls = 0;
   let readerBytes = 0;
@@ -377,7 +379,8 @@ export function kbSessionSpec(input: {
     if (
       bytes > readerLimits.max_call_utf8_bytes ||
       readerBytes + bytes > readerLimits.max_phase_utf8_bytes ||
-      readerCalls + 1 > readerLimits.max_calls_per_phase
+      (readerLimits.max_calls_per_phase !== undefined &&
+        readerCalls + 1 > readerLimits.max_calls_per_phase)
     ) {
       throw new Error("kb_reader_limit_exceeded");
     }

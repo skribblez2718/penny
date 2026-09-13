@@ -59,7 +59,7 @@ async function main(): Promise<void> {
         "",
         "Environment:",
         "  PENNY_ORCHESTRATION_MAX_STEPS    Maximum steps per run (default: 96)",
-        "  PENNY_ORCHESTRATION_WORKER_TIMEOUT_MS  Worker timeout in ms (default: 900000)",
+        "  PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS  Host session deadline in ms (default: 900000)",
         "  PENNY_ORCHESTRATION_PARALLEL_CONCURRENCY  Parallel branch limit (default: 4)",
         "  PENNY_ORCHESTRATION_MAX_RETAINED_RUNS    Terminal run/worker-session cohort cap (default: 500)",
         "  PENNY_RESEARCH_DEFAULT_MODEL       Default model for all research agents",
@@ -115,7 +115,8 @@ async function main(): Promise<void> {
       const workers = new WorkerExecutor(client, openedArtifacts, {
         projectRoot: config.projectRoot,
         parallelConcurrency: config.parallelConcurrency,
-        workerTimeoutMs: config.workerTimeoutMs,
+        hostOperationDeadlineMs: config.hostOperationDeadlineMs,
+        registration: engine.registration,
       });
       result = await new OrchestrationRunner(engine, workers).runUntilBoundary(result);
     }

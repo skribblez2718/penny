@@ -9,10 +9,20 @@ subagent path does not supply that hook. A direct worker is therefore not kept
 alive—or killed—by a documented three-tier heartbeat policy. Explicit
 cancellation instead follows a bounded graceful/forced shutdown process.
 
-Skill runs have a different progress surface. The orchestration engine reports
-phase starts, completed workers, and user/completion boundaries to the skill user
-interface. This is useful status output, but it is observational: it does not
-reset a direct-worker timeout, schedule background work, or transfer artifacts.
+Skill runs have a different progress surface. New ordinary orchestrated workers
+use calibrated renewable inactivity leases. The host renews a worker only when it
+observes real non-empty assistant or reasoning output, admitted tool lifecycle or
+changed tool-update progress, or completion progress. The liveness record keeps
+only event classes and counters—not prompt, reasoning, message, tool-result, or
+evidence bodies. Slow work may exceed the old fixed worker duration while it keeps
+making progress; stalled work stops when its inactivity lease expires. A separate
+host-operation deadline remains an upper bound, and interrupted-process downtime
+does not consume a new worker lease. Older V1/V2 runs keep their historical policy.
+
+The orchestration engine also reports phase starts, completed workers, and
+user/completion boundaries to the skill user interface. This is useful status
+output, but it is observational: UI updates do not renew the lease, reset a
+direct-worker timeout, schedule background work, or transfer artifacts.
 
 ## Starting a Fresh Session
 

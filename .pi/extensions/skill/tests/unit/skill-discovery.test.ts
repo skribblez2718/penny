@@ -30,6 +30,7 @@ function registrationFor(name: string): PlaybookRegistrationV1 {
     name,
     contract: { ...research.contract, name },
     worker: { ...research.worker, workflow_name: name },
+    generic_child: undefined,
   };
 }
 

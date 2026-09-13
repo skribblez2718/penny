@@ -52,6 +52,7 @@ describe("readExactCheckpoints (TypeScript v2 read-only SQLite)", () => {
   let directory: string;
   let projectRoot: string;
   let databasePath: string;
+  let projectId: string;
   const previousStateRoot = process.env.PENNY_STATE_ROOT;
   const previousDatabase = process.env.PENNY_ORCH_V2_DB;
   const selected = artifactRef("run-current", "observe-1");
@@ -64,6 +65,7 @@ describe("readExactCheckpoints (TypeScript v2 read-only SQLite)", () => {
     delete process.env.PENNY_ORCH_V2_DB;
     const state = initializePennyState(projectRoot, { env: process.env });
     databasePath = state.paths.orchestration.database;
+    projectId = state.projectId;
     const checkpointer = new Checkpointer(databasePath, undefined, {
       projectId: state.projectId,
     });
@@ -169,15 +171,33 @@ describe("readExactCheckpoints (TypeScript v2 read-only SQLite)", () => {
     restore.close();
   });
 
-  it("skips terminal or missing exact IDs and degrades on a missing database", () => {
+  it("distinguishes stale or missing state from a legitimate empty selection", () => {
+    expect(readExactCheckpoints([], projectRoot)).toEqual({
+      runs: [],
+      artifactRefs: [],
+      issues: [],
+    });
     expect(readExactCheckpoints(["run-complete", "does-not-exist"], projectRoot).runs).toEqual([]);
+
+    {
+      const stale = new DatabaseSync(databasePath);
+      stale.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+      stale.close();
+    }
+    expect(readExactCheckpoints(["run-current"], projectRoot)).toEqual({
+      runs: [],
+      artifactRefs: [],
+      issues: ["checkpointer state unavailable: STATE_SCHEMA_INCOMPATIBLE (10 → 12)"],
+    });
+    Checkpointer.provision(databasePath, undefined, { projectId }).close();
+
     const missingPath = `${databasePath}.missing`;
     renameSync(databasePath, missingPath);
     try {
       expect(readExactCheckpoints(["run-current"], projectRoot)).toEqual({
         runs: [],
         artifactRefs: [],
-        issues: [],
+        issues: ["checkpointer state unavailable: STATE_COMPONENT_UNINITIALIZED"],
       });
     } finally {
       renameSync(missingPath, databasePath);

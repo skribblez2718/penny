@@ -5,7 +5,10 @@ import { resolvePennyRuntimeState } from "./state/setup.js";
 export const ORCHESTRATION_SCHEMA_VERSION = 2 as const;
 export const TYPESCRIPT_ENGINE_OWNER = "typescript" as const;
 export const DEFAULT_MAX_STEPS = 96;
-export const DEFAULT_WORKER_TIMEOUT_MS = 15 * 60 * 1_000;
+/** Trusted per-provider/session host deadline, independent of liveness accounting. */
+export const DEFAULT_HOST_OPERATION_DEADLINE_MS = 15 * 60 * 1_000;
+/** Compatibility export retained for callers that still use the former name. */
+export const DEFAULT_WORKER_TIMEOUT_MS = DEFAULT_HOST_OPERATION_DEADLINE_MS;
 export const DEFAULT_PARALLEL_CONCURRENCY = 4;
 /** Default cap on retained terminal run cohorts and their correlated worker sessions. */
 export const DEFAULT_MAX_RETAINED_RUNS = 500;
@@ -22,6 +25,8 @@ const RETIRED_VERSIONED_LIMITS = [
   "PENNY_ORCH_V2_WORKER_TIMEOUT_MS",
   "PENNY_ORCH_V2_PARALLEL_CONCURRENCY",
   "PENNY_ORCH_V2_MAX_RETAINED_RUNS",
+  "PENNY_ORCHESTRATION_WORKER_ACTIVE_WORK_BUDGET_MS",
+  "PENNY_ORCHESTRATION_RUN_ACTIVE_WORK_BUDGET_MS",
 ] as const;
 
 export interface RuntimeConfig {
@@ -33,7 +38,9 @@ export interface RuntimeConfig {
   readonly artifactRoot: string;
   readonly subagentSessionRoot: string;
   readonly maxSteps: number;
+  /** @deprecated Compatibility alias for hostOperationDeadlineMs. */
   readonly workerTimeoutMs: number;
+  readonly hostOperationDeadlineMs: number;
   readonly parallelConcurrency: number;
   /** Bounded retention: maximum terminal run cohorts to keep before pruning oldest. */
   readonly maxRetainedRuns: number;
@@ -53,9 +60,10 @@ export function rejectRetiredConfiguration(
 ): void {
   for (const name of [...RETIRED_PATH_SELECTORS, ...RETIRED_VERSIONED_LIMITS]) {
     if (env[name]?.trim()) {
-      throw new Error(
-        `${name} is retired; initialize the Pi-native Penny state root and use unversioned configuration`
-      );
+      const replacement = name.includes("ACTIVE_WORK_BUDGET")
+        ? "new ordinary runs use immutable calibrated inactivity-lease profiles"
+        : "initialize the Pi-native Penny state root and use unversioned configuration";
+      throw new Error(`${name} is retired; ${replacement}`);
     }
   }
 }
@@ -90,10 +98,18 @@ export function loadRuntimeConfig(
       DEFAULT_MAX_STEPS,
       "PENNY_ORCHESTRATION_MAX_STEPS"
     ),
+    // Keep the former host deadline environment name as a compatibility fallback.
+    hostOperationDeadlineMs: parsePositiveInteger(
+      env.PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS ??
+        env.PENNY_ORCHESTRATION_WORKER_TIMEOUT_MS,
+      DEFAULT_HOST_OPERATION_DEADLINE_MS,
+      "PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS"
+    ),
     workerTimeoutMs: parsePositiveInteger(
-      env.PENNY_ORCHESTRATION_WORKER_TIMEOUT_MS,
-      DEFAULT_WORKER_TIMEOUT_MS,
-      "PENNY_ORCHESTRATION_WORKER_TIMEOUT_MS"
+      env.PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS ??
+        env.PENNY_ORCHESTRATION_WORKER_TIMEOUT_MS,
+      DEFAULT_HOST_OPERATION_DEADLINE_MS,
+      "PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS"
     ),
     parallelConcurrency: parsePositiveInteger(
       env.PENNY_ORCHESTRATION_PARALLEL_CONCURRENCY,

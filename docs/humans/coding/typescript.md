@@ -215,11 +215,13 @@ A test is not covered merely because it compiles. Inventory maps every test and 
 Vitest configuration reachable from its package `test:all`. `bun run test:typescript` discovers those
 reachable configurations and runs each distinct config once after the shared-library suite.
 
-The single live-model config is
-`apps/orchestration/vitest.kb-model-smoke.config.ts`. The aggregate runner always routes it through
-`test:kb-model-smoke:aggregate`, which prints a skip unless `PENNY_KB_MODEL_SMOKE=1`. Setting that
-variable opts into the predeclared live KB model cohort and should be done only with separate
-authorization for the external/costly model call. Default and offline gates never silently opt in.
+Live-model configurations are explicitly gated. The KB cohort,
+`apps/orchestration/vitest.kb-model-smoke.config.ts`, runs only through
+`test:kb-model-smoke:aggregate` when `PENNY_KB_MODEL_SMOKE=1`. The disposable candidate
+child-workflow cohort, `apps/orchestration/vitest.child-workflow-model-smoke.config.ts`, runs only
+through `test:child-workflow-model-smoke:aggregate` when
+`PENNY_CHILD_WORKFLOW_MODEL_SMOKE=1`. Each variable opts into only its declared bounded cohort and
+requires separate authorization for its model call; default and offline gates never silently opt in.
 Browser-backed Playwright suites and live YouTube transcript checks are likewise external: set
 `PENNY_PLAYWRIGHT_BROWSER_TESTS=1` or `PENNY_YOUTUBE_NETWORK_TESTS=1` only when their Chromium or
 network dependency is deliberately authorized.

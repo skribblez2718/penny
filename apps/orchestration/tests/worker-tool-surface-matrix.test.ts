@@ -151,8 +151,12 @@ function registration(
     throw new Error("research catalog registration is unavailable");
   }
   const guidance = { skill_root: ".pi/agents", resolution: "per_agent" } as const;
+  const { generic_child: shippedAuthority, ...synthetic } = shipped;
+  if (shippedAuthority === undefined) {
+    throw new Error("research generic-child authority is unavailable");
+  }
   return {
-    ...shipped,
+    ...synthetic,
     contract: {
       ...shipped.contract,
       guidance,
@@ -568,12 +572,12 @@ describe("TypeScript skill worker exact tool surfaces", () => {
         expect(capture.requested).toEqual(declared);
         expect([...capture.active].sort()).toEqual([...declared].sort());
         if (capture.prompt === undefined) throw new Error("Echo opening prompt was not captured");
-        expect(capture.prompt).toContain("HOST-ENFORCED LIVENESS BUDGET:");
+        expect(capture.prompt).toContain("HOST-ENFORCED LEGACY V1 LIVENESS BUDGET:");
         expect(capture.prompt).toContain(canonicalJson(QUICK_PROMPT_BUDGET));
         expect(capture.prompt).toContain(
           JSON.stringify(declared.filter(independentlyExternallyCharged).sort())
         );
-        expect(capture.prompt.indexOf("HOST-ENFORCED LIVENESS BUDGET:")).toBeLessThan(
+        expect(capture.prompt.indexOf("HOST-ENFORCED LEGACY V1 LIVENESS BUDGET:")).toBeLessThan(
           capture.prompt.indexOf("TASK:")
         );
         expect(capture.prompt).toContain("Every requested tool call—including each");

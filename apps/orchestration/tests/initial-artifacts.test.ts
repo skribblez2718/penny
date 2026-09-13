@@ -59,7 +59,7 @@ describe("owner-seeded initial artifacts", () => {
     using checkpointer = new Checkpointer(path.join(projectRoot, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: 32,
       artifactRevisions: artifacts,
     });
@@ -109,7 +109,7 @@ describe("owner-seeded initial artifacts", () => {
     using checkpointer = new Checkpointer(path.join(projectRoot, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: 32,
       artifactRevisions: artifacts,
     });
@@ -137,7 +137,7 @@ describe("owner-seeded initial artifacts", () => {
     using checkpointer = new Checkpointer(path.join(projectRoot, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: 32,
     });
     const directive = engine.handle({

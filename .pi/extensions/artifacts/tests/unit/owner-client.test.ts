@@ -2,13 +2,15 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { initializePennyState } from "@penny/orchestration/source";
+import { initializePennyState, resolvePennyProjectState } from "@penny/orchestration/source";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  ArtifactClientError,
   parseArtifactRef,
   parseOutputArtifactMetadata,
   persistArtifactOutput,
+  resolveArtifactRoot,
   readArtifactById,
   readArtifactOutput,
 } from "../../owner-client.js";
@@ -45,6 +47,34 @@ describe("artifact owner client", () => {
     const direct = await readArtifactById({ artifactId: ref.artifact_id, projectRoot, env });
     expect(direct.ref).toEqual(ref);
     expect(direct.content.toString()).toBe("exact bytes");
+  });
+
+  it("preserves structured stale-state cause through artifact configuration errors", () => {
+    const { projectRoot, env } = fixture();
+    const state = resolvePennyProjectState(projectRoot, { env });
+    const sqlite = process.getBuiltinModule("node:sqlite");
+    if (sqlite === undefined) throw new Error("node:sqlite unavailable");
+    using database = new sqlite.DatabaseSync(state.paths.orchestration.database);
+    database.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+
+    try {
+      resolveArtifactRoot(projectRoot, env);
+      throw new Error("stale state unexpectedly resolved an artifact root");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ArtifactClientError);
+      if (!(error instanceof ArtifactClientError)) throw error;
+      expect(error.code).toBe("ARTIFACT_CONFIG_INVALID");
+      expect(error.message).toContain("schema 10 is not current");
+      expect(error.metadata).toEqual({
+        state_error_code: "STATE_SCHEMA_INCOMPATIBLE",
+        component: "orchestration",
+        actual_schema_version: 10,
+        required_schema_version: 12,
+        upgrade_supported: true,
+        recovery_action: "penny-state-upgrade",
+      });
+      expect(error.message).not.toContain(projectRoot);
+    }
   });
 
   it("rejects a retired schema-v1 ref", () => {

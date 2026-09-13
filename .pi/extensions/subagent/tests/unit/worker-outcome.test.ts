@@ -5,6 +5,7 @@ import {
   classifyWorkerDelivery,
   classifyWorkerResult,
   classifyWorkerStreamingDelivery,
+  formatWorkerDiagnostics,
   formatWorkerOutcomeBoundary,
   formatWorkerOutcomeSummaryBoundary,
   sealWorkerTerminalOutcome,
@@ -202,6 +203,24 @@ describe("worker terminal outcome matrix", () => {
     });
     expect(workerOutcomeSummaryHasError(summary)).toBe(true);
     expect(formatWorkerOutcomeSummaryBoundary(summary)).toContain("aggregate=failed");
+  });
+
+  it("leads with execution failure while retaining a separate delivery failure", () => {
+    const fixture = result({
+      processState: "setup_failed",
+      processExitObserved: false,
+      processCloseObserved: false,
+      errorMessage: "STATE_SCHEMA_INCOMPATIBLE: pre-spawn failure",
+      stderr: "STATE_SCHEMA_INCOMPATIBLE: pre-spawn failure",
+      outputArtifactRequired: true,
+      outputArtifactState: "failed",
+      outputArtifactError: "ARTIFACT_CONFIG_INVALID: delivery failure",
+    });
+
+    expect(formatWorkerDiagnostics(fixture)).toBe(
+      "Execution: STATE_SCHEMA_INCOMPATIBLE: pre-spawn failure\n" +
+        "Artifact delivery: ARTIFACT_CONFIG_INVALID: delivery failure"
+    );
   });
 
   it("records optional streaming callback failure without erasing worker or parent success", () => {

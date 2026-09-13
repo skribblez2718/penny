@@ -13,7 +13,7 @@ import {
   type Directive,
   type EvaluationResultV2,
   type JsonValue,
-  type LivenessPolicyV1,
+  type LivenessPolicyV3,
   type LivenessSnapshotV1,
   type LivenessTerminalReason,
   type OutputArtifactMetadata,
@@ -21,8 +21,10 @@ import {
   type SkillContract,
 } from "../contracts.js";
 import { RunContext } from "../context.js";
+import { ordinaryLivenessPolicy } from "../liveness.js";
 import {
   assertStrategyLineage,
+  PlanRequestConstraintsV1Schema,
   canonicalizePlanRequest,
   strategyDraftPromptContract,
   strategyProductEnvelopeId,
@@ -127,31 +129,10 @@ export const PLAN_FLOW = {
   ],
 } as const;
 
-export const PLAN_LIVENESS_POLICY = {
-  schema_version: 1,
+export const PLAN_LIVENESS_POLICY = ordinaryLivenessPolicy({
   scope: "orchestrated-plan-workflow",
-  preset: "bounded-external-orchestrated-v1",
-  total_phase_repair_invocations: 24,
-  model_turns_per_worker: 12,
-  model_turns_per_run: 96,
-  tool_calls_per_worker: 24,
-  tool_calls_per_run: 160,
-  external_calls_per_worker: 8,
-  external_calls_per_run: 64,
-  worker_wall_clock_ms: 180_000,
-  run_wall_clock_ms: 900_000,
-  malformed_results_per_state_branch: 2,
-  identical_malformed_digest_limit: 2,
-  protocol_errors_per_worker: 4,
-  identical_protocol_digest_limit: 2,
-  routing_repair: {
-    max_invocations_per_state_branch: 1,
-    model_turns_per_worker: 4,
-    tool_calls_per_worker: 2,
-    external_calls_per_worker: 0,
-    worker_wall_clock_ms: 120_000,
-  },
-} as const satisfies LivenessPolicyV1;
+  preset: "ordinary-progress-lease-v3",
+}) satisfies LivenessPolicyV3;
 
 const FindingSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const StrategyDeltaSchema = Type.String({ minLength: 1, maxLength: 4_096 });
@@ -2548,6 +2529,22 @@ function planRegistration(input: {
     contract: input.contract,
     ingress: "skill",
     start_admission: PLAN_START_ADMISSION,
+    caller_documentation: {
+      constraints_schema: PlanRequestConstraintsV1Schema,
+      example: {
+        goal: "Plan the migration.",
+        constraints: {
+          schema_version: 1,
+          desired_outcomes: ["A staged migration strategy."],
+          current_state: { status: "provided", facts: ["The current system is running."] },
+          hard_constraints: ["Do not deploy."],
+          non_goals: [],
+          known_uncertainties: [],
+          prior_decisions: [],
+        },
+      },
+      semantic_caveat: "Produces strategy only; it does not taskify or execute the strategy.",
+    },
     liveness: {
       resolver_id: "planLivenessPolicy",
       resolve: () => PLAN_LIVENESS_POLICY,

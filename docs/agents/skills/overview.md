@@ -30,6 +30,28 @@ TypeScript `PlaybookCoreV1` implementation in `apps/orchestration/`;
 9. Penny skill manifests do not declare the upstream optional `license` field. The repository-level
    license governs tracked packages.
 
+## Child-workflow authority status
+
+The active registry carries a static runtime parent/provider authority projection for exactly the
+six explicitly authorized ordinary workflows: `assess`, `decide`, `diagnose`, `plan`, `produce`, and
+`research`. Every one has the same all-six, one-call, depth-one parent policy and its own native
+request/output plus fixed phase-authority provider declaration. The projection participates in the
+runtime registration digest. Absence and unknown or dedicated workflows deny; `knowledge-base`
+remains excluded. This authority is registry-owned and must not be added to `SKILL.md` or inferred
+from model visibility.
+
+`apps/orchestration/src/child-workflows/` provides bounded exact-byte contracts plus the active
+storage/custody/runtime owner. Ordinary services construct that owner by default; hosts may disable
+it explicitly. `WorkerExecutor` still refuses child directives directly, while the runner delegates
+them to the owner. New calls deliberately omit predicted turn/tool/external/output/step/time
+allocations, aggregate capacity, and parent reserve. The child uses its registered repair/liveness
+policy and the service-wide step backstop plus a content-free child-execution inactivity lease; the
+owner drives the registered child engine/runner, validates a terminal core, and atomically consumes
+it into the parent. Fixed project/call admission, lease expiry, and cancellation forwarding are
+enforced. Child gates, arbitrary post-capture restart
+reconciliation, cohort retention, promotion, and live qualification remain unimplemented. Gate 2 is
+explicitly `not_run`.
+
 ## Skill vs. agent vs. direct
 
 | Path   | Use when                                                                     |

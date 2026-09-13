@@ -324,35 +324,40 @@ const ModelRuleSchema = Type.Object(
   { additionalProperties: false }
 );
 
-export const KbPolicySchema = Type.Object(
+const KbPolicyCommon = {
+  kb_id: OpaqueIdSchema,
+  processing_mode: ProcessingModeSchema,
+  allowed_parent_models: Type.Array(ModelRuleSchema),
+  allowed_child_models: Type.Array(ModelRuleSchema),
+  parent_result: Type.Object(
+    {
+      derived_query_answer: Type.Union([
+        Type.Literal("deny"),
+        Type.Literal("allow_explicit_derived_answer"),
+      ]),
+      max_utf8_bytes: Type.Integer({ minimum: 1, maximum: 32_768 }),
+    },
+    { additionalProperties: false }
+  ),
+  artifact_limits: Type.Object(
+    {
+      max_artifact_utf8_bytes: Type.Integer({ minimum: 1, maximum: 1_048_576 }),
+      max_artifacts_per_phase: Type.Integer({ minimum: 1, maximum: 8 }),
+      allowed_media_types: Type.Array(ArtifactMediaTypeSchema, {
+        minItems: 1,
+        maxItems: 1,
+        uniqueItems: true,
+      }),
+    },
+    { additionalProperties: false }
+  ),
+} as const;
+
+/** Historical policy retained exactly for durable active V1 KB runs. */
+export const KbPolicyV1Schema = Type.Object(
   {
     schema_version: Type.Literal(1),
-    kb_id: OpaqueIdSchema,
-    processing_mode: ProcessingModeSchema,
-    allowed_parent_models: Type.Array(ModelRuleSchema),
-    allowed_child_models: Type.Array(ModelRuleSchema),
-    parent_result: Type.Object(
-      {
-        derived_query_answer: Type.Union([
-          Type.Literal("deny"),
-          Type.Literal("allow_explicit_derived_answer"),
-        ]),
-        max_utf8_bytes: Type.Integer({ minimum: 1, maximum: 32_768 }),
-      },
-      { additionalProperties: false }
-    ),
-    artifact_limits: Type.Object(
-      {
-        max_artifact_utf8_bytes: Type.Integer({ minimum: 1, maximum: 1_048_576 }),
-        max_artifacts_per_phase: Type.Integer({ minimum: 1, maximum: 8 }),
-        allowed_media_types: Type.Array(ArtifactMediaTypeSchema, {
-          minItems: 1,
-          maxItems: 1,
-          uniqueItems: true,
-        }),
-      },
-      { additionalProperties: false }
-    ),
+    ...KbPolicyCommon,
     reader_limits: Type.Object(
       {
         max_call_utf8_bytes: Type.Integer({ minimum: 1, maximum: 1_048_576 }),
@@ -364,12 +369,32 @@ export const KbPolicySchema = Type.Object(
   },
   { additionalProperties: false }
 );
-export type KbPolicy = Static<typeof KbPolicySchema>;
+export type KbPolicyV1 = Static<typeof KbPolicyV1Schema>;
 
-/** The generated default-deny policy for a new KB. */
-export function defaultDenyPolicy(kbId: string): KbPolicy {
+/** New policy: bytes remain bounded; ordinary reader-call count is not authority. */
+export const KbPolicyV2Schema = Type.Object(
+  {
+    schema_version: Type.Literal(2),
+    ...KbPolicyCommon,
+    reader_limits: Type.Object(
+      {
+        max_call_utf8_bytes: Type.Integer({ minimum: 1, maximum: 1_048_576 }),
+        max_phase_utf8_bytes: Type.Integer({ minimum: 1, maximum: 8_388_608 }),
+      },
+      { additionalProperties: false }
+    ),
+  },
+  { additionalProperties: false }
+);
+export type KbPolicyV2 = Static<typeof KbPolicyV2Schema>;
+export const KbPolicySchema = Type.Union([KbPolicyV1Schema, KbPolicyV2Schema]);
+/** Explicit discriminated union avoids TypeBox's structural-union widening for callers. */
+export type KbPolicy = KbPolicyV1 | KbPolicyV2;
+
+/** The generated default-deny policy for a new KB uses the no-reader-count V2 contract. */
+export function defaultDenyPolicy(kbId: string): KbPolicyV2 {
   return {
-    schema_version: 1,
+    schema_version: 2,
     kb_id: kbId,
     processing_mode: "local_only",
     allowed_parent_models: [],
@@ -383,7 +408,6 @@ export function defaultDenyPolicy(kbId: string): KbPolicy {
     reader_limits: {
       max_call_utf8_bytes: 262_144,
       max_phase_utf8_bytes: 1_048_576,
-      max_calls_per_phase: 16,
     },
   };
 }

@@ -322,7 +322,7 @@ describe("G9 approved apply end to end", () => {
     });
     const engine = new OrchestrationEngine(checkpointer, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: 20,
       playbookName: "knowledge-base",
     });
@@ -406,7 +406,7 @@ describe("G9 approved apply end to end", () => {
     const reopenedCheckpointer = new Checkpointer(controlPath);
     const reopenedEngine = new OrchestrationEngine(reopenedCheckpointer, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: 20,
       playbookName: "knowledge-base",
     });

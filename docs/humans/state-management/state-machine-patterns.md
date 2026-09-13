@@ -39,6 +39,25 @@ The chain owner verifies and forwards the exact terminal artifact ID into the ne
 `chain_input` binding. `{previous}` identifies that direct exact-ID handoff rather than carrying
 inline predecessor text. Chain checkpoints preserve exact refs across restart.
 
+## Child reservation and active depth-one dispatch
+
+Penny now has the durable storage seam for a possible parent/child call. It verifies the canonical
+request and inputs in a concrete artifact store bound to the same project as the checkpointer. One
+transaction suspends the parent on its exact pending directive, creates an ordinary unstarted child
+run, and records both the call and initial events. Repeating the same immutable call adopts the
+existing lifecycle; changing an operand conflicts, and missing linkage is never guessed from
+artifacts, memory, logs, or prose.
+
+An ordinary service constructs the child owner by default, making an authorized depth-one child
+call executable; a host can explicitly disable it. The owner runs the reserved child through the
+same engine/runner, validates the terminal core, and atomically continues the parent exactly once.
+It enforces fixed project/call admission, uses the child's registered repair/liveness policy and
+service-wide step backstop instead of a guessed per-call resource allocation, and applies a
+content-free inactivity lease plus runner/parent cancellation forwarding. Child gates, arbitrary
+post-capture restart reconciliation, integrated artifact/receipt/session retention, promotion, and
+live qualification remain separate. Gate 2 is unrun. Only call/run rows receive the current
+linkage-based retention pin.
+
 ## Testing
 
 Tests drive closed requests through the real TypeScript engine using temporary Node SQLite

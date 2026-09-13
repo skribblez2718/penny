@@ -53,39 +53,24 @@ const SAFE_HANDLE = {
 };
 
 describe("KB liveness and negative delivery", () => {
-  it("expands the approved per-phase and per-action ceilings exactly", () => {
-    expect(kbLivenessPolicy({ action: "ingest", readerMaxCallsPerPhase: 16 })).toMatchObject({
+  it("uses a V2 active-work envelope independent of reader-call input", () => {
+    const ingest = kbLivenessPolicy({ action: "ingest", readerMaxCallsPerPhase: 16 });
+    expect(ingest).toMatchObject({
+      schema_version: 2,
       preset: "kb-ingest",
-      total_phase_repair_invocations: 8,
-      tool_calls_per_worker: 22,
-      model_turns_per_worker: 24,
-      tool_calls_per_run: 176,
-      model_turns_per_run: 192,
-      external_calls_per_worker: 0,
-      external_calls_per_run: 0,
-      worker_wall_clock_ms: 900_000,
-      run_wall_clock_ms: 5_400_000,
+      worker_active_work_budget_ms: 900_000,
+      run_active_work_budget_ms: 5_400_000,
     });
     expect(kbLivenessPolicy({ action: "save", readerMaxCallsPerPhase: 100 })).toMatchObject({
-      total_phase_repair_invocations: 7,
-      tool_calls_per_worker: 70,
-      model_turns_per_worker: 72,
-      tool_calls_per_run: 490,
-      model_turns_per_run: 504,
-      run_wall_clock_ms: 5_400_000,
+      run_active_work_budget_ms: 5_400_000,
     });
     expect(kbLivenessPolicy({ action: "query", readerMaxCallsPerPhase: 1 })).toMatchObject({
-      total_phase_repair_invocations: 5,
-      tool_calls_per_worker: 7,
-      model_turns_per_worker: 9,
-      run_wall_clock_ms: 2_700_000,
+      run_active_work_budget_ms: 2_700_000,
     });
     expect(kbLivenessPolicy({ action: "promote", readerMaxCallsPerPhase: 64 })).toMatchObject({
-      total_phase_repair_invocations: 5,
-      tool_calls_per_worker: 70,
-      model_turns_per_worker: 72,
-      run_wall_clock_ms: 2_700_000,
+      run_active_work_budget_ms: 2_700_000,
     });
+    expect("tool_calls_per_worker" in ingest).toBe(false);
   });
 
   it("aborts on a second identical content-free KB protocol digest", () => {

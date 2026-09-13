@@ -31,7 +31,8 @@ function fakeDirent(name: string, kind: "directory" | "file"): fs.Dirent {
 vi.mock("fs", () => ({
   existsSync: vi.fn(),
   readdirSync: vi.fn(),
-  readFileSync: vi.fn(),
+  // Registry construction reads catalog YAML before these legacy formatter tests run.
+  readFileSync: vi.fn(() => "---\ntools: read\n---\n"),
   mkdtempSync: vi.fn(),
   writeFileSync: vi.fn(),
   unlinkSync: vi.fn(),
@@ -40,7 +41,7 @@ vi.mock("fs", () => ({
   default: {
     existsSync: vi.fn(),
     readdirSync: vi.fn(),
-    readFileSync: vi.fn(),
+    readFileSync: vi.fn(() => "---\ntools: read\n---\n"),
     mkdtempSync: vi.fn(),
     writeFileSync: vi.fn(),
     unlinkSync: vi.fn(),

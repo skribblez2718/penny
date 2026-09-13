@@ -94,7 +94,10 @@ export const TYPE_AWARE_LINT_TARGETS = Object.freeze([
     scopeRoot: "apps/orchestration",
     project: "apps/orchestration/tsconfig.kb-model-smoke.json",
     prefixes: ["apps/orchestration/smoke"],
-    exactFiles: ["apps/orchestration/vitest.kb-model-smoke.config.ts"],
+    exactFiles: [
+      "apps/orchestration/vitest.kb-model-smoke.config.ts",
+      "apps/orchestration/vitest.child-workflow-model-smoke.config.ts",
+    ],
     excludedPrefixes: [],
   }),
   Object.freeze({

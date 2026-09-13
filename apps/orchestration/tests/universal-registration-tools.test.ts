@@ -85,10 +85,14 @@ describe("universal registration tool authority", () => {
     }
   });
 
-  it("gives normal workflow execution bounded external capacity while routing repair stays at zero", () => {
+  it("gives ordinary execution calibrated progress leases while routing repair stays at zero", () => {
     for (const policy of UNIVERSAL_LIVENESS_POLICIES) {
-      expect(policy.external_calls_per_worker).toBe(8);
-      expect(policy.external_calls_per_run).toBe(64);
+      expect(policy.schema_version).toBe(3);
+      expect(policy.unknown_provider_phase_inactivity_ms).toBe(10 * 60_000);
+      expect(policy.renewal_policy).toBe("trusted_host_activity_or_convergence_v1");
+      expect("worker_active_work_budget_ms" in policy).toBe(false);
+      expect("run_active_work_budget_ms" in policy).toBe(false);
+      expect("external_calls_per_worker" in policy).toBe(false);
       expect(policy.routing_repair.external_calls_per_worker).toBe(0);
     }
   });

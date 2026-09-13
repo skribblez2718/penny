@@ -39,7 +39,7 @@ function fixture() {
     using _checkpointer = new Checkpointer(database);
   }
   const source = new sqlite.DatabaseSync(database);
-  source.exec("DROP TABLE store_metadata; PRAGMA user_version=9");
+  source.exec("DROP TABLE child_workflow_calls; DROP TABLE store_metadata; PRAGMA user_version=9");
   source.close();
   const key = path.join(legacy, "receipt-key");
   writeFileSync(key, Buffer.alloc(32, 0x62), { mode: 0o600 });

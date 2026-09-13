@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,12 +25,14 @@ import type { Directive } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
 import {
   PiAgentClient,
+  parseSsotTools,
   type AgentCompletion,
   type AgentInvocation,
   type ModelClient,
 } from "../src/model-client.js";
 import { DECIDE_PLAYBOOK_REGISTRATION } from "../src/playbooks/decide.js";
 import {
+  bindGenericChildYamlAuthority,
   resolvePlaybook,
   runtimeRegistrationSha256,
   validateRegistrationContract,
@@ -141,11 +151,62 @@ describe("W6 active worker registration", () => {
       maxSteps: 16,
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
     });
-    expect(engine.registration).toBe(resolvePlaybook("research"));
+    const template = resolvePlaybook("research");
+    if (template === undefined) throw new Error("research registration is unavailable");
+    expect(engine.registration).toBe(template);
+    expect(runtimeRegistrationSha256(engine.registration)).toBe(
+      runtimeRegistrationSha256(template)
+    );
     expect(engine.contract).toBe(engine.registration.contract);
 
     const serviceSource = readFileSync(new URL("../src/service.ts", import.meta.url), "utf8");
     expect(serviceSource).toContain("registration: this.engine.registration");
+  });
+
+  it("refuses caller-catalog YAML drift before invoking the model", async () => {
+    const root = temporaryRoot();
+    const catalog = temporaryRoot();
+    const sourceAgents = path.join(PROJECT_ROOT, ".pi", "agents");
+    const callerAgents = path.join(catalog, ".pi", "agents");
+    mkdirSync(callerAgents, { recursive: true });
+    for (const agent of readdirSync(sourceAgents)) {
+      copyFileSync(path.join(sourceAgents, agent), path.join(callerAgents, agent));
+    }
+    const template = resolvePlaybook("research");
+    if (template === undefined) throw new Error("research registration is unavailable");
+    const activeBeforeDrift = bindGenericChildYamlAuthority(template, catalog);
+    const planning = activeBeforeDrift.generic_child?.provider.phases.find(
+      (phase) => phase.state_id === "planning"
+    );
+    if (
+      planning === undefined ||
+      planning.tool_authority.carrier !== "catalog_agent_yaml_maximum" ||
+      planning.tool_authority.allowed_tools === null
+    ) {
+      throw new Error("research planning phase has no active YAML maximum");
+    }
+    const definitionPath = path.join(callerAgents, `${planning.agent}.md`);
+    const original = readFileSync(definitionPath, "utf8");
+    const changedTools = planning.tool_authority.allowed_tools.slice(1);
+    if (changedTools.length === 0)
+      throw new Error("planning YAML maximum is unexpectedly singular");
+    writeFileSync(
+      definitionPath,
+      original.replace(/^tools:.*$/mu, `tools: ${changedTools.join(", ")}`),
+      "utf8"
+    );
+
+    using artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const client = new CapturingClient();
+    const workers = new WorkerExecutor(client, artifacts, {
+      projectRoot: catalog,
+      parallelConcurrency: 1,
+      registration: activeBeforeDrift,
+    });
+    await expect(
+      workers.execute(researchDirective({ runId: "run-caller-yaml-drift" }))
+    ).rejects.toThrow(/generic child/u);
+    expect(client.invocations).toHaveLength(0);
   });
 
   it("projects bounded registration metadata into a direct shipped-registry worker", async () => {
@@ -171,6 +232,13 @@ describe("W6 active worker registration", () => {
       result_transport: "persisted_summary",
       opening_policy: "registration_guidance_task_artifacts",
       model_policy: "directive_override_or_runtime_default",
+      generic_child_yaml_authority: {
+        carrier: "catalog_agent_yaml_maximum",
+        allowed_tools: parseSsotTools(
+          readFileSync(path.join(PROJECT_ROOT, ".pi", "agents", "piper.md"), "utf8"),
+          "piper"
+        ),
+      },
     });
     expect(client.invocations[0]?.registration.allowed_tools).toBeUndefined();
   });
@@ -208,6 +276,7 @@ describe("W6 active worker registration", () => {
       )
     ).rejects.toBe(client.boundary);
     expect(client.invocations[0]?.registration.allowed_tools).toBeUndefined();
+    expect(client.invocations[0]?.registration.generic_child_yaml_authority).toBeUndefined();
 
     const strict = new WorkerExecutor(client, artifacts, {
       projectRoot: PROJECT_ROOT,
@@ -225,6 +294,7 @@ describe("W6 active worker registration", () => {
       )
     ).rejects.toBe(client.boundary);
     expect(client.invocations[1]?.registration.allowed_tools).toEqual(["artifact_read"]);
+    expect(client.invocations[1]?.registration.generic_child_yaml_authority).toBeUndefined();
   });
 
   it("digests and projects one immutable registration-owned browser allowlist unchanged", async () => {

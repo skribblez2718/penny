@@ -66,6 +66,7 @@ describe("validated policy digest boundary", () => {
     const root = tmpRoot();
     initKb(ctx(root), "Policy Boundary KB");
     const initial = readPolicy(root);
+    if (initial.schema_version !== 2) throw new Error("expected new V2 policy fixture");
     const admittedPolicy = {
       ...initial,
       allowed_parent_models: [{ ...parentIdentity, locality: "local" }],
@@ -86,7 +87,7 @@ describe("validated policy digest boundary", () => {
       ...admittedPolicy,
       reader_limits: {
         ...admittedPolicy.reader_limits,
-        max_calls_per_phase: admittedPolicy.reader_limits.max_calls_per_phase + 1,
+        max_phase_utf8_bytes: admittedPolicy.reader_limits.max_phase_utf8_bytes - 1,
       },
     });
     let caught: unknown;

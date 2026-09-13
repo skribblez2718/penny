@@ -65,6 +65,56 @@ Existing runs never change owner or database. Compaction reads exact v2 rows by 
 run ID. Historical positives without an admission envelope replay exactly as legacy truth;
 new positives require an envelope, and envelope corruption fails closed on replay.
 
+## Durable child-workflow call state
+
+The child-call storage boundary stores one compact canonical `ChildWorkflowCallRecordV2` for new
+calls, while retaining exact V1 replay, in the project orchestration control store. It binds the
+deterministic call ID to the exact parent
+run/state/visit,
+deterministic ordinary child run, pending directive, request/input/output-contract refs and
+digests, registration digests, project/policy binding, active lease binding, and current lifecycle.
+Historical V1 records additionally retain their original allocation for exact replay.
+
+Reservation is artifact-first and control-store-second. `ChildWorkflowStateOwner` mints an opaque
+custody capability only from a concrete `ArtifactStore`; the checkpointer confirms that
+store's project binding matches its own and verifies the canonical request plus every bound input
+by manifest ref and immutable bytes. One `BEGIN IMMEDIATE` transaction records the parent's exact
+pending child directive, creates the ordinary unstarted child run and initial event, inserts the
+call row, and records the parent reservation event. `(parent_run_id, parent_state_id, call_key)` is
+unique. Exact retries adopt the existing record, including its current lifecycle; changed immutable
+operands conflict. Artifact-only state, an unpaired child run, or missing/mismatched linkage fails
+closed. Recovery never synthesizes a run, ref, registration, visit coordinate, or call row.
+
+The lifecycle vocabulary is `reserved | running | waiting_user | paused | terminal_recorded |
+failed | cancelled | consumed`. Storage compare-and-set remains separate from dispatch. The active
+runtime owner moves a reserved call to running, executes the ordinary child engine, captures a
+verified terminal, and atomically consumes it with the parent continuation. A normal service
+constructs this owner; a host can explicitly disable it. A runner cancellation signal or concurrent
+durable parent-cancel request transitions the call to `cancelled` before/while the parent is
+terminal and cannot resume a parent from a late boundary. Inactivity expiry terminates and consumes
+the child result without falsely treating it as a parent-cancel request. The path still has no child-
+gate projection, arbitrary post-capture restart reconciliation, or cohort artifact/session
+retention. Parent/provider authority remains digest-bound; qualification/discovery is separate and
+Gate 2 remains `not_run`.
+
+Terminal-run pruning retains every child named by a call row and retains a parent while any linked
+call is not `consumed`; this is store-level call/run retention only, not artifact-cohort, receipt,
+or catalog-session retention. Schema v12 is created through explicit provisioning; an active retained
+v10/v11 database is upgraded only by the backup-first `penny-state upgrade` path. The supported steps
+share one exclusive transaction and add no synthetic rows. The v11 step preserves canonical V1 record
+bytes while admitting V2. Retained-call upgrade requires artifact manifest/object units and verifies
+their refs; unsupported, unversioned, newer, malformed, or ambiguously bound state refuses. Ordinary
+runtime and repeated `init` remain non-mutating.
+
+The active V2 policy/call contract removes predicted per-child turns, tool calls, external calls,
+output bytes, steps, elapsed time, aggregate capacity, and parent reserve. A child instead uses its
+registered playbook repair/liveness policy and the service-wide step backstop. The call binds an exact
+content-free inactivity lease and fence `(owner epoch, attempt, session, token)`. The owner feeds it
+only monotonic host-observed non-empty worker activity or workflow convergence, renewing one interval
+at a time. Activity never advances the convergence epoch; stale/replayed fences and signals refuse;
+lease expiry aborts the child. Existing V1 rows retain their original fixed allocations for exact
+legacy replay and are never minted for new calls.
+
 ## Verification
 
 - [ ] State vocabulary and state/agent binding are exact-set pinned.

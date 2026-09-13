@@ -1,4 +1,4 @@
-.PHONY: setup setup-ready setup-dev setup-browser doctor state-status memory-status preflight-core preflight-js preflight-python config-check venv install-py install-js build-orchestration build-observability init clean test test-integration check-public check-agents-links check-doc-links check-kb-privacy check-tool-profiles check-tool-descriptions check-skill-structure check-capability-registry check-agent-roster lint typecheck verify-publication format
+.PHONY: setup setup-ready setup-dev setup-browser doctor state-status memory-status verify-runtime preflight-core preflight-js preflight-python config-check venv install-py install-js build-orchestration build-observability init clean test test-integration check-public check-agents-links check-doc-links check-kb-privacy check-tool-profiles check-tool-descriptions check-skill-structure check-capability-registry check-agent-roster lint typecheck verify-publication format
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -52,6 +52,12 @@ build-orchestration: install-js
 
 build-observability: build-orchestration
 	bash scripts/setup/init-observability.sh
+
+# Operator post-update gate, separate from state-independent test/publication gates.
+# Share the build dependency so targets within one make invocation have one dist writer.
+# Readiness never initializes, upgrades, or repairs retained state.
+verify-runtime: build-orchestration
+	@bash scripts/setup/init-orchestration.sh readiness
 
 # Readiness-only entrypoint: never authorizes fresh state initialization.
 doctor:

@@ -517,7 +517,7 @@ describe("P1.1 central completion admission", () => {
       () =>
         new OrchestrationEngine(checkpointer, {
           receiptAuthority: TEST_RECEIPT_AUTHORITY,
-          projectRoot,
+          projectRoot: projectRoot,
           maxSteps: 8,
           playbookName: PLAYBOOK,
           playbookRegistry: new Map([[PLAYBOOK, bad]]),

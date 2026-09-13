@@ -60,6 +60,7 @@ const {
   mockBuildHostContext,
   mockLoadParentGrant,
   mockReplayRun,
+  mockResolveRuntime,
   mockServiceOptions,
 } = vi.hoisted(() => ({
   mockResolveProfile: vi.fn<(input: unknown) => unknown>(() => {
@@ -157,6 +158,14 @@ const {
       next: status === "running" ? "resume" : status === "awaiting_user" ? "review" : "none",
     };
   }),
+  mockResolveRuntime: vi.fn(() => ({
+    paths: {
+      knowledgeBase: {
+        profiles: "/tmp/penny-test-state/kb/profiles.json",
+        hostGrants: "/tmp/penny-test-state/kb/host-grants",
+      },
+    },
+  })),
   mockServiceOptions: vi.fn(),
 }));
 
@@ -234,14 +243,7 @@ vi.mock("@penny/orchestration/source", async (importOriginal) => {
         },
       },
     })),
-    resolvePennyRuntimeState: vi.fn(() => ({
-      paths: {
-        knowledgeBase: {
-          profiles: "/tmp/penny-test-state/kb/profiles.json",
-          hostGrants: "/tmp/penny-test-state/kb/host-grants",
-        },
-      },
-    })),
+    resolvePennyRuntimeState: mockResolveRuntime,
     resolveGrantedProfile: mockResolveProfile,
     KbSessionProfileGrantStore: class {
       allowedProfiles() {
@@ -329,6 +331,14 @@ afterEach(() => {
   mockBuildHostContext.mockClear();
   mockLoadParentGrant.mockClear();
   mockReplayRun.mockClear();
+  mockResolveRuntime.mockReset().mockImplementation(() => ({
+    paths: {
+      knowledgeBase: {
+        profiles: "/tmp/penny-test-state/kb/profiles.json",
+        hostGrants: "/tmp/penny-test-state/kb/host-grants",
+      },
+    },
+  }));
   mockServiceOptions.mockClear();
 });
 
@@ -462,6 +472,36 @@ describe("knowledge_base registration and closed authority surface", () => {
     expect(
       Value.Check(kb.parameters, { ...profile, action: "query", query: "q", page_ids: ["a..b"] })
     ).toBe(false);
+  });
+
+  it("reports stale orchestration state instead of profile authorization failure", async () => {
+    const { PennyStateResolutionError } = await import("@penny/orchestration/source");
+    mockResolveRuntime.mockImplementation(() => {
+      throw new PennyStateResolutionError("STATE_SCHEMA_INCOMPATIBLE", "stale state", undefined, {
+        component: "orchestration",
+        actualSchemaVersion: 10,
+        requiredSchemaVersion: 12,
+        upgradeSupported: true,
+        recoveryAction: "penny-state-upgrade",
+      });
+    });
+    const kb = (await loadTools()).find((tool) => tool.name === "knowledge_base");
+    if (kb === undefined) throw new Error("knowledge_base not registered");
+
+    const response = await kb.execute(
+      "stale-state",
+      { schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "q" },
+      undefined,
+      undefined,
+      { cwd: "/tmp/project" }
+    );
+    const details = object(response.details);
+    const warnings = details["warnings"];
+    expect(warnings).toEqual([
+      "STATE_SCHEMA_INCOMPATIBLE: orchestration state unavailable (10 → 12); recovery=penny-state-upgrade",
+    ]);
+    expect(warnings).not.toContain("profile_not_authorized");
+    expect(mockResolveProfile).not.toHaveBeenCalled();
   });
 
   it("stamps engine starts with the authenticated Pi session identity", async () => {

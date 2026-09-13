@@ -231,7 +231,7 @@ describe("penny-state command", () => {
         PRAGMA foreign_keys=OFF;
         DROP TABLE runs;
         CREATE TABLE runs(run_key TEXT PRIMARY KEY);
-        PRAGMA user_version=10;
+        PRAGMA user_version=12;
       `);
     }
 
@@ -331,11 +331,56 @@ describe("penny-state command", () => {
     expect(stateTreeSnapshot(initialized.state.root)).toEqual(before);
   });
 
+  it("reports workflow readiness separately and upgrades a stale active partition", async () => {
+    const root = sandbox();
+    const projectRoot = path.join(root, "project");
+    const backupRoot = path.join(root, "backups");
+    mkdirSync(projectRoot, { mode: 0o700 });
+    mkdirSync(backupRoot, { mode: 0o700 });
+    const env = { PENNY_STATE_ROOT: path.join(root, "state") };
+    const initialized = await executeStateCommand(["init", `--project-root=${projectRoot}`], env);
+    if (initialized.action !== "init") throw new Error("state init returned an unexpected result");
+    {
+      using database = openDatabase(initialized.orchestration_database);
+      database.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+    }
+
+    await expect(
+      executeStateCommand(["readiness", `--project-root=${projectRoot}`], env)
+    ).rejects.toMatchObject({
+      code: "STATE_SCHEMA_INCOMPATIBLE",
+      details: {
+        component: "orchestration",
+        actualSchemaVersion: 10,
+        requiredSchemaVersion: 12,
+        upgradeSupported: true,
+        recoveryAction: "penny-state-upgrade",
+      },
+    });
+    const upgraded = await executeStateCommand(
+      ["upgrade", `--project-root=${projectRoot}`, `--backup-dir=${backupRoot}`],
+      env
+    );
+    expect(upgraded).toMatchObject({
+      action: "upgrade",
+      project_id: initialized.project_id,
+      source_schema_version: 10,
+      target_schema_version: 12,
+      changed: true,
+    });
+    if (upgraded.action !== "upgrade") throw new Error("state upgrade returned wrong action");
+    expect(upgraded.backup_root).not.toBeNull();
+    expect(upgraded.backup_database).not.toBeNull();
+    const ready = await executeStateCommand(["readiness", `--project-root=${projectRoot}`], env);
+    expect(ready.action).toBe("readiness");
+  });
+
   it("does not expose a legacy import or migration through setup", async () => {
     const help = await executeStateCommand(["help"], {});
     expect(help.action).toBe("help");
     if (help.action !== "help") throw new Error("expected help result");
-    expect(help.text).toContain("never inspect or import legacy roots");
+    expect(help.text).toContain("never mutate or import retained state");
+    expect(help.text).toContain("penny-state upgrade --project-root=PATH --backup-dir=PATH");
     expect(help.text).not.toContain("orchestration-v2.db");
   });
 });

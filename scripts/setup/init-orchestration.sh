@@ -15,11 +15,15 @@ usage() {
 Usage:
   scripts/setup/init-orchestration.sh build
   scripts/setup/init-orchestration.sh status
+  scripts/setup/init-orchestration.sh readiness
   scripts/setup/init-orchestration.sh fresh
 
-`status` never creates or repairs state. `fresh` is explicit authorization to
-run the guarded fresh-state initializer; retained/incomplete state still fails
-closed and must use the documented migration or recovery flow.
+`status` and `readiness` never create, upgrade, or repair state. `readiness`
+checks the retained state required by agent and skill invocations. Use
+`make verify-runtime` to rebuild first; a build alone is not runtime readiness.
+`fresh` is explicit authorization to run the guarded fresh-state initializer;
+retained/incomplete state still fails closed and must use the documented
+migration or recovery flow.
 EOF
 }
 
@@ -27,14 +31,14 @@ operation="${1:-}"
 case "$operation" in
     build)
         bun run --cwd "$APP" build
-        echo "TypeScript orchestration build is ready."
+        echo "TypeScript orchestration build complete; retained runtime state has not been checked."
         ;;
-    status)
+    status|readiness)
         if [[ ! -r "$STATE_CLI" ]]; then
             echo "ERROR: orchestration state CLI is not built: $STATE_CLI" >&2
             exit 1
         fi
-        exec node "$STATE_CLI" status --project-root="$PROJECT_ROOT"
+        exec node "$STATE_CLI" "$operation" --project-root="$PROJECT_ROOT"
         ;;
     fresh)
         if [[ ! -r "$STATE_CLI" ]]; then

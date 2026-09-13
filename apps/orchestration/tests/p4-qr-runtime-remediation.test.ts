@@ -220,7 +220,7 @@ class UnifiedMalformedSemanticDraftClient implements ModelClient {
 }
 
 describe("P4-QR Fresh-004 liveness terminal regression", () => {
-  it("preserves the exact Pi liveness error and durably terminalizes incomplete", async () => {
+  it("preserves an exact provider liveness error without reintroducing a host call quota", async () => {
     const root = temporaryRoot();
     const runId = "run-p4-fresh-004-liveness";
     const artifacts = new ArtifactStore(path.join(root, "artifacts"));
@@ -264,14 +264,13 @@ describe("P4-QR Fresh-004 liveness terminal regression", () => {
     expect(terminal.met).toBe(false);
     expect(terminal.result.terminal_reason).toBe("external_request_budget_exhausted");
     expect(client.invocations).toHaveLength(1);
-    expect(client.invocations[0]?.livenessBudget).toEqual({
-      schema_version: 1,
-      preset: "quick",
-      purpose: "phase",
-      model_turns: { worker_remaining: 16, run_remaining: 48, effective_remaining: 16 },
-      tool_calls: { worker_remaining: 20, run_remaining: 64, effective_remaining: 20 },
-      external_requests: { worker_remaining: 8, run_remaining: 12, effective_remaining: 8 },
-    });
+    const budget = client.invocations[0]?.livenessBudget;
+    if (budget?.schema_version !== 3) throw new Error("Fresh-004 did not receive a V3 lease");
+    expect(budget.preset).toBe("quick");
+    expect(budget.purpose).toBe("phase");
+    expect(budget.inactivity_lease.interval_ms).toBe(10 * 60_000);
+    expect(budget.inactivity_lease.remaining_ms).toBeGreaterThan(0);
+    expect(budget.inactivity_lease.accepted_progress_signals).toBe(0);
     expect(
       checkpointer.events(runId).filter((event) => event.eventType === "liveness_tool_call_charged")
     ).toHaveLength(8);

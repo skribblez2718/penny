@@ -26,11 +26,212 @@ metadata:
 
 This is a model-visible, registered universal package. Pi native discovery and Penny's model-facing catalog may describe it, and explicit `skill` invocation is routed through the sole executable playbook registry with its bound contract. Model visibility does not bypass host-owned authorization or consequence boundaries.
 
+<!-- PENNY:GENERATED-INVOCATION:START -->
+
 ## Invocation
 
-`skill({ skill_name: "produce", goal: "Purpose/problem statement", constraints: { schema_version: 1, output_name: "artifact.md", artifact_kind: "markdown", specification: [{ statement: "..." }], source_material: [{ statement: "...", source_label: "optional" }], acceptance_criteria: [{ statement: "..." }], hard_constraints: [], non_goals: [], known_uncertainties: [] } })`
+This block is generated from the active runtime registration, its real caller constraints schema, and contract I/O. Do not edit it by hand.
 
-Produce accepts no caller artifact inputs. Every request array is closed and bounded; `specification` and `acceptance_criteria` are nonempty.
+<!-- prettier-ignore -->
+```ts
+skill({
+  skill_name: "produce",
+  goal: "Produce a short project note.",
+  constraints: {"acceptance_criteria":[{"statement":"State the start date."}],"artifact_kind":"markdown","hard_constraints":[],"known_uncertainties":[],"non_goals":[],"output_name":"note.md","schema_version":1,"source_material":[{"source_label":"brief","statement":"The project starts Tuesday."}],"specification":[{"statement":"Write one concise note."}]},
+});
+```
+
+The request port is `penny.produce-request.v1` v1. Produces content only; it does not write, execute, test, or publish it.
+
+### Contract I/O
+
+- `produce_request` — input/inline_request; schema `penny.produce-request.v1` v1; 1..1 item(s).
+- `produced_artifact` — output/artifact; schema `penny.produced-artifact.v2` v2; 1..1 item(s); artifact kind semantic-core.
+
+### Runtime constraints schema
+
+<!-- prettier-ignore -->
+```json
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "output_name",
+    "artifact_kind",
+    "specification",
+    "source_material",
+    "acceptance_criteria",
+    "hard_constraints",
+    "non_goals",
+    "known_uncertainties"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "output_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "artifact_kind": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "text"
+        },
+        {
+          "type": "string",
+          "const": "markdown"
+        },
+        {
+          "type": "string",
+          "const": "json"
+        },
+        {
+          "type": "string",
+          "const": "yaml"
+        },
+        {
+          "type": "string",
+          "const": "typescript"
+        },
+        {
+          "type": "string",
+          "const": "javascript"
+        },
+        {
+          "type": "string",
+          "const": "python"
+        },
+        {
+          "type": "string",
+          "const": "shell"
+        }
+      ]
+    },
+    "specification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 64
+    },
+    "source_material": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "source_label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 128
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 64
+    },
+    "hard_constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    },
+    "non_goals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    },
+    "known_uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+<!-- PENNY:GENERATED-INVOCATION:END -->
 
 ## Orchestrated Flow
 
@@ -52,7 +253,7 @@ Carren `quality_gap` returns to Skribble. Vera `brief_gap` returns through Ida, 
 
 The host canonicalizes and persists `ProduceRequestV1`. Every cognitive directive carries owner-selected exact `input_artifacts` refs and an `output_artifact` contract. Ordinary workflow phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by caller/task, and within the phase consequence boundary. In particular, Skribble's YAML write-capable surface does not authorize this workflow to write files: the complete product remains response content captured by the owner.
 
-Normal-phase liveness permits at most 8 external calls per worker and 64 per run; routing-only repair remains at 0. These are resource ceilings, not authority for external research, filesystem mutation, execution, testing, publication, or deployment. The owner captures and re-reads exact bytes before routing, and memory availability cannot affect correctness.
+Normal permitted work has no model-turn, phase-admission, tool-call, external-call, or total elapsed-work quota. Calibrated renewable inactivity leases stop stalled workers, independent host-operation deadlines remain an upper bound, and routing-only repair remains separately count-bounded; none grants authority for external research, filesystem mutation, execution, testing, publication, or deployment. The owner captures and re-reads exact bytes before routing, and memory availability cannot affect correctness.
 
 ## Output and Terminal Truth
 

@@ -252,15 +252,11 @@ function buildStack(projectRoot: string, capIds: readonly string[]): Stack {
   const artifacts = new ArtifactStore(artifactRoot);
   const engine = new OrchestrationEngine(checkpointer, {
     receiptAuthority: TEST_RECEIPT_AUTHORITY,
-    projectRoot,
+    projectRoot: projectRoot,
     maxSteps: 40,
     artifactRevisions: artifacts,
     playbookName: "knowledge-base",
-    livenessPolicyResolver: () =>
-      kbLivenessPolicy({
-        action: "ingest",
-        readerMaxCallsPerPhase: readPolicy(kbRoot).reader_limits.max_calls_per_phase,
-      }),
+    livenessPolicyResolver: () => kbLivenessPolicy({ action: "ingest" }),
   });
   let composeAllocation:
     | {
@@ -513,9 +509,13 @@ describe("KB through the engine (step 4)", () => {
     await driveToGate(stack, capIds);
 
     const changed = readPolicy(kbRoot);
+    if (changed.schema_version !== 2) throw new Error("expected new V2 policy fixture");
     writePolicy(kbRoot, {
       ...changed,
-      reader_limits: { ...changed.reader_limits, max_calls_per_phase: 15 },
+      reader_limits: {
+        ...changed.reader_limits,
+        max_phase_utf8_bytes: changed.reader_limits.max_phase_utf8_bytes - 1,
+      },
     });
     expect(() => respond(stack, "approve")).toThrow(/policy changed after review/);
     const durable = stack.checkpointer.loadRunById(stack.runId);

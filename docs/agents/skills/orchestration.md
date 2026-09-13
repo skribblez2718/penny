@@ -63,6 +63,51 @@ admission, recovery, and observability. Skill directories contain no executable 
 - Generic chain failure stops with exact refs and `resumable:true`; it adds no retry/skip/diagnose
   approval questionnaire. Genuine playbook clarification still uses `await_user`.
 
+## Active generic-child authority and storage boundary
+
+`playbooks/registry.ts` carries the active **runtime authority projection** for exactly the six
+operator-authorized ordinary workflows: `assess`, `decide`, `diagnose`, `plan`, `produce`, and
+`research`. Every one is both a depth-one parent and provider for the same all-six target set. The
+parent declaration fixes one call, one active child, and project concurrency one without predicting
+per-call turns, tools, output size, steps, elapsed time, aggregate capacity, or a sealing reserve. The
+provider declaration binds its native request validator/port, input and single terminal output ports,
+expected child output, and every registered phase's agent, result
+schema, tool carrier, and existing browser-network allowlist. A subset-absent carrier records its
+exact YAML maximum snapshot and registration validation re-reads the catalog to refuse drift. All of
+this participates in the active registration digest. Missing declarations, unknown workflows, and the
+dedicated/private `knowledge-base` registration deny.
+
+The projection authorizes active depth-one child dispatch. `OrchestrationService` constructs the
+child owner by default; a host can explicitly disable it with `enableChildWorkflows: false`, which
+returns the typed owner-unavailable refusal. The owner revalidates registration and canonical
+request authority, reserves an exact child run, drives the registered child engine/runner, validates
+its terminal core, persists a `child-result` artifact, and atomically records the parent continuation
+with `consumed`. `WorkerExecutor` still rejects child directives itself; `OrchestrationRunner`
+delegates them only to the state owner. The path enforces fixed call/active/project admission,
+uses the child playbook's existing repair/liveness policy plus the service-wide step backstop, and
+forwards cancellation from the runner signal or a concurrent durable parent-cancel request. It does
+not impose a guessed child-specific turn, tool, output-byte, step, time, aggregate, or reserve budget.
+
+New calls use schema-v3 directives and durable V2 call records. Their child-execution lease is
+content-free and host-selected from the digest-bound liveness registry. Fenced, monotonic
+host-observed worker activity and workflow convergence renew one inactivity interval; empty/stale
+signals refuse, activity does not manufacture convergence, and expiry aborts the child. Legacy V1
+records remain replayable but are not minted. Provider qualification remains separate: Gate 2 is
+`not_run` with no evidence, so execution alone neither promotes nor externally discovers a provider.
+
+Active schema-v3 directives and V2 call records intentionally contain no guessed resource
+allocation. Their digest-bound, content-free inactivity lease detects silence from host-observed
+activity; it is a liveness control, not a prediction of how much useful work a child should need.
+Historical schema-v2 directives and V1 rows retain their exact fixed allocations solely for replay.
+
+`ChildWorkflowStateOwner` remains the storage/custody boundary. It accepts one concrete,
+project-bound `ArtifactStore`; the checkpointer rechecks that store against its project binding and
+verifies the canonical child request plus every bound input by exact manifest ref, length, digest,
+and object bytes before mutation. Exact retry adopts; changed operands or missing/mismatched linkage
+fail closed. The current active path does **not** project child user gates, reconcile arbitrary
+post-crash child terminals, retain whole artifact/receipt/session
+cohorts, promote providers, or establish live qualification.
+
 ## Deterministic host continuation
 
 Host-only states begin only after accepted worker bytes and execution receipts are durable. They use

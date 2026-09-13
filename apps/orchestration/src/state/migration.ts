@@ -22,6 +22,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import { ARTIFACT_MANIFEST_SCHEMA_VERSION, ArtifactStore } from "../artifact-store.js";
+import { verifyChildWorkflowCallArtifacts } from "../child-workflows/storage.js";
 import { migrationArtifactRef } from "./artifact-compat.js";
 import { ORCHESTRATION_DATABASE_SCHEMA_VERSION, Checkpointer } from "../checkpointer.js";
 import { ProjectCatalog, projectRootCommitment } from "./catalog.js";
@@ -122,6 +123,7 @@ export interface MigrationVerificationStore {
 export interface MigrationSemanticVerification {
   readonly historical_receipts_verified: number;
   readonly artifact_object_bindings_verified: number;
+  readonly child_workflow_call_artifact_refs_verified: number;
   readonly skill_chain_artifact_refs_verified: number;
   readonly kb_authorities: readonly {
     readonly store_id: MigrationStoreId;
@@ -1058,7 +1060,7 @@ async function copySqliteStore(
     chmodSync(target, OWNER_FILE_MODE);
     fsyncSqliteUnit(target, injector, operation, store.id);
     if (store.id === "orchestration-db") {
-      using _checkpointer = new Checkpointer(target, undefined, { projectId });
+      using _checkpointer = Checkpointer.provisionMigrationTarget(target, projectId);
     } else if (store.id === "artifact-manifest") {
       using _artifacts = new ArtifactStore(path.dirname(target), { projectId });
     }
@@ -1354,6 +1356,54 @@ function verifySkillChainReferences(
   }
 }
 
+function verifyChildWorkflowCallArtifactRefs(
+  paths: ProjectStatePaths,
+  artifactManifestIncluded: boolean,
+  artifactObjectsIncluded: boolean
+): number {
+  const { DatabaseSync } = sqliteModule();
+  const database = new DatabaseSync(paths.orchestration.database, { readOnly: true });
+  let callIds: string[];
+  try {
+    database.exec("PRAGMA query_only=ON");
+    callIds = database
+      .prepare("SELECT call_id FROM child_workflow_calls ORDER BY call_id")
+      .all()
+      .map((row) => {
+        if (typeof row.call_id !== "string") {
+          throw new Error("retained child-workflow call ID is not text");
+        }
+        return row.call_id;
+      });
+  } finally {
+    database.close();
+  }
+  if (callIds.length === 0) return 0;
+  if (!artifactManifestIncluded || !artifactObjectsIncluded) {
+    throw new Error(
+      "retained child-workflow calls require artifact-manifest and artifact-objects migration units"
+    );
+  }
+
+  using checkpointer = Checkpointer.openExisting(paths.orchestration.database, undefined, {
+    projectId: paths.projectId,
+  });
+  using artifacts = ArtifactStore.openExisting(paths.artifacts.root, {
+    projectId: paths.projectId,
+  });
+  let verifiedRefs = 0;
+  for (const callId of callIds) {
+    const record = checkpointer.childWorkflowCall(callId);
+    if (record === undefined) {
+      throw new Error(`migration target child-workflow call '${callId}' is absent`);
+    }
+    verifyChildWorkflowCallArtifacts(artifacts, record);
+    verifiedRefs +=
+      1 + record.input_artifacts.artifacts.length + (record.output_artifact === null ? 0 : 1);
+  }
+  return verifiedRefs;
+}
+
 function verifyHistoricalReceipts(paths: ProjectStatePaths): number {
   const { DatabaseSync } = sqliteModule();
   const database = new DatabaseSync(paths.orchestration.database, { readOnly: true });
@@ -1396,12 +1446,20 @@ function verifyCrossStoreInvariants(
     ids.has("orchestration-db") && ids.has("orchestration-receipt-key")
       ? verifyHistoricalReceipts(paths)
       : 0;
+  const childWorkflowCallArtifactRefs = ids.has("orchestration-db")
+    ? verifyChildWorkflowCallArtifactRefs(
+        paths,
+        ids.has("artifact-manifest"),
+        ids.has("artifact-objects")
+      )
+    : 0;
   const skillChainArtifactRefs = ids.has("skill-chains")
     ? verifySkillChainReferences(paths, ids.has("artifact-manifest"))
     : 0;
   return {
     historical_receipts_verified: historicalReceipts,
     artifact_object_bindings_verified: artifactObjectBindings,
+    child_workflow_call_artifact_refs_verified: childWorkflowCallArtifactRefs,
     skill_chain_artifact_refs_verified: skillChainArtifactRefs,
     kb_authorities: plan.stores
       .filter((store) => KB_AUTHORITY_STORE_IDS.has(store.id))

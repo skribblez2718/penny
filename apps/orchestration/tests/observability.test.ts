@@ -41,7 +41,8 @@ import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import { researchSemanticDraftFixture } from "./helpers/research-semantic-draft.js";
 
-const MATRIX_TEST_TIMEOUT_MS = 30_000;
+// Full TypeScript verification runs this I/O-heavy matrix beside other SQLite cohorts.
+const MATRIX_TEST_TIMEOUT_MS = 60_000;
 const OBSERVER_TIMEOUT_MS = 10;
 const OBSERVER_SETTLEMENT_MS = 20;
 const FIXED_CLOCK_MS = 10_000;
@@ -831,7 +832,7 @@ async function runKbInterruptionResume(
     const plane = fakeKbPlane();
     const artifacts = new ArtifactStore(path.join(stateRoot, "artifacts"));
     const reopenedEngine = new OrchestrationEngine(reopenedCheckpointer, {
-      projectRoot,
+      projectRoot: projectRoot,
       maxSteps: MAX_STEPS,
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
       artifactRevisions: artifacts,

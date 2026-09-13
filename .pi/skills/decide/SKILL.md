@@ -24,6 +24,212 @@ metadata:
 
 This is a model-visible, registered universal package. Pi native discovery and Penny's model-facing catalog may describe it, and explicit `skill` invocation is routed through the sole executable playbook registry with its bound contract. Model visibility does not bypass host-owned authorization or consequence boundaries.
 
+<!-- PENNY:GENERATED-INVOCATION:START -->
+
+## Invocation
+
+This block is generated from the active runtime registration, its real caller constraints schema, and contract I/O. Do not edit it by hand.
+
+<!-- prettier-ignore -->
+```ts
+skill({
+  skill_name: "decide",
+  goal: "Choose a communication channel.",
+  constraints: {"alternatives":[{"alternative_id":"email","description":"Send an email.","label":"Email"},{"alternative_id":"chat","description":"Send a chat message.","label":"Chat"}],"evidence":[],"hard_constraints":[],"objectives":[{"objective_id":"clarity","statement":"Reach the team clearly."}],"preferences":[],"schema_version":1,"uncertainties":[]},
+});
+```
+
+The request port is `penny.decision-request.v1` v1. Selects among supplied alternatives; it does not execute the choice.
+
+### Contract I/O
+
+- `decision_request` — input/inline_request; schema `penny.decision-request.v1` v1; 1..1 item(s).
+- `prior_grounded_synthesis` — input/artifact; schema `penny.grounded-synthesis.v1` v1; 0..1 item(s); artifact kind semantic-core.
+- `decision` — output/artifact; schema `penny.decision.v2` v2; 1..1 item(s); artifact kind semantic-core.
+
+### Runtime constraints schema
+
+<!-- prettier-ignore -->
+```json
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "alternatives",
+    "hard_constraints",
+    "objectives",
+    "preferences",
+    "uncertainties",
+    "evidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "alternatives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "alternative_id",
+          "label",
+          "description"
+        ],
+        "properties": {
+          "alternative_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 24
+    },
+    "hard_constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "constraint_id",
+          "statement"
+        ],
+        "properties": {
+          "constraint_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 32
+    },
+    "objectives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "objective_id",
+          "statement"
+        ],
+        "properties": {
+          "objective_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 32
+    },
+    "preferences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "preference_id",
+          "statement"
+        ],
+        "properties": {
+          "preference_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 32
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "uncertainty_id",
+          "statement"
+        ],
+        "properties": {
+          "uncertainty_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 32
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "evidence_id",
+          "statement"
+        ],
+        "properties": {
+          "evidence_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+<!-- PENNY:GENERATED-INVOCATION:END -->
+
 ## Orchestrated Flow
 
 ```text
@@ -45,7 +251,7 @@ Vera and Carren emit only a closed gap kind plus repair owner. Engine-owned regi
 
 Every phase receives exact artifact refs. Ordinary workflow phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by the caller and task, and within the phase consequence boundary; they cannot bypass host-owned evidence admission. Request, analysis, evidence packet, draft, reviewer report, receipt, and feedback IDs are transport lineage, not semantic basis IDs. Only exact admitted `GroundedSynthesisV1` artifacts may contribute artifact basis IDs.
 
-Only the host-admitted Echo gap may acquire new evidence, and only through narrowly targeted read-only local inspection or web retrieval for the exact decision-sensitive fact when compatible with caller constraints. Echo must provide source locators, stop rather than broaden into open-ended research, and report unavailable, conflicting, disallowed, insufficient, or budget-exhausted evidence honestly as unresolved. Normal-phase liveness permits at most 8 external calls per worker and 64 per run; routing-only repair remains at 0.
+Only the host-admitted Echo gap may acquire new evidence, and only through narrowly targeted read-only local inspection or web retrieval for the exact decision-sensitive fact when compatible with caller constraints. Echo must provide source locators, stop rather than broaden into open-ended research, and report unavailable, conflicting, disallowed, insufficient, or budget-exhausted evidence honestly as unresolved. Normal permitted work has no model-turn, phase-admission, tool-call, external-call, or total elapsed-work quota. Calibrated renewable inactivity leases stop stalled workers, independent host-operation deadlines remain an upper bound, and routing-only repair remains separately count-bounded.
 
 ## Product and Review Truth
 
