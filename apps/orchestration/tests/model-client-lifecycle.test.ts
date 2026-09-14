@@ -138,16 +138,21 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import type { Directive } from "../src/contracts.js";
 import { LivenessExhaustedError } from "../src/liveness.js";
 import {
+  CATALOG_WORKER_CONTINUITY_METADATA,
+  CATALOG_WORKER_SESSION_METADATA,
   PiAgentClient,
   parseSsotTools,
+  validateCatalogWorkerContinuityMetadata,
   type AgentInvocation,
   type InlineExtension,
   type ModelClient,
   type PiAgentClientOptions,
 } from "../src/model-client.js";
 import { DECIDE_PLAYBOOK_REGISTRATION } from "../src/playbooks/decide.js";
+import { validateContextSourceRef } from "../src/skill-contracts/research.js";
 import { resolvePlaybook } from "../src/playbooks/registry.js";
 import { WorkerExecutor } from "../src/worker.js";
+import { parseJson, requireRecord } from "./helpers/narrowing.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const temporaryRoots: string[] = [];
@@ -519,6 +524,116 @@ describe("PiAgentClient created-session lifecycle", () => {
     expect(lifecycleHarness.sessionOptions[0]?.tools).toEqual(expected);
     expect(lifecycleHarness.sessionOptions[0]?.tools).toContain("artifact_read");
     expect(lifecycleHarness.sessionOptions[0]?.tools).toContain("web_search");
+  });
+
+  it("persists closed worker continuity metadata before the first model prompt", async () => {
+    const { projectRoot, sessionRoot } = temporaryProject();
+    const projectId = `prj_${"c".repeat(32)}`;
+    const task = "Choose the bounded candidate without losing this exact assignment.";
+    const invocationValue = decideCandidateInvocation({
+      projectRoot,
+      runId: "continuity-metadata",
+      task,
+    });
+    const client = new PiAgentClient({ catalogSessions: { projectId, root: sessionRoot } });
+    lifecycleHarness.outcomes.push("success");
+
+    await client.runAgent(invocationValue);
+
+    const files = readdirSync(path.join(sessionRoot, "demetri"));
+    expect(files).toHaveLength(1);
+    const entries = readFileSync(path.join(sessionRoot, "demetri", files[0] ?? ""), "utf8")
+      .trim()
+      .split("\n")
+      .map((line, index) => requireRecord(parseJson(line), `catalog session entry ${index}`));
+    const correlationIndex = entries.findIndex(
+      (entry) => entry.customType === CATALOG_WORKER_SESSION_METADATA
+    );
+    const continuityIndex = entries.findIndex(
+      (entry) => entry.customType === CATALOG_WORKER_CONTINUITY_METADATA
+    );
+    expect(correlationIndex).toBeGreaterThan(0);
+    expect(continuityIndex).toBeGreaterThan(correlationIndex);
+    const continuityEntry = entries[continuityIndex];
+    if (continuityEntry === undefined) throw new Error("continuity entry is absent");
+    const continuity = validateCatalogWorkerContinuityMetadata(continuityEntry.data);
+    expect(continuity).toMatchObject({
+      schema_version: 1,
+      project_id: projectId,
+      run_id: "continuity-metadata",
+      state_id: "deciding",
+      branch_id: null,
+      agent: "demetri",
+      purpose: "phase",
+      task,
+      input_artifacts: [],
+    });
+    expect(continuity.registered_guidance.length).toBeGreaterThan(0);
+    expect(continuity.compaction_continuity.mode).toBe("exact_opening");
+    if (continuity.compaction_continuity.mode !== "exact_opening") {
+      throw new Error("catalog worker did not persist its exact opening");
+    }
+    expect(continuity.compaction_continuity.opening).toContain(
+      "You are executing the 'demetri' role"
+    );
+    expect(continuity.compaction_continuity.opening).toContain(task);
+    expect(continuity.compaction_continuity.opening).toContain("Return the complete stage output");
+
+    expect(() =>
+      validateCatalogWorkerContinuityMetadata({ ...continuity, unexpected: true })
+    ).toThrow(/catalog worker continuity metadata/u);
+  });
+
+  it("marks owner-resolved context for Pi default compaction without copying it into the companion", async () => {
+    const { projectRoot, sessionRoot } = temporaryProject();
+    const projectId = `prj_${"b".repeat(32)}`;
+    const fixture = requireRecord(
+      parseJson(
+        readFileSync(
+          path.join(
+            PROJECT_ROOT,
+            "apps",
+            "orchestration",
+            "tests",
+            "fixtures",
+            "skills",
+            "research",
+            "positive-vectors.json"
+          ),
+          "utf8"
+        )
+      ),
+      "research positive vectors"
+    );
+    const source = validateContextSourceRef(fixture.context_source_ref);
+    const privateSentinel = "PRIVATE OWNER-RESOLVED BODY MUST NOT ENTER THE COMPANION";
+    const invocationValue: AgentInvocation = {
+      ...decideCandidateInvocation({
+        projectRoot,
+        runId: "private-context-continuity-mode",
+      }),
+      contextOverlays: [{ source, content: privateSentinel }],
+    };
+    const client = new PiAgentClient({ catalogSessions: { projectId, root: sessionRoot } });
+    lifecycleHarness.outcomes.push("success");
+
+    await client.runAgent(invocationValue);
+
+    const files = readdirSync(path.join(sessionRoot, "demetri"));
+    const entries = readFileSync(path.join(sessionRoot, "demetri", files[0] ?? ""), "utf8")
+      .trim()
+      .split("\n")
+      .map((line, index) => requireRecord(parseJson(line), `private session entry ${index}`));
+    const continuityEntry = entries.find(
+      (entry) => entry.customType === CATALOG_WORKER_CONTINUITY_METADATA
+    );
+    if (continuityEntry === undefined) throw new Error("private continuity entry is absent");
+    const continuity = validateCatalogWorkerContinuityMetadata(continuityEntry.data);
+    expect(continuity.compaction_continuity).toEqual({
+      mode: "pi_default_private_context",
+      reason: "owner_resolved_context_present",
+    });
+    expect(JSON.stringify(continuity)).not.toContain(privateSentinel);
   });
 
   it("preserves exact YAML equality when the active phase has no subset", async () => {

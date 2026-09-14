@@ -13,11 +13,33 @@ import { registerTool } from "../../lib/pi-tool-registration.js";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  opendirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
+import {
+  DEFAULT_TOOL_RESULT_BUDGET,
+  ToolResultBudgetConfigError,
+  fitUtf8ToolResult,
+  fitsToolResultBudget,
+  measureToolResult,
+  resolveToolResultBudget,
+  type TextToolResult,
+  type ToolResultBudget,
+} from "../lib/tool-result-budget.js";
 import {
   clampMaxResults,
   githubApiFallbackForUrl,
   MAX_FETCH_CONTENT_CHARS,
+  MAX_PROVIDER_RESPONSE_BYTES,
   MAX_RESULTS_LIMIT,
   normalizeGithubApiFallbackPage,
   resolveConfig,
@@ -33,8 +55,31 @@ import {
 
 const logger = createLogger("search");
 
+export const WEB_SEARCH_MAX_OUTPUT_LINES = 2_000;
+export const WEB_SEARCH_MAX_SPILLS_PER_SESSION = 4;
+export const WEB_SEARCH_MAX_SPILL_BYTES = MAX_PROVIDER_RESPONSE_BYTES + 64 * 1024;
+export const WEB_SEARCH_STALE_SPILL_AGE_MS = 24 * 60 * 60 * 1_000;
+export const WEB_SEARCH_STALE_VISIT_LIMIT = 1_024;
+export const WEB_SEARCH_STALE_REMOVAL_LIMIT = 256;
+const WEB_SEARCH_SPILL_ROOT_NAME = "penny-web-search-spills";
+const WEB_SEARCH_SPILL_PREFIX = "spill-";
+
+export function truncateWebSearchLines(
+  text: string,
+  maxLines: number
+): { content: string; truncated: boolean } {
+  const lines = text.split("\n");
+  return lines.length > maxLines
+    ? { content: lines.slice(0, maxLines).join("\n"), truncated: true }
+    : { content: text, truncated: false };
+}
+
+function formatOutputSize(bytes: number): string {
+  return bytes < 1024 ? `${bytes}B` : `${(bytes / 1024).toFixed(1)}KB`;
+}
+
 const WebSearchParams = Type.Object({
-  query: Type.String({ description: "The search query" }),
+  query: Type.String({ description: "The search query", minLength: 1, maxLength: 16_384 }),
   max_results: Type.Optional(
     Type.Integer({
       description: `Maximum number of results to return (1-${MAX_RESULTS_LIMIT}, default 5)`,
@@ -121,6 +166,161 @@ function textResult(payload: SearchToolResult) {
     content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
     details: undefined,
   };
+}
+
+function searchResultBudget(): ToolResultBudget {
+  try {
+    return resolveToolResultBudget(process.env);
+  } catch (error) {
+    if (error instanceof ToolResultBudgetConfigError) {
+      logger.warn("Invalid search result budget; enforcing shared hard defaults", {
+        error: error.message,
+      });
+      return DEFAULT_TOOL_RESULT_BUDGET;
+    }
+    throw error;
+  }
+}
+
+function removeSpillDirectory(directory: string): void {
+  rmSync(directory, { recursive: true, force: true });
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function searchSpillRoot(create: boolean): string | undefined {
+  const root = join(tmpdir(), WEB_SEARCH_SPILL_ROOT_NAME);
+  if (create) {
+    try {
+      mkdirSync(root, { mode: 0o700 });
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") throw error;
+    }
+  } else {
+    try {
+      lstatSync(root);
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+  const stat = lstatSync(root);
+  const uid = typeof process.geteuid === "function" ? process.geteuid() : undefined;
+  if (
+    stat.isSymbolicLink() ||
+    !stat.isDirectory() ||
+    (uid !== undefined && stat.uid !== uid) ||
+    (stat.mode & 0o077) !== 0
+  ) {
+    throw new Error("web-search spill root has unsafe custody");
+  }
+  return root;
+}
+
+function createSearchSpill(payload: WebSearchToolSuccess, spillDirectories: string[]): string {
+  const pretty = JSON.stringify(payload, null, 2);
+  const serialized =
+    Buffer.byteLength(pretty, "utf8") <= WEB_SEARCH_MAX_SPILL_BYTES
+      ? pretty
+      : JSON.stringify(payload);
+  if (Buffer.byteLength(serialized, "utf8") > WEB_SEARCH_MAX_SPILL_BYTES) {
+    throw new Error(`complete web-search result exceeds ${WEB_SEARCH_MAX_SPILL_BYTES} spill bytes`);
+  }
+  while (spillDirectories.length >= WEB_SEARCH_MAX_SPILLS_PER_SESSION) {
+    const oldest = spillDirectories.shift();
+    if (oldest !== undefined) removeSpillDirectory(oldest);
+  }
+  const root = searchSpillRoot(true);
+  if (root === undefined) throw new Error("web-search spill root is unavailable");
+  const directory = mkdtempSync(join(root, WEB_SEARCH_SPILL_PREFIX));
+  chmodSync(directory, 0o700);
+  const fullResultPath = join(directory, "result.json");
+  try {
+    writeFileSync(fullResultPath, serialized, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  } catch (error) {
+    removeSpillDirectory(directory);
+    throw error;
+  }
+  spillDirectories.push(directory);
+  return fullResultPath;
+}
+
+export function cleanupStaleWebSearchSpills(now = Date.now()): void {
+  const root = searchSpillRoot(false);
+  if (root === undefined) return;
+  const uid = typeof process.geteuid === "function" ? process.geteuid() : undefined;
+  const directory = opendirSync(root, { bufferSize: 32 });
+  let visited = 0;
+  let removed = 0;
+  try {
+    while (visited < WEB_SEARCH_STALE_VISIT_LIMIT && removed < WEB_SEARCH_STALE_REMOVAL_LIMIT) {
+      const entry = directory.readSync();
+      if (entry === null) break;
+      visited += 1;
+      if (!entry.name.startsWith(WEB_SEARCH_SPILL_PREFIX)) continue;
+      const candidate = join(root, entry.name);
+      const stat = lstatSync(candidate);
+      if (
+        stat.isSymbolicLink() ||
+        !stat.isDirectory() ||
+        (uid !== undefined && stat.uid !== uid) ||
+        (stat.mode & 0o077) !== 0 ||
+        now - stat.mtimeMs < WEB_SEARCH_STALE_SPILL_AGE_MS
+      ) {
+        continue;
+      }
+      removeSpillDirectory(candidate);
+      removed += 1;
+    }
+  } finally {
+    directory.closeSync();
+  }
+}
+
+function boundedSearchResult(
+  payload: WebSearchToolSuccess,
+  spillDirectories: string[]
+): TextToolResult {
+  const serialized = JSON.stringify(payload, null, 2);
+  const budget = searchResultBudget();
+  const ordinary = textResult(payload);
+  const exceedsLineLimit = serialized.split("\n").length > WEB_SEARCH_MAX_OUTPUT_LINES;
+  if (!exceedsLineLimit && fitsToolResultBudget(measureToolResult(ordinary), budget)) {
+    // Keep ordinary search responses byte-compatible and parseable.
+    return ordinary;
+  }
+
+  const fullResultPath = createSearchSpill(payload, spillDirectories);
+  const notice = [
+    "",
+    "[web_search output truncated]",
+    `Full result: ${fullResultPath}`,
+    `Original size: ${formatOutputSize(Buffer.byteLength(serialized, "utf8"))}; visible output is limited by the shared tool-result budget and ${WEB_SEARCH_MAX_OUTPUT_LINES} lines.`,
+    "The full-result file lasts for this Pi session. Use read with offset/limit to inspect only the ranges needed.",
+  ].join("\n");
+  const noticeLines = notice.split("\n").length - 1;
+  const lineBounded = truncateWebSearchLines(
+    serialized,
+    Math.max(1, WEB_SEARCH_MAX_OUTPUT_LINES - noticeLines)
+  ).content;
+  const source = Buffer.from(lineBounded, "utf8");
+  return fitUtf8ToolResult({
+    source,
+    start: 0,
+    end: source.length,
+    budget,
+    build: (end, text) => {
+      const lastLineBreak = text.lastIndexOf("\n");
+      const completeLines =
+        end === source.length ? text : lastLineBreak < 0 ? "" : text.slice(0, lastLineBreak);
+      return {
+        content: [{ type: "text", text: `${completeLines}${notice}` }],
+      };
+    },
+  }).result;
 }
 
 export interface GithubFallbackFailure {
@@ -252,8 +452,31 @@ function cancelledWebFetchError(url: string): SearchApiError {
 }
 
 export default function searchExtension(pi: ExtensionAPI): void {
+  const spillDirectories: string[] = [];
+  let staleCleanupDone = false;
   pi.on("session_start", async (_event, ctx) => {
     setSessionId(ctx.sessionManager.getSessionId());
+    if (!staleCleanupDone) {
+      staleCleanupDone = true;
+      try {
+        cleanupStaleWebSearchSpills();
+      } catch (error) {
+        logger.warn("Stale web-search spill cleanup failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  });
+  pi.on("session_shutdown", async () => {
+    for (const directory of spillDirectories.splice(0)) {
+      try {
+        removeSpillDirectory(directory);
+      } catch (error) {
+        logger.warn("Web-search spill cleanup failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   });
 
   // ── Tool 1: web_search ──
@@ -281,7 +504,10 @@ export default function searchExtension(pi: ExtensionAPI): void {
           signal
         );
         logger.info("web_search succeeded", { query: params.query, results: results.length });
-        return textResult({ success: true, query: params.query, results });
+        return boundedSearchResult(
+          { success: true, query: params.query, results },
+          spillDirectories
+        );
       } catch (e) {
         return errorResult("web_search", e);
       }

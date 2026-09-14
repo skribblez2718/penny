@@ -52,7 +52,11 @@ safely.
 10. `PENNY_ARTIFACT_DISPATCH_MODE=paused` preserves pending state and blocks new dispatch.
 11. Unknown playbooks, predicates, requests, trust profiles, contract fields, routes, and dispatch modes fail closed.
 12. The exact active registration reaches engine, service, worker, and catalog/private model paths.
-    Missing guidance and state/agent mismatches refuse before session work.
+    Missing guidance and state/agent mismatches refuse before session work. Durable non-private catalog
+    workers persist a closed companion containing the complete authoritative opening for compaction;
+    owner-resolved private-context workers are marked for Pi default compaction. Custom worker
+    compaction requires exact verification of every input plus successful context persistence/readback.
+    Every created SDK worker session emits and awaits `session_shutdown` before disposal on all exits.
 13. A catalog worker's YAML is its maximum ordinary authority. Direct/parallel/chain paths
     and orchestration phases without `allowed_tools` request and activate YAML exactly. An
     eligible catalog phase may use only one explicit non-empty duplicate-free strict YAML subset

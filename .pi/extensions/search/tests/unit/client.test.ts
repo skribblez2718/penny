@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_RESULTS,
   DEFAULT_TIMEOUT_MS,
   githubApiFallbackForUrl,
+  MAX_PROVIDER_RESPONSE_BYTES,
   MAX_RESULTS_LIMIT,
   normalizeGithubApiFallbackPage,
   resolveConfig,
@@ -348,6 +349,44 @@ describe("webSearch", () => {
     expect(response).toEqual({
       results: [{ title: "T", url: "https://x.com", content: "C", score: 0.9 }],
     });
+  });
+
+  it("rejects provider bodies whose declared size exceeds the fixed response cap", async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response("{}", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": String(MAX_PROVIDER_RESPONSE_BYTES + 1),
+        },
+      });
+    const error = await searchApiError(webSearch("q", 5, CONFIG, undefined, fetchImpl));
+    expect(error.kind).toBe("server_error");
+    expect(error.reason).toBe("provider_response");
+    expect(error.message).toMatch(/response exceeds/u);
+  });
+
+  it("rejects streamed provider bodies that exceed the cap without a length header", async () => {
+    let emittedBytes = 0;
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (emittedBytes > MAX_PROVIDER_RESPONSE_BYTES) {
+              controller.close();
+              return;
+            }
+            const chunk = new Uint8Array(1024 * 1024);
+            emittedBytes += chunk.byteLength;
+            controller.enqueue(chunk);
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    const error = await searchApiError(webSearch("q", 5, CONFIG, undefined, fetchImpl));
+    expect(error.kind).toBe("server_error");
+    expect(error.reason).toBe("provider_response");
+    expect(error.message).toMatch(/response exceeds/u);
   });
 
   it("rejects malformed top-level responses with the existing server error class", async () => {

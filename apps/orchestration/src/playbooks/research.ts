@@ -675,17 +675,21 @@ export class ResearchPlaybook
     }
     return validateDirective({
       ...pending,
-      branches: pending.branches.map((branch) => ({
-        ...branch,
-        output_artifact: outputArtifactMetadata(
-          context,
-          asResearchState(branch.state_id),
-          branch.agent,
-          branch.branch_id,
-          branch.output_artifact.upstream_refs,
-          this.revisions
-        ),
-      })),
+      branches: pending.branches.map((branch) =>
+        branch.execution_purpose === "routing_repair"
+          ? branch
+          : {
+              ...branch,
+              output_artifact: outputArtifactMetadata(
+                context,
+                asResearchState(branch.state_id),
+                branch.agent,
+                branch.branch_id,
+                branch.output_artifact.upstream_refs,
+                this.revisions
+              ),
+            }
+      ),
     });
   }
 

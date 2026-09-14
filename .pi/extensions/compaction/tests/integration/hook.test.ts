@@ -13,17 +13,31 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { initializePennyState } from "@penny/orchestration/source";
+import {
+  ArtifactStore,
+  CATALOG_WORKER_CONTINUITY_METADATA,
+  CATALOG_WORKER_SESSION_METADATA,
+  initializePennyState,
+  loadRuntimeConfig,
+  type ArtifactRef,
+} from "@penny/orchestration/source";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import compactionExtension from "../../index.js";
 import type { CheckpointReadResult } from "../../checkpointer.js";
 import { createMockCompactionPi, type CompactionEvent } from "../fixtures/compaction-pi.js";
+import {
+  parseJson,
+  requireArray,
+  requireRecord,
+  requireString,
+} from "../../../../lib/tests/test-narrowers.js";
 
 const engineRunsMock = vi.fn<
   (runIds: readonly string[], projectRoot: string) => CheckpointReadResult
 >(() => ({ runs: [], artifactRefs: [], issues: [] }));
 let sandbox: string;
 let projectRoot: string;
+let projectId: string;
 const previousStateRoot = process.env.PENNY_STATE_ROOT;
 const previousArtifactRoot = process.env.PENNY_ARTIFACT_ROOT;
 
@@ -33,10 +47,11 @@ beforeEach(() => {
   mkdirSync(projectRoot, { mode: 0o700 });
   process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
   delete process.env.PENNY_ARTIFACT_ROOT;
-  initializePennyState(projectRoot, { env: process.env });
+  projectId = initializePennyState(projectRoot, { env: process.env }).projectId;
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (previousStateRoot === undefined) delete process.env.PENNY_STATE_ROOT;
   else process.env.PENNY_STATE_ROOT = previousStateRoot;
   if (previousArtifactRoot === undefined) delete process.env.PENNY_ARTIFACT_ROOT;
@@ -175,6 +190,418 @@ describe("compactionExtension", () => {
     expect(result.compaction.details.files.modified).toContain("/tmp/edited.md");
     // No filler constraints
     expect(result.compaction.details.constraints).toEqual([]);
+  });
+
+  it("preserves exact validated worker assignment continuity without changing ordinary sessions", async () => {
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
+    const pi = createMockCompactionPi({ cwd: projectRoot });
+    compactionExtension(pi.api);
+    const task =
+      "Investigate the exact worker assignment that appears only after a long role preamble.";
+    let inputRef: ArtifactRef;
+    {
+      using inputStore = ArtifactStore.openExisting(loadRuntimeConfig(projectRoot).artifactRoot, {
+        projectId,
+      });
+      inputRef = inputStore.persist({
+        metadata: {
+          schema_version: 2,
+          run_id: "upstream-worker-run",
+          phase: "planning",
+          branch_id: null,
+          kind: "agent-output",
+          operation_id: "worker-continuity-input",
+          version: 1,
+          producer: "agent:piper",
+          media_type: "text/plain; charset=utf-8",
+          parent_ref: null,
+          upstream_refs: [],
+        },
+        content: "exact upstream input",
+      });
+    }
+    const identity = {
+      schema_version: 1 as const,
+      project_id: projectId,
+      run_id: "worker-continuity-run",
+      workflow_session_id: "worker-continuity-session",
+      state_id: "researching",
+      branch_id: "research-2",
+      attempt: 3,
+      worker_id: "worker-123",
+      agent: "echo",
+      purpose: "phase" as const,
+    };
+    const result = await pi.emitRequired(
+      createMockEvent({
+        preparation: {
+          firstKeptEntryId: "worker-kept",
+          tokensBefore: 120_000,
+          fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+          messagesToSummarize: [
+            {
+              role: "user",
+              content: `Role preamble ${"x".repeat(4_000)}\n\n## Your Task\n${task}`,
+            },
+          ],
+          turnPrefixMessages: [],
+        },
+        extraEntries: [
+          { customType: CATALOG_WORKER_SESSION_METADATA, data: identity },
+          {
+            customType: CATALOG_WORKER_CONTINUITY_METADATA,
+            data: {
+              ...identity,
+              task,
+              registered_guidance:
+                "Return the complete evidence product, then end with exactly one closed SUMMARY line.",
+              input_artifacts: [inputRef],
+              compaction_continuity: {
+                mode: "exact_opening",
+                opening:
+                  "ECHO ROLE SENTINEL: remain read-only. Return the complete evidence product and the closed SUMMARY line.",
+              },
+            },
+          },
+        ],
+      })
+    );
+
+    expect(result.compaction.details.goal).toBe(task);
+    expect(result.compaction.summary).toContain("## Worker Continuity");
+    expect(result.compaction.summary).toContain("worker-continuity-run");
+    expect(result.compaction.summary).toContain("branch **research-2**");
+    expect(result.compaction.summary).toContain(
+      `artifact:${inputRef.artifact_id}@sha256:${inputRef.content_digest}`
+    );
+    expect(result.compaction.summary).toMatch(/artifact:art_[a-f0-9]{64}@sha256:[a-f0-9]{64}/u);
+    expect(engineRunsMock).toHaveBeenCalledWith(["worker-continuity-run"], projectRoot);
+    const contextRef = result.compaction.details.artifact_refs.find(
+      (ref) => ref.kind === "worker-compaction-context"
+    );
+    if (contextRef === undefined) throw new Error("worker continuity artifact ref is absent");
+    expect(contextRef).toMatchObject({
+      run_id: "worker-continuity-run",
+      phase: "researching",
+      branch_id: "research-2",
+      producer: "extension:compaction",
+    });
+    using store = ArtifactStore.openExisting(loadRuntimeConfig(projectRoot).artifactRoot, {
+      projectId,
+    });
+    const stored = requireRecord(
+      parseJson(store.readById(contextRef.artifact_id).toString("utf8")),
+      "worker continuity artifact"
+    );
+    const assignment = requireRecord(stored.assignment, "worker continuity assignment");
+    expect(requireString(assignment.task, "worker continuity task")).toBe(task);
+    expect(requireString(assignment.registered_guidance, "worker continuity guidance")).toMatch(
+      /exactly one closed SUMMARY line/u
+    );
+    const compactionContinuity = requireRecord(
+      assignment.compaction_continuity,
+      "worker compaction continuity"
+    );
+    expect(requireString(compactionContinuity.opening, "worker authoritative opening")).toContain(
+      "ECHO ROLE SENTINEL: remain read-only"
+    );
+    expect(
+      requireArray(assignment.input_artifacts, "worker continuity input artifacts").map(
+        (ref, index) =>
+          requireString(
+            requireRecord(ref, `worker continuity input artifact ${index}`).artifact_id,
+            `worker continuity input artifact ${index} ID`
+          )
+      )
+    ).toEqual([inputRef.artifact_id]);
+  });
+
+  it.each(["missing", "duplicate", "malformed", "mismatched"] as const)(
+    "yields to Pi default for a recognized worker with %s continuity",
+    async (condition) => {
+      const pi = createMockCompactionPi({ cwd: projectRoot });
+      compactionExtension(pi.api);
+      const identity = {
+        schema_version: 1 as const,
+        project_id: projectId,
+        run_id: `rejected-${condition}-worker-run`,
+        workflow_session_id: "worker-session",
+        state_id: "researching",
+        branch_id: null,
+        attempt: 1,
+        worker_id: "worker-456",
+        agent: "echo",
+        purpose: "phase" as const,
+      };
+      const validCompanion = {
+        ...identity,
+        task: "Must not become authoritative",
+        registered_guidance: "Must not be used",
+        input_artifacts: [],
+        compaction_continuity: {
+          mode: "exact_opening" as const,
+          opening: "Must not become authoritative opening",
+        },
+      };
+      const companionEntries =
+        condition === "missing"
+          ? []
+          : condition === "duplicate"
+            ? [validCompanion, validCompanion]
+            : condition === "malformed"
+              ? [{ invalid: true }]
+              : [{ ...validCompanion, branch_id: "wrong-branch" }];
+      const result = await pi.emit(
+        createMockEvent({
+          extraEntries: [
+            { customType: CATALOG_WORKER_SESSION_METADATA, data: identity },
+            ...companionEntries.map((data) => ({
+              customType: CATALOG_WORKER_CONTINUITY_METADATA,
+              data,
+            })),
+          ],
+        })
+      );
+
+      expect(result).toBeUndefined();
+    }
+  );
+
+  it("yields to Pi default when recognized worker project binding fails", async () => {
+    process.env.PENNY_STATE_ROOT = "relative-state-root-is-invalid";
+    const pi = createMockCompactionPi({ cwd: projectRoot });
+    compactionExtension(pi.api);
+    const identity = {
+      schema_version: 1 as const,
+      project_id: projectId,
+      run_id: "project-binding-worker-run",
+      workflow_session_id: "project-binding-worker-session",
+      state_id: "researching",
+      branch_id: null,
+      attempt: 1,
+      worker_id: "project-binding-worker",
+      agent: "echo",
+      purpose: "phase" as const,
+    };
+    const result = await pi.emit(
+      createMockEvent({
+        extraEntries: [
+          { customType: CATALOG_WORKER_SESSION_METADATA, data: identity },
+          {
+            customType: CATALOG_WORKER_CONTINUITY_METADATA,
+            data: {
+              ...identity,
+              task: "Continue only with a valid project binding.",
+              registered_guidance: "Return the registered SUMMARY line.",
+              input_artifacts: [],
+              compaction_continuity: {
+                mode: "exact_opening",
+                opening: "ECHO ROLE SENTINEL: exact authoritative opening.",
+              },
+            },
+          },
+        ],
+      })
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it("yields to Pi default when exact worker continuity cannot verify every input", async () => {
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
+    const pi = createMockCompactionPi({ cwd: projectRoot });
+    compactionExtension(pi.api);
+    const identity = {
+      schema_version: 1 as const,
+      project_id: projectId,
+      run_id: "missing-worker-input-run",
+      workflow_session_id: "missing-worker-input-session",
+      state_id: "researching",
+      branch_id: "research-1",
+      attempt: 1,
+      worker_id: "missing-worker-input",
+      agent: "echo",
+      purpose: "phase" as const,
+    };
+    const result = await pi.emit(
+      createMockEvent({
+        extraEntries: [
+          { customType: CATALOG_WORKER_SESSION_METADATA, data: identity },
+          {
+            customType: CATALOG_WORKER_CONTINUITY_METADATA,
+            data: {
+              ...identity,
+              task: "Continue only with an exactly verified input.",
+              registered_guidance: "Return the registered SUMMARY line.",
+              input_artifacts: [outputRef("missing-upstream-run")],
+              compaction_continuity: {
+                mode: "exact_opening",
+                opening: "Exact authoritative opening that must not be partially retained.",
+              },
+            },
+          },
+        ],
+      })
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it("yields to Pi default when an existing worker input cannot be read", async () => {
+    using inputStore = ArtifactStore.openExisting(loadRuntimeConfig(projectRoot).artifactRoot, {
+      projectId,
+    });
+    const inputRef = inputStore.persist({
+      metadata: {
+        schema_version: 2,
+        run_id: "unreadable-worker-input-source",
+        phase: "researching",
+        branch_id: null,
+        kind: "agent-output",
+        operation_id: "unreadable-input",
+        version: 1,
+        producer: "agent:echo",
+        media_type: "text/markdown; charset=utf-8",
+        parent_ref: null,
+        upstream_refs: [],
+      },
+      content: "exact input that becomes unreadable",
+    });
+    vi.spyOn(ArtifactStore.prototype, "readById").mockImplementationOnce(() => {
+      throw new Error("injected worker input read failure");
+    });
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
+    const identity = {
+      schema_version: 1 as const,
+      project_id: projectId,
+      run_id: "unreadable-worker-input-run",
+      workflow_session_id: "unreadable-worker-input-session",
+      state_id: "researching",
+      branch_id: null,
+      attempt: 1,
+      worker_id: "unreadable-worker-input",
+      agent: "echo",
+      purpose: "phase" as const,
+    };
+    const pi = createMockCompactionPi({ cwd: projectRoot });
+    compactionExtension(pi.api);
+    const result = await pi.emit(
+      createMockEvent({
+        extraEntries: [
+          { customType: CATALOG_WORKER_SESSION_METADATA, data: identity },
+          {
+            customType: CATALOG_WORKER_CONTINUITY_METADATA,
+            data: {
+              ...identity,
+              task: "Continue only after exact input readback.",
+              registered_guidance: "Return the registered SUMMARY line.",
+              input_artifacts: [inputRef],
+              compaction_continuity: {
+                mode: "exact_opening",
+                opening: "ECHO ROLE SENTINEL: exact authoritative opening.",
+              },
+            },
+          },
+        ],
+      })
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it.each(["open", "persist", "re-read"] as const)(
+    "yields to Pi default when worker context %s fails",
+    async (failure) => {
+      engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
+      if (failure === "open") {
+        vi.spyOn(ArtifactStore, "openExisting").mockImplementation(() => {
+          throw new Error("injected worker context open failure");
+        });
+      } else if (failure === "persist") {
+        vi.spyOn(ArtifactStore.prototype, "persist").mockImplementationOnce(() => {
+          throw new Error("injected worker context persist failure");
+        });
+      } else {
+        vi.spyOn(ArtifactStore.prototype, "readById").mockImplementationOnce(() => {
+          throw new Error("injected worker context re-read failure");
+        });
+      }
+      const identity = {
+        schema_version: 1 as const,
+        project_id: projectId,
+        run_id: `worker-context-${failure}-run`,
+        workflow_session_id: `worker-context-${failure}-session`,
+        state_id: "researching",
+        branch_id: null,
+        attempt: 1,
+        worker_id: `worker-context-${failure}`,
+        agent: "echo",
+        purpose: "phase" as const,
+      };
+      const pi = createMockCompactionPi({ cwd: projectRoot });
+      compactionExtension(pi.api);
+      const result = await pi.emit(
+        createMockEvent({
+          extraEntries: [
+            { customType: CATALOG_WORKER_SESSION_METADATA, data: identity },
+            {
+              customType: CATALOG_WORKER_CONTINUITY_METADATA,
+              data: {
+                ...identity,
+                task: "Retain the complete worker assignment or do not replace context.",
+                registered_guidance: "Return the registered SUMMARY line.",
+                input_artifacts: [],
+                compaction_continuity: {
+                  mode: "exact_opening",
+                  opening: "ECHO ROLE SENTINEL: exact authoritative opening.",
+                },
+              },
+            },
+          ],
+        })
+      );
+
+      expect(result).toBeUndefined();
+    }
+  );
+
+  it("yields to Pi default rather than copying owner-resolved private context", async () => {
+    const pi = createMockCompactionPi({ cwd: projectRoot });
+    compactionExtension(pi.api);
+    const identity = {
+      schema_version: 1 as const,
+      project_id: projectId,
+      run_id: "private-context-worker-run",
+      workflow_session_id: "private-context-worker-session",
+      state_id: "researching",
+      branch_id: null,
+      attempt: 1,
+      worker_id: "private-context-worker",
+      agent: "echo",
+      purpose: "phase" as const,
+    };
+    const result = await pi.emit(
+      createMockEvent({
+        extraEntries: [
+          { customType: CATALOG_WORKER_SESSION_METADATA, data: identity },
+          {
+            customType: CATALOG_WORKER_CONTINUITY_METADATA,
+            data: {
+              ...identity,
+              task: "Use owner-resolved private context.",
+              registered_guidance: "Return the registered SUMMARY line.",
+              input_artifacts: [],
+              compaction_continuity: {
+                mode: "pi_default_private_context",
+                reason: "owner_resolved_context_present",
+              },
+            },
+          },
+        ],
+      })
+    );
+
+    expect(result).toBeUndefined();
   });
 
   it("surfaces an explicitly named run in prose and RESUME-REFS", async () => {

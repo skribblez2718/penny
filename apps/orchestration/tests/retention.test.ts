@@ -29,6 +29,7 @@ import { Checkpointer } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
 import type { RunIdentity, RunStatus } from "../src/contracts.js";
 import {
+  CATALOG_WORKER_CONTINUITY_METADATA,
   CATALOG_WORKER_SESSION_METADATA,
   createDurableCatalogSession,
   finalizeDurableCatalogSession,
@@ -202,6 +203,16 @@ function createProducedSession(input: {
       attempt: 1,
       worker_id: `worker-${input.runId}`,
       purpose: "phase",
+    },
+  });
+  manager.appendCustomEntry(CATALOG_WORKER_CONTINUITY_METADATA, {
+    ...metadata({ runId: input.runId, agent: input.agent }),
+    task: `Retained assignment for ${input.runId}`,
+    registered_guidance: "Return the registered result framing.",
+    input_artifacts: [],
+    compaction_continuity: {
+      mode: "exact_opening",
+      opening: `Retained authoritative opening for ${input.runId}`,
     },
   });
   const file = finalizeDurableCatalogSession(manager);

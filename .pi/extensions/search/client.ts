@@ -16,6 +16,9 @@ export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_RESULTS = 5;
 export const MAX_RESULTS_LIMIT = 10;
 export const MAX_FETCH_CONTENT_CHARS = 80_000;
+export const MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024;
+export const MAX_PROVIDER_JSON_DEPTH = 32;
+export const MAX_PROVIDER_JSON_VALUES = 50_000;
 
 // ── Types ────────────────────────────────────────────────
 
@@ -499,13 +502,20 @@ function isWebSearchResult(value: unknown): value is WebSearchResult {
   );
 }
 
-function parseWebSearchResponse(response: JsonResponse): WebSearchResponse {
+function parseWebSearchResponse(response: JsonResponse, maxResults: number): WebSearchResponse {
   const request: ApiRequestContext = { operation: "web_search", path: "/api/web_search" };
   if (!isRecord(response.value)) {
     throw malformedResponse(request, response.status, "expected a JSON object");
   }
   const value = response.value.results;
   if (value === undefined || !Array.isArray(value)) return { results: [] };
+  if (value.length > maxResults) {
+    throw malformedResponse(
+      request,
+      response.status,
+      `received ${value.length} results for a maximum of ${maxResults}`
+    );
+  }
 
   const results: WebSearchResult[] = [];
   for (const [index, result] of value.entries()) {
@@ -545,6 +555,83 @@ function parseWebFetchResponse(response: JsonResponse, targetUrl: string): WebFe
     content: typeof response.value.content === "string" ? response.value.content : "",
     links: stringArrayOrDefault(response.value.links),
   };
+}
+
+function assertBoundedJsonComplexity(
+  value: unknown,
+  request: ApiRequestContext,
+  status: number
+): void {
+  const pending: Array<{ readonly value: unknown; readonly depth: number }> = [{ value, depth: 0 }];
+  let visited = 0;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    visited += 1;
+    if (visited > MAX_PROVIDER_JSON_VALUES) {
+      throw malformedResponse(request, status, "response JSON contains too many values");
+    }
+    if (current.depth > MAX_PROVIDER_JSON_DEPTH) {
+      throw malformedResponse(request, status, "response JSON is nested too deeply");
+    }
+    const children = Array.isArray(current.value)
+      ? current.value
+      : isRecord(current.value)
+        ? Object.values(current.value)
+        : [];
+    if (visited + pending.length + children.length > MAX_PROVIDER_JSON_VALUES) {
+      throw malformedResponse(request, status, "response JSON contains too many values");
+    }
+    for (const child of children) {
+      pending.push({ value: child, depth: current.depth + 1 });
+    }
+  }
+}
+
+async function readBoundedResponseJson(
+  response: Response,
+  request: ApiRequestContext
+): Promise<unknown> {
+  const contentLength = response.headers.get("content-length")?.trim();
+  if (contentLength !== undefined && /^\d+$/u.test(contentLength)) {
+    const declared = Number(contentLength);
+    if (!Number.isSafeInteger(declared) || declared > MAX_PROVIDER_RESPONSE_BYTES) {
+      throw malformedResponse(
+        request,
+        response.status,
+        `response exceeds ${MAX_PROVIDER_RESPONSE_BYTES} bytes`
+      );
+    }
+  }
+  if (response.body === null) {
+    throw malformedResponse(request, response.status, "response body is absent");
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      total += part.value.byteLength;
+      if (total > MAX_PROVIDER_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw malformedResponse(
+          request,
+          response.status,
+          `response exceeds ${MAX_PROVIDER_RESPONSE_BYTES} bytes`
+        );
+      }
+      chunks.push(Buffer.from(part.value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, total));
+  const value: unknown = JSON.parse(text);
+  assertBoundedJsonComplexity(value, request, response.status);
+  return value;
 }
 
 async function postJson(
@@ -636,9 +723,10 @@ async function postJson(
   }
 
   try {
-    const value: unknown = await response.json();
+    const value = await readBoundedResponseJson(response, request);
     return { value, status: response.status };
-  } catch {
+  } catch (error) {
+    if (error instanceof SearchApiError) throw error;
     const message =
       request.operation === "web_fetch"
         ? "Unable to fetch the requested URL because Ollama Web Fetch returned invalid JSON"
@@ -668,7 +756,7 @@ export async function webSearch(
     signal,
     fetchImpl
   );
-  return parseWebSearchResponse(response);
+  return parseWebSearchResponse(response, maxResults);
 }
 
 export async function webFetch(

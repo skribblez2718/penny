@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CheckpointIdentityError, Checkpointer, sha256 } from "../src/checkpointer.js";
-import type { JsonValue, RunIdentity } from "../src/contracts.js";
+import type { Directive, JsonValue, RunIdentity } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
@@ -429,17 +429,23 @@ describe("durable orchestration runtime", () => {
     const first = requireValue(original[0], "apps/orchestration/tests/core-runtime.test.ts:273");
     const second = requireValue(original[1], "apps/orchestration/tests/core-runtime.test.ts:274");
     const reissued = engine.acceptWorkerResults(runIdentity, [{ ...first, details: {} }, second]);
-    expect(reissued.action).toBe("invoke_agent");
-    if (reissued.action !== "invoke_agent") {
-      throw new Error("expected bounded routing-only repair");
+    expect(reissued.action).toBe("invoke_agents_parallel");
+    if (reissued.action !== "invoke_agents_parallel") {
+      throw new Error("expected branch-bound routing-only repair fan");
     }
-    expect(reissued.execution_purpose).toBe("routing_repair");
-    expect(reissued.agent).toBe(first.agent);
-    expect(reissued.input_artifacts.artifacts).toEqual([
+    expect(reissued.branches).toHaveLength(1);
+    const repairBranch = requireValue(
+      reissued.branches[0],
+      "apps/orchestration/tests/core-runtime.test.ts:repair-branch"
+    );
+    expect(repairBranch.execution_purpose).toBe("routing_repair");
+    expect(repairBranch.branch_id).toBe(first.branch_id);
+    expect(repairBranch.agent).toBe(first.agent);
+    expect(repairBranch.input_artifacts.artifacts).toEqual([
       { slot: "malformed-source", ref: first.output_artifact },
     ]);
-    expect(reissued.output_artifact.kind).toBe("routing-metadata");
-    expect(reissued.routing_repair_binding?.source_receipt_id).toBe(
+    expect(repairBranch.output_artifact.kind).toBe("routing-metadata");
+    expect(repairBranch.routing_repair_binding?.source_receipt_id).toBe(
       first.worker_receipt.receipt_id
     );
 
@@ -472,6 +478,115 @@ describe("durable orchestration runtime", () => {
         .selectedArtifacts.some((artifact) => artifact.kind === "routing-metadata")
     ).toBe(false);
     checkpointer.close();
+  });
+
+  it("repairs three malformed fan siblings independently across restart and varied completion order", async () => {
+    const root = temporaryDirectory();
+    let active = runtime(root);
+    const workerClient = new FakeResearchClient(active.artifacts);
+    const initialWorkers = new WorkerExecutor(workerClient, active.artifacts, {
+      projectRoot: root,
+      parallelConcurrency: 4,
+    });
+    initialWorkers.setReceiptAuthority(active.engine.receiptAuthority);
+    const runIdentity = identity("multi-malformed-fan-run");
+    const planning = active.engine.handle(startRequest(root, runIdentity, { mode: "standard" }));
+    if (planning.action !== "invoke_agent") throw new Error("expected planning directive");
+    const planningResult = requireValue(
+      (await initialWorkers.execute(planning))[0],
+      "apps/orchestration/tests/core-runtime.test.ts:multi-planning"
+    );
+    const fan = active.engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: runIdentity,
+      result: {
+        ...planningResult,
+        details: {
+          ...planningResult.details,
+          plan_steps: ["one", "two", "three", "four"],
+        },
+      },
+    });
+    if (fan.action !== "invoke_agents_parallel") throw new Error("expected four-branch fan");
+    expect(fan.branches).toHaveLength(4);
+    const originals = await initialWorkers.execute(fan);
+    const valid = requireValue(
+      originals[0],
+      "apps/orchestration/tests/core-runtime.test.ts:multi-valid"
+    );
+    const malformed = originals.slice(1).map((result) => ({ ...result, details: {} }));
+    const repairs = active.engine.acceptWorkerResults(runIdentity, [
+      requireValue(malformed[2], "apps/orchestration/tests/core-runtime.test.ts:malformed-3"),
+      valid,
+      requireValue(malformed[0], "apps/orchestration/tests/core-runtime.test.ts:malformed-1"),
+      requireValue(malformed[1], "apps/orchestration/tests/core-runtime.test.ts:malformed-2"),
+    ]);
+    if (repairs.action !== "invoke_agents_parallel") {
+      throw new Error("expected independent routing-repair fan");
+    }
+    expect(repairs.branches).toHaveLength(3);
+    expect(repairs.branches.every((branch) => branch.execution_purpose === "routing_repair")).toBe(
+      true
+    );
+    expect(new Set(repairs.branches.map((branch) => branch.branch_id))).toEqual(
+      new Set(malformed.map((result) => result.branch_id))
+    );
+    for (const branch of repairs.branches) {
+      const source = malformed.find((result) => result.branch_id === branch.branch_id);
+      expect(branch.routing_repair_binding?.source_receipt_id).toBe(
+        source?.worker_receipt.receipt_id
+      );
+      expect(branch.input_artifacts.artifacts[0]?.ref).toEqual(source?.output_artifact);
+    }
+
+    const repairWorkers = new WorkerExecutor(workerClient, active.artifacts, {
+      projectRoot: root,
+      parallelConcurrency: 3,
+    });
+    repairWorkers.setReceiptAuthority(active.engine.receiptAuthority);
+    const repairResults = (await repairWorkers.execute(repairs)).reverse();
+    let next: Directive = repairs;
+    for (const [index, repairResult] of repairResults.entries()) {
+      active.checkpointer.close();
+      active = runtime(root);
+      const recovered = active.engine.handle({
+        schema_version: 2,
+        action: "recover",
+        identity: runIdentity,
+      });
+      expect(recovered).toEqual(next);
+      next = active.engine.handle({
+        schema_version: 2,
+        action: "step",
+        identity: runIdentity,
+        result: repairResult,
+      });
+      if (index < repairResults.length - 1) {
+        expect(next.action).toBe("invoke_agents_parallel");
+        if (next.action === "invoke_agents_parallel") {
+          expect(next.branches).toHaveLength(repairResults.length - index - 1);
+          expect(
+            next.branches.every((branch) => branch.execution_purpose === "routing_repair")
+          ).toBe(true);
+        }
+      }
+    }
+    expect(next.action).toBe("invoke_agent");
+    if (next.action === "invoke_agent") expect(next.state_id).toBe("synthesizing");
+    expect(
+      active.checkpointer
+        .events(runIdentity.run_id)
+        .filter((event) => event.eventType === "phase_result_malformed")
+    ).toHaveLength(3);
+    expect(
+      active.checkpointer
+        .events(runIdentity.run_id)
+        .filter((event) =>
+          ["routing_repair_branch_accepted", "routing_repair_accepted"].includes(event.eventType)
+        )
+    ).toHaveLength(3);
+    active.checkpointer.close();
   });
 
   it("uses a challenge-bound user gate and rejects tampering without mutation", async () => {

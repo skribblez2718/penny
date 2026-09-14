@@ -1,5 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import searchExtension from "../../index.js";
+import { existsSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
+import { dirname } from "node:path";
+import searchExtension, {
+  cleanupStaleWebSearchSpills,
+  WEB_SEARCH_MAX_OUTPUT_LINES,
+  WEB_SEARCH_MAX_SPILLS_PER_SESSION,
+  WEB_SEARCH_STALE_SPILL_AGE_MS,
+  truncateWebSearchLines,
+} from "../../index.js";
+import {
+  HARD_MAX_RESULT_BYTES,
+  fitsToolResultBudget,
+  measureToolResult,
+  resolveToolResultBudget,
+} from "../../../lib/tool-result-budget.js";
 import {
   createTestExtensionApi,
   isRecord,
@@ -19,7 +33,13 @@ interface RegisteredTool {
     signal?: AbortSignal,
     onUpdate?: unknown,
     ctx?: unknown
-  ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+  ) => Promise<{ content: Array<{ type: "text"; text: string }> }>;
+}
+
+function isEventHandler(
+  value: unknown
+): value is (event: unknown, context: unknown) => Promise<unknown> | unknown {
+  return typeof value === "function";
 }
 
 function isRegisteredTool(value: unknown): value is RegisteredTool {
@@ -48,6 +68,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe("search extension integration", () => {
   let tools: Map<string, RegisteredTool>;
   let activeTools: string[];
+  let eventHandlers: Map<string, (event: unknown, context: unknown) => Promise<void>>;
   const savedEnv = { ...process.env };
 
   function getTool(name: string): RegisteredTool {
@@ -59,8 +80,15 @@ describe("search extension integration", () => {
   beforeEach(() => {
     tools = new Map();
     activeTools = [];
+    eventHandlers = new Map();
     const mockPi = createTestExtensionApi({
       getActiveTools: () => activeTools,
+      onEvent(event, handler) {
+        if (!isEventHandler(handler)) throw new Error("search event handler is invalid");
+        eventHandlers.set(event, async (eventValue, contextValue) => {
+          await handler(eventValue, contextValue);
+        });
+      },
       onRegisterTool(tool) {
         if (!isRegisteredTool(tool)) throw new Error("search extension registered an invalid tool");
         tools.set(tool.name, tool);
@@ -115,6 +143,254 @@ describe("search extension integration", () => {
     expect(payload.query).toBe("ollama");
     expect(results).toHaveLength(1);
     expect(firstResult.url).toBe("https://docs.ollama.com");
+  });
+
+  it("web_search preserves the established JSON representation for bounded responses", async () => {
+    process.env.OLLAMA_API_KEY = "integration-key";
+    const body = {
+      results: [{ title: "Doc", url: "https://docs.ollama.com", content: "small" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(body))
+    );
+
+    const result = await getTool("web_search").execute("t2-small", { query: "bounded" });
+    expect(result.content[0]?.text).toBe(
+      JSON.stringify({ success: true, query: "bounded", results: body.results }, null, 2)
+    );
+  });
+
+  it("web_search bounds oversized multiline UTF-8 output and exposes an owner-only full copy", async () => {
+    process.env.OLLAMA_API_KEY = "integration-key";
+    const oversizedContent = Array.from(
+      { length: WEB_SEARCH_MAX_OUTPUT_LINES + 500 },
+      (_, index) => `line-${index}-${"x".repeat(30)}`
+    ).join("\n");
+    const body = {
+      results: Array.from({ length: 5 }, (_, index) => ({
+        title: `Large-${index}-🙂`,
+        url: `https://example.com/large/${index}`,
+        content: oversizedContent,
+      })),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(body))
+    );
+
+    const result = await getTool("web_search").execute("t2-large", { query: "large" });
+    const text = result.content[0]?.text ?? "";
+    expect(
+      fitsToolResultBudget(measureToolResult(result), resolveToolResultBudget(process.env))
+    ).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
+      HARD_MAX_RESULT_BYTES
+    );
+    expect(text.split("\n").length).toBeLessThanOrEqual(WEB_SEARCH_MAX_OUTPUT_LINES);
+    expect(text).toContain("[web_search output truncated]");
+    expect(text).toContain("🙂");
+    expect(text).not.toContain("�");
+    const visible = text.slice(0, text.indexOf("\n[web_search output truncated]"));
+    const completeSerialization = JSON.stringify(
+      { success: true, query: "large", results: body.results },
+      null,
+      2
+    );
+    expect(completeSerialization.startsWith(visible)).toBe(true);
+    expect(completeSerialization.slice(visible.length, visible.length + 1)).toBe("\n");
+
+    const pathMatch = /^Full result: (.+)$/mu.exec(text);
+    expect(pathMatch?.[1]).toBeDefined();
+    const fullResultPath = pathMatch?.[1] ?? "";
+    try {
+      expect(JSON.parse(readFileSync(fullResultPath, "utf8"))).toEqual({
+        success: true,
+        query: "large",
+        results: body.results,
+      });
+      expect(statSync(fullResultPath).mode & 0o077).toBe(0);
+      expect(statSync(dirname(fullResultPath)).mode & 0o077).toBe(0);
+    } finally {
+      if (fullResultPath.length > 0)
+        rmSync(dirname(fullResultPath), { recursive: true, force: true });
+    }
+  });
+
+  it("web_search bounds a single oversized line without splitting UTF-8", async () => {
+    process.env.OLLAMA_API_KEY = "integration-key";
+    const body = {
+      results: [
+        {
+          title: "Large",
+          url: "https://example.com/large",
+          content: "🙂".repeat(HARD_MAX_RESULT_BYTES),
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(body))
+    );
+
+    const result = await getTool("web_search").execute("t2-bytes", { query: "large" });
+    const text = result.content[0]?.text ?? "";
+    expect(
+      fitsToolResultBudget(measureToolResult(result), resolveToolResultBudget(process.env))
+    ).toBe(true);
+    expect(text).not.toContain("�");
+    const fullResultPath = /^Full result: (.+)$/mu.exec(text)?.[1] ?? "";
+    if (fullResultPath.length > 0)
+      rmSync(dirname(fullResultPath), { recursive: true, force: true });
+  });
+
+  it("applies the independent 2,000-line defense at complete line boundaries", () => {
+    const source = Array.from(
+      { length: WEB_SEARCH_MAX_OUTPUT_LINES + 25 },
+      (_, index) => `line-${index}`
+    ).join("\n");
+    const bounded = truncateWebSearchLines(source, WEB_SEARCH_MAX_OUTPUT_LINES);
+    expect(bounded.truncated).toBe(true);
+    expect(bounded.content.split("\n")).toHaveLength(WEB_SEARCH_MAX_OUTPUT_LINES);
+    expect(bounded.content.endsWith(`line-${WEB_SEARCH_MAX_OUTPUT_LINES - 1}`)).toBe(true);
+  });
+
+  it("web_search honors owner-supplied lower caps on the complete result envelope", async () => {
+    process.env.OLLAMA_API_KEY = "integration-key";
+    process.env.PENNY_TOOL_RESULT_MAX_BYTES = "4096";
+    process.env.PENNY_TOOL_RESULT_MAX_CHARACTERS = "4096";
+    process.env.PENNY_TOOL_RESULT_MAX_TOKENS = "4096";
+    const body = {
+      results: [
+        {
+          title: "Large",
+          url: "https://example.com/large",
+          content: 'escaped-\\-"-🙂'.repeat(10_000),
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(body))
+    );
+
+    const result = await getTool("web_search").execute("t2-lower-cap", { query: "large" });
+    const measurement = measureToolResult(result);
+    expect(fitsToolResultBudget(measurement, resolveToolResultBudget(process.env))).toBe(true);
+    expect(measurement.bytes).toBeLessThanOrEqual(4096);
+    expect(measurement.characters).toBeLessThanOrEqual(4096);
+    const fullResultPath = /^Full result: (.+)$/mu.exec(result.content[0]?.text ?? "")?.[1] ?? "";
+    if (fullResultPath.length > 0) {
+      rmSync(dirname(fullResultPath), { recursive: true, force: true });
+    }
+  });
+
+  it("removes full-result spill files at session shutdown", async () => {
+    process.env.OLLAMA_API_KEY = "integration-key";
+    const body = {
+      results: [
+        {
+          title: "Large",
+          url: "https://example.com/large",
+          content: "🙂".repeat(HARD_MAX_RESULT_BYTES),
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(body))
+    );
+
+    const result = await getTool("web_search").execute("t2-cleanup", { query: "large" });
+    const fullResultPath = /^Full result: (.+)$/mu.exec(result.content[0]?.text ?? "")?.[1] ?? "";
+    expect(existsSync(fullResultPath)).toBe(true);
+    const shutdown = eventHandlers.get("session_shutdown");
+    if (shutdown === undefined) throw new Error("session_shutdown handler is absent");
+    await shutdown({}, {});
+    expect(existsSync(fullResultPath)).toBe(false);
+  });
+
+  it("keeps only the bounded newest spill set for one session", async () => {
+    process.env.OLLAMA_API_KEY = "integration-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          results: [
+            {
+              title: "Large",
+              url: "https://example.com/large",
+              content: "x".repeat(HARD_MAX_RESULT_BYTES * 2),
+            },
+          ],
+        })
+      )
+    );
+    const paths: string[] = [];
+    for (let index = 0; index < WEB_SEARCH_MAX_SPILLS_PER_SESSION + 1; index += 1) {
+      const result = await getTool("web_search").execute(`t2-quota-${index}`, {
+        query: `large-${index}`,
+      });
+      const fullResultPath = /^Full result: (.+)$/mu.exec(result.content[0]?.text ?? "")?.[1];
+      if (fullResultPath === undefined) throw new Error(`spill ${index} path is absent`);
+      paths.push(fullResultPath);
+    }
+
+    expect(existsSync(paths[0] ?? "")).toBe(false);
+    for (const retained of paths.slice(-WEB_SEARCH_MAX_SPILLS_PER_SESSION)) {
+      expect(existsSync(retained)).toBe(true);
+    }
+    const shutdown = eventHandlers.get("session_shutdown");
+    if (shutdown === undefined) throw new Error("session_shutdown handler is absent");
+    await shutdown({}, {});
+  });
+
+  it("removes bounded stale spills left by abnormal termination", async () => {
+    process.env.OLLAMA_API_KEY = "integration-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          results: [
+            {
+              title: "Large",
+              url: "https://example.com/large",
+              content: "🙂".repeat(HARD_MAX_RESULT_BYTES),
+            },
+          ],
+        })
+      )
+    );
+    const result = await getTool("web_search").execute("t2-stale", { query: "large" });
+    const fullResultPath = /^Full result: (.+)$/mu.exec(result.content[0]?.text ?? "")?.[1] ?? "";
+    if (fullResultPath.length === 0) throw new Error("stale spill path is absent");
+    const directory = dirname(fullResultPath);
+    const oldTime = new Date(Date.now() - WEB_SEARCH_STALE_SPILL_AGE_MS - 1_000);
+    utimesSync(directory, oldTime, oldTime);
+
+    cleanupStaleWebSearchSpills();
+    expect(existsSync(directory)).toBe(false);
+  });
+
+  it("web_search rejects provider result counts above the requested maximum", async () => {
+    process.env.OLLAMA_API_KEY = "integration-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          results: Array.from({ length: 6 }, (_, index) => ({
+            title: `Result ${index}`,
+            url: `https://example.com/${index}`,
+            content: "snippet",
+          })),
+        })
+      )
+    );
+
+    const result = await getTool("web_search").execute("t2-count", { query: "large" });
+    const payload = resultPayload(result);
+    expect(payload.success).toBe(false);
+    expect(payload.error).toMatch(/received 6 results for a maximum of 5/u);
   });
 
   it("web_fetch rejects invalid URLs before hitting the network", async () => {

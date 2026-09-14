@@ -33,6 +33,7 @@ import {
   type ArtifactDispatchPauseCode,
   type ArtifactDispatchStateV1,
   type ArtifactRef,
+  type BranchDispatch,
   type CompletionAdmissionEnvelope,
   type CompletionEvidenceRef,
   type CompletionFailureCode,
@@ -1525,6 +1526,9 @@ export class OrchestrationEngine {
       if (assignment === undefined) {
         throw new Error(`wrong_branch '${branchId}' for state '${pending.state_id}'`);
       }
+      if (assignment.execution_purpose === "routing_repair") {
+        return this.acceptParallelRoutingRepair(context, pending, assignment, result);
+      }
       this.assertAssignment(result, assignment.state_id, assignment.agent, assignment.attempt);
       this.validateOutputArtifact(
         result,
@@ -1644,7 +1648,13 @@ export class OrchestrationEngine {
       next = this.livenessTerminal(context, exhausted);
     } else if (hasRoutingRepair(this.playbook)) {
       try {
-        next = this.playbook.routingRepair(context, result);
+        const priorPending = context.pendingDirective;
+        const repair = this.playbook.routingRepair(context, result);
+        next =
+          branchId.length > 0 && priorPending?.action === "invoke_agents_parallel"
+            ? this.replaceParallelBranchWithRepair(priorPending, branchId, repair)
+            : repair;
+        context.pendingDirective = next;
       } catch {
         next = this.livenessTerminal(context, "routing_repair_binding_invalid");
       }
@@ -1667,6 +1677,208 @@ export class OrchestrationEngine {
         : {}),
     });
     return next;
+  }
+
+  private replaceParallelBranchWithRepair(
+    pending: Extract<Directive, { action: "invoke_agents_parallel" }>,
+    branchId: string,
+    repair: Directive
+  ): Extract<Directive, { action: "invoke_agents_parallel" }> {
+    if (
+      repair.action !== "invoke_agent" ||
+      repair.execution_purpose !== "routing_repair" ||
+      repair.routing_repair_binding?.source_branch_id !== branchId ||
+      repair.input_artifacts.artifacts.length !== 1 ||
+      canonicalJson(repair.input_artifacts.artifacts[0]?.ref ?? null) !==
+        canonicalJson(repair.routing_repair_binding.source_artifact_ref)
+    ) {
+      throw new Error("parallel routing repair must bind one exact pending source branch");
+    }
+    const matches = pending.branches.filter((branch) => branch.branch_id === branchId);
+    if (matches.length !== 1) {
+      throw new Error("parallel routing repair source branch is not uniquely pending");
+    }
+    const replacement: BranchDispatch = {
+      branch_id: branchId,
+      state_id: repair.state_id,
+      agent: repair.agent,
+      attempt: repair.attempt,
+      trust_profile: repair.trust_profile,
+      ...(repair.model_override ? { model_override: repair.model_override } : {}),
+      execution_purpose: "routing_repair",
+      routing_repair_binding: repair.routing_repair_binding,
+      task: repair.task,
+      input_artifacts: repair.input_artifacts,
+      output_artifact: {
+        ...repair.output_artifact,
+        branch_id: branchId,
+      },
+    };
+    const next = directive({
+      ...pending,
+      branches: pending.branches.map((branch) =>
+        branch.branch_id === branchId ? replacement : branch
+      ),
+    });
+    if (next.action !== "invoke_agents_parallel") {
+      throw new Error("parallel routing repair did not produce a parallel directive");
+    }
+    return next;
+  }
+
+  private acceptParallelRoutingRepair(
+    context: RunContext,
+    pending: Extract<Directive, { action: "invoke_agents_parallel" }>,
+    assignment: BranchDispatch,
+    repairResult: PhaseResult
+  ): Directive {
+    const branchId = assignment.branch_id;
+    const binding = assignment.routing_repair_binding;
+    if (
+      binding === undefined ||
+      binding.source_branch_id !== branchId ||
+      repairResult.branch_id !== branchId
+    ) {
+      return this.persistInvalidParallelRepair(context, repairResult, branchId);
+    }
+    this.assertAssignment(repairResult, assignment.state_id, assignment.agent, assignment.attempt);
+    this.validateOutputArtifact(
+      repairResult,
+      context.identity,
+      assignment.output_artifact,
+      assignment.input_artifacts,
+      assignment.task,
+      assignment.trust_profile,
+      assignment.model_override ?? null,
+      branchId,
+      binding
+    );
+    const original = this.checkpointer.receiptResultById(binding.source_receipt_id);
+    if (
+      original === undefined ||
+      binding.source_result_sha256 !== sha256(canonicalJson(original)) ||
+      binding.source_state_id !== original.state_id ||
+      binding.source_branch_id !== (original.branch_id ?? null) ||
+      binding.source_agent !== original.agent ||
+      binding.source_attempt !== original.attempt ||
+      canonicalJson(binding.source_artifact_ref) !== canonicalJson(original.output_artifact)
+    ) {
+      return this.persistInvalidParallelRepair(context, repairResult, branchId);
+    }
+
+    let details: Record<string, JsonValue>;
+    try {
+      details = this.validatePhaseDetails(original.state_id, repairResult.details);
+    } catch (error) {
+      if (!(error instanceof ContractValidationError)) throw error;
+      const digest = malformedErrorDigest({
+        kind: "malformed_result",
+        stateId: original.state_id,
+        branchId,
+        schemaIssues: error.issues,
+      });
+      const charged = this.liveness.chargeMalformed({
+        runId: context.identity.run_id,
+        stateId: original.state_id,
+        branchId,
+        digest,
+      });
+      const reason = charged ?? "malformed_result_budget_exhausted";
+      const terminal = this.livenessTerminal(context, reason);
+      this.checkpointer.saveWithReceipt(
+        context,
+        repairResult,
+        branchId,
+        "routing_repair_malformed",
+        {
+          ...metadata(context.identity),
+          state_id: original.state_id,
+          branch_id: branchId,
+          malformed_digest: digest,
+          terminal_reason: reason,
+          liveness: this.snapshotWithReason(context.identity.run_id, reason),
+        }
+      );
+      return terminal;
+    }
+
+    const branch = context.pendingBranches.find((candidate) => candidate.branch_id === branchId);
+    if (branch === undefined || branch.completed) {
+      return this.persistInvalidParallelRepair(context, repairResult, branchId);
+    }
+    const branchIndex = context.pendingBranches.indexOf(branch);
+    context.pendingBranches[branchIndex] = {
+      ...branch,
+      completed: true,
+      confidence: repairResult.confidence,
+      result: details,
+      artifact: original.output_artifact,
+    };
+    const incomplete = new Set(
+      context.pendingBranches
+        .filter((candidate) => !candidate.completed)
+        .map((candidate) => candidate.branch_id)
+    );
+    if (incomplete.size > 0) {
+      const next = directive({
+        ...pending,
+        branches: pending.branches.filter((candidate) => incomplete.has(candidate.branch_id)),
+      });
+      context.pendingDirective = next;
+      this.checkpointer.saveWithReceipt(
+        context,
+        repairResult,
+        branchId,
+        "routing_repair_branch_accepted",
+        {
+          ...metadata(context.identity),
+          state_id: original.state_id,
+          branch_id: branchId,
+          source_receipt_id: original.worker_receipt.receipt_id,
+          repair_receipt_id: repairResult.worker_receipt.receipt_id,
+          next_action: next.action,
+        }
+      );
+      this.bindLivenessIfRequired(context);
+      return next;
+    }
+    if (!hasFanAggregate(this.playbook)) {
+      return this.persistInvalidParallelRepair(context, repairResult, branchId);
+    }
+
+    const aggregate = this.playbook.aggregateBranches(
+      context.pendingBranches.map((candidate) => candidate.result ?? {})
+    );
+    const routed = this.routeTypedRepair(context, pending.state_id, aggregate);
+    const outcome =
+      routed === null
+        ? this.playbook.acceptSummary(
+            context,
+            aggregate,
+            weakestConfidence(
+              context.pendingBranches.map((candidate) => candidate.confidence ?? "UNCERTAIN")
+            )
+          )
+        : routed.next;
+    const folded: PhaseResult = {
+      ...original,
+      confidence: repairResult.confidence,
+      details,
+    };
+    const immediate = isHostContinuation(outcome)
+      ? undefined
+      : this.admitTerminal(context, outcome, folded);
+    this.checkpointer.saveWithReceipt(context, repairResult, branchId, "routing_repair_accepted", {
+      ...metadata(context.identity),
+      state_id: original.state_id,
+      branch_id: branchId,
+      source_receipt_id: original.worker_receipt.receipt_id,
+      repair_receipt_id: repairResult.worker_receipt.receipt_id,
+      next_action: immediate?.action ?? "host_continuation",
+      ...(routed?.evidence === undefined ? {} : { feedback_route_evidence_v1: routed.evidence }),
+    });
+    this.bindLivenessIfRequired(context);
+    return immediate ?? this.advanceHost(context, folded);
   }
 
   private acceptRoutingRepair(
@@ -1822,6 +2034,21 @@ export class OrchestrationEngine {
       if (candidate !== undefined) return candidate;
     }
     throw new Error("deterministic host continuation exceeded 64 checkpointed steps");
+  }
+
+  private persistInvalidParallelRepair(
+    context: RunContext,
+    repairResult: PhaseResult,
+    branchId: string
+  ): Directive {
+    const next = this.livenessTerminal(context, "routing_repair_binding_invalid");
+    this.checkpointer.saveWithReceipt(context, repairResult, branchId, "routing_repair_invalid", {
+      ...metadata(context.identity),
+      branch_id: branchId,
+      terminal_reason: "routing_repair_binding_invalid",
+      liveness: this.snapshotWithReason(context.identity.run_id, "routing_repair_binding_invalid"),
+    });
+    return next;
   }
 
   private persistInvalidRepair(context: RunContext, repairResult: PhaseResult): Directive {

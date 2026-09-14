@@ -233,10 +233,22 @@ publishes a deletion receipt. It is never reachable from ordinary startup or mod
   stale, exhausted, unsafe, drifted, cancelled, and error outcomes remain non-positive with best exact
   partial refs and no complete product envelope.
 - Successful worker output is persisted and re-read before its final `SUMMARY` line is parsed.
+  Every durable catalog session also appends a closed worker-continuity V1 custom entry before the
+  opening prompt. It leaves the existing correlation V1 entry unchanged while preserving exact
+  assignment identity, task, registered guidance, input refs, and—for non-private workers—the complete
+  authoritative opening for compaction. Owner-resolved private-context workers are marked for Pi's
+  default compaction so private bodies do not enter a generic context artifact. Custom worker
+  compaction proceeds only after every input ref verifies and its context artifact persists and
+  re-reads successfully.
   Structurally valid repair evaluations use `EvaluationResultV2`, which contains findings and a
   strategy delta but no target or exhaustion claim. The engine selects the registered route,
   charges the iteration budget, transitions, and stores only detail/strategy digests in the same
-  checkpoint event transaction. Structural malformed-result repair remains the P1.2 path.
+  checkpoint event transaction. Structural malformed-result repair remains the P1.2 path. In a
+  parallel fan, valid siblings are accepted immediately while every malformed sibling is replaced
+  in place by its own branch-bound routing repair; each accepted repair is checkpointed, recoverable,
+  and cannot consume another branch's source binding.
+- Every SDK-created worker session runs the `session_shutdown` extension lifecycle and awaits it
+  before disposal on success, failure, cancellation, and pre-prompt refusal.
 - Recovery reissues the checkpointed directive with the same selected refs or the next
   explicit compatible revision.
 - Skill chains persist project-bound checkpoints in the current partition.

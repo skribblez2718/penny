@@ -33,6 +33,7 @@ import {
   registeredBrowserPolicyOwnerScopeId,
 } from "./browser-policy-carrier.js";
 import {
+  ArtifactRefSchema,
   LivenessTerminalReasonSchema,
   validateContract,
   type ArtifactRef,
@@ -118,6 +119,51 @@ export type CatalogWorkerSessionMetadataV1 = Readonly<
   Static<typeof CatalogWorkerSessionMetadataV1Schema>
 >;
 
+export const CATALOG_WORKER_CONTINUITY_METADATA = "penny.orchestration.worker-continuity" as const;
+
+/**
+ * Closed, path-free assignment material appended before the first model prompt.
+ * The correlation entry remains V1 and unchanged for retention/catalog compatibility;
+ * compaction consumes this companion only when both entries validate and bind exactly.
+ */
+export const CatalogWorkerContinuityMetadataV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    project_id: Type.String({ pattern: "^prj_[a-f0-9]{32}$" }),
+    run_id: CatalogSessionIdSchema,
+    workflow_session_id: CatalogSessionIdSchema,
+    state_id: CatalogSessionIdSchema,
+    branch_id: Type.Union([CatalogSessionIdSchema, Type.Null()]),
+    attempt: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+    worker_id: CatalogSessionIdSchema,
+    agent: Type.String({ pattern: "^[a-z0-9][a-z0-9-]{0,127}$" }),
+    purpose: Type.Union([Type.Literal("phase"), Type.Literal("routing_repair")]),
+    task: Type.String({ minLength: 1, maxLength: 131_072 }),
+    registered_guidance: Type.String({ minLength: 1, maxLength: 262_144 }),
+    input_artifacts: Type.Array(ArtifactRefSchema, { maxItems: 256 }),
+    compaction_continuity: Type.Union([
+      Type.Object(
+        {
+          mode: Type.Literal("exact_opening"),
+          opening: Type.String({ minLength: 1, maxLength: 1_048_576 }),
+        },
+        { additionalProperties: false }
+      ),
+      Type.Object(
+        {
+          mode: Type.Literal("pi_default_private_context"),
+          reason: Type.Literal("owner_resolved_context_present"),
+        },
+        { additionalProperties: false }
+      ),
+    ]),
+  },
+  { additionalProperties: false }
+);
+export type CatalogWorkerContinuityMetadataV1 = Readonly<
+  Static<typeof CatalogWorkerContinuityMetadataV1Schema>
+>;
+
 export function validateCatalogWorkerSessionMetadata(
   value: unknown
 ): CatalogWorkerSessionMetadataV1 {
@@ -125,6 +171,16 @@ export function validateCatalogWorkerSessionMetadata(
     CatalogWorkerSessionMetadataV1Schema,
     value,
     "catalog worker session metadata"
+  );
+}
+
+export function validateCatalogWorkerContinuityMetadata(
+  value: unknown
+): CatalogWorkerContinuityMetadataV1 {
+  return validateContract(
+    CatalogWorkerContinuityMetadataV1Schema,
+    value,
+    "catalog worker continuity metadata"
   );
 }
 
@@ -830,6 +886,45 @@ export function createDurableCatalogSession(input: {
   return manager;
 }
 
+/** Append the validated assignment companion while the durable session is still pre-prompt. */
+export function appendCatalogWorkerContinuity(input: {
+  readonly manager: SessionManager;
+  readonly projectId: string;
+  readonly invocation: AgentInvocation;
+  readonly registeredGuidance: string;
+  readonly opening: string;
+}): CatalogWorkerContinuityMetadataV1 {
+  const correlation = input.invocation.workflowSession;
+  if (correlation === undefined) {
+    throw new Error("catalog worker continuity requires workflow correlation");
+  }
+  const metadata = validateCatalogWorkerContinuityMetadata({
+    schema_version: 1,
+    project_id: input.projectId,
+    run_id: correlation.run_id,
+    workflow_session_id: correlation.workflow_session_id,
+    state_id: input.invocation.stateId,
+    branch_id: correlation.branch_id,
+    attempt: correlation.attempt,
+    worker_id: correlation.worker_id,
+    agent: input.invocation.agent,
+    purpose: correlation.purpose,
+    task: input.invocation.task,
+    registered_guidance: input.registeredGuidance,
+    input_artifacts: input.invocation.inputArtifacts,
+    compaction_continuity:
+      (input.invocation.contextOverlays?.length ?? 0) > 0
+        ? {
+            mode: "pi_default_private_context",
+            reason: "owner_resolved_context_present",
+          }
+        : { mode: "exact_opening", opening: input.opening },
+  });
+  input.manager.appendCustomEntry(CATALOG_WORKER_CONTINUITY_METADATA, metadata);
+  finalizeDurableCatalogSession(input.manager);
+  return metadata;
+}
+
 /**
  * Pi intentionally delays a JSONL write until an assistant message exists. Workflow
  * diagnostics cannot make that assumption: provider/setup errors and aborts need the
@@ -1326,6 +1421,17 @@ export class PiAgentClient implements ModelClient {
           domainGuidance,
           activeToolNames: activeTools,
         });
+      if (!isolated && this.options.catalogSessions !== undefined) {
+        appendCatalogWorkerContinuity({
+          manager: sessionManager,
+          projectId: this.options.catalogSessions.projectId,
+          invocation,
+          registeredGuidance: routingRepair
+            ? (invocation.routingRepairGuidance ?? "")
+            : domainGuidance,
+          opening,
+        });
+      }
       await session.prompt(opening, { expandPromptTemplates: false, source: "rpc" });
       if (spec?.readResult !== undefined) {
         const body = spec.readResult();

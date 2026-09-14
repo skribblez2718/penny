@@ -66,7 +66,13 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   ArtifactStore,
+  CATALOG_WORKER_CONTINUITY_METADATA,
+  CATALOG_WORKER_SESSION_METADATA,
   loadRuntimeConfig,
+  validateCatalogWorkerContinuityMetadata,
+  validateCatalogWorkerSessionMetadata,
+  type CatalogWorkerContinuityMetadataV1,
+  type CatalogWorkerSessionMetadataV1,
   type OutputArtifactMetadata,
 } from "@penny/orchestration/source";
 
@@ -909,18 +915,46 @@ export function buildResumeRefs(artifact: PennyCompactArtifact): string {
   return [`[RESUME-REFS v${RESUME_REFS_VERSION}]`, ...lines, "[/RESUME-REFS]"].join("\n");
 }
 
+function workerContinuitySection(
+  artifact: PennyCompactArtifact,
+  continuity: TrustedWorkerContinuity | undefined
+): string[] {
+  if (continuity === undefined) return [];
+  const contextRef = artifact.artifact_refs.find(
+    (ref) =>
+      ref.kind === "worker-compaction-context" &&
+      ref.producer === "extension:compaction" &&
+      ref.run_id === continuity.session.run_id &&
+      ref.phase === continuity.session.state_id &&
+      ref.branch_id === continuity.session.branch_id
+  );
+  if (contextRef === undefined) return [];
+  return [
+    "## Worker Continuity",
+    `- Continue the exact **${continuity.session.purpose}** assignment for agent **${continuity.session.agent}** in orchestration run \`${continuity.session.run_id}\`, state **${continuity.session.state_id}**${continuity.session.branch_id === null ? "" : `, branch **${continuity.session.branch_id}**`}.`,
+    `- Before doing more work, read \`${contextRef.artifact_id}\`; it contains the complete authoritative opening, task, registered guidance, and verified input artifact refs. Use its direct RESUME-REFS entry when present, otherwise resolve it through the handoff-index artifact in RESUME-REFS.`,
+    "- Finish with the registered result framing. Do not substitute an ordinary narrative answer for the required worker result.",
+    "",
+  ];
+}
+
 /**
  * Convert a PennyCompactArtifact to the summary spliced into context:
  * a prose markdown brief (Pi-native style, human-readable in the TUI)
  * followed by the [RESUME-REFS] pointer appendix.
  */
-export function createProseSummary(artifact: PennyCompactArtifact): string {
+export function createProseSummary(
+  artifact: PennyCompactArtifact,
+  continuity?: TrustedWorkerContinuity
+): string {
   const lines: string[] = [];
 
   // Goal
   lines.push(`## Goal`);
   lines.push(artifact.goal || "(not set)");
   lines.push("");
+
+  lines.push(...workerContinuitySection(artifact, continuity));
 
   // Dominant skill continuity, including honest terminal/non-terminal status.
   if (artifact.dominant_skill) {
@@ -1037,10 +1071,73 @@ export function createProseSummary(artifact: PennyCompactArtifact): string {
 // Artifact Builder
 // ============================================================
 
+interface TrustedWorkerContinuity {
+  readonly session: CatalogWorkerSessionMetadataV1;
+  readonly assignment: CatalogWorkerContinuityMetadataV1;
+}
+
+interface WorkerContinuityBranchEntry {
+  readonly customType?: string;
+  readonly data?: unknown;
+}
+
+type WorkerContinuityAdmission =
+  | { readonly status: "absent" }
+  | { readonly status: "rejected" }
+  | { readonly status: "trusted"; readonly continuity: TrustedWorkerContinuity };
+
+function sameWorkerIdentity(
+  session: CatalogWorkerSessionMetadataV1,
+  assignment: CatalogWorkerContinuityMetadataV1
+): boolean {
+  return (
+    session.project_id === assignment.project_id &&
+    session.run_id === assignment.run_id &&
+    session.workflow_session_id === assignment.workflow_session_id &&
+    session.state_id === assignment.state_id &&
+    session.branch_id === assignment.branch_id &&
+    session.attempt === assignment.attempt &&
+    session.worker_id === assignment.worker_id &&
+    session.agent === assignment.agent &&
+    session.purpose === assignment.purpose
+  );
+}
+
+/** Admit only one exact, strictly validated pair authored by the worker-session owner. */
+export function collectTrustedWorkerContinuity(
+  entries: readonly WorkerContinuityBranchEntry[],
+  expectedProjectId: string
+): WorkerContinuityAdmission {
+  const sessionEntries = entries.filter(
+    (entry) => entry.customType === CATALOG_WORKER_SESSION_METADATA
+  );
+  const assignmentEntries = entries.filter(
+    (entry) => entry.customType === CATALOG_WORKER_CONTINUITY_METADATA
+  );
+  if (sessionEntries.length === 0) return { status: "absent" };
+  if (sessionEntries.length !== 1 || assignmentEntries.length !== 1) {
+    return { status: "rejected" };
+  }
+  try {
+    const session = validateCatalogWorkerSessionMetadata(sessionEntries[0]?.data);
+    const assignment = validateCatalogWorkerContinuityMetadata(assignmentEntries[0]?.data);
+    if (session.project_id !== expectedProjectId || !sameWorkerIdentity(session, assignment)) {
+      return { status: "rejected" };
+    }
+    return { status: "trusted", continuity: { session, assignment } };
+  } catch (error) {
+    logger.warn("Worker continuity metadata rejected", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { status: "rejected" };
+  }
+}
+
 interface BuildArtifactInput {
   sessionId: string;
   compactionSeq: number;
   projectRoot: string;
+  workerContinuity?: TrustedWorkerContinuity;
   /** Chronological, already-merged [messagesToSummarize, ...turnPrefixMessages]. */
   messages: SessionMessage[];
   preparation: {
@@ -1247,6 +1344,75 @@ export function collectCurrentSessionArtifactRefs(
   }
 }
 
+export function persistWorkerContinuityArtifact(input: {
+  readonly projectRoot: string;
+  readonly compactionSeq: number;
+  readonly continuity: TrustedWorkerContinuity;
+}): {
+  readonly ref: ArtifactRef;
+  readonly verifiedInputArtifacts: readonly ArtifactRef[];
+  readonly rejectedInputArtifacts: number;
+} {
+  const runtimeConfig = loadRuntimeConfig(input.projectRoot);
+  using store = ArtifactStore.openExisting(runtimeConfig.artifactRoot, {
+    projectId: runtimeConfig.projectId,
+  });
+  const verifiedInputs: ArtifactRef[] = [];
+  for (const candidate of input.continuity.assignment.input_artifacts) {
+    const parsed = ArtifactRefSchema.safeParse(candidate);
+    if (!parsed.success) continue;
+    const stored = store.refById(parsed.data.artifact_id);
+    if (
+      stored === undefined ||
+      stored.content_digest !== parsed.data.content_digest ||
+      stored.byte_length !== parsed.data.byte_length
+    ) {
+      continue;
+    }
+    store.readById(stored.artifact_id);
+    verifiedInputs.push(ArtifactRefSchema.parse(stored));
+  }
+  const uniqueInputs = [...new Map(verifiedInputs.map((ref) => [ref.artifact_id, ref])).values()];
+  const rejectedInputArtifacts =
+    input.continuity.assignment.input_artifacts.length - uniqueInputs.length;
+  if (rejectedInputArtifacts > 0) {
+    throw new Error(
+      `${rejectedInputArtifacts} worker input artifact ref(s) failed exact store verification`
+    );
+  }
+  const metadata: OutputArtifactMetadata = {
+    schema_version: 2,
+    run_id: input.continuity.session.run_id,
+    phase: input.continuity.session.state_id,
+    branch_id: input.continuity.session.branch_id,
+    kind: "worker-compaction-context",
+    operation_id:
+      `worker-context:${input.compactionSeq}:${input.continuity.session.worker_id}`.slice(0, 256),
+    version: 1,
+    producer: "extension:compaction",
+    media_type: "application/json; charset=utf-8",
+    parent_ref: null,
+    upstream_refs: uniqueInputs,
+  };
+  const ref = store.persist({
+    metadata,
+    content: JSON.stringify({
+      schema_version: 1,
+      assignment: {
+        ...input.continuity.assignment,
+        input_artifacts: uniqueInputs,
+      },
+      rejected_input_artifact_count: rejectedInputArtifacts,
+    }),
+  });
+  store.readById(ref.artifact_id);
+  return {
+    ref: ArtifactRefSchema.parse(ref),
+    verifiedInputArtifacts: uniqueInputs,
+    rejectedInputArtifacts,
+  };
+}
+
 /** Carry optional durable-memory IDs only when a prior exact block supplied them. */
 export function parsePriorMemoryIds(previousSummary: string | undefined): string[] {
   try {
@@ -1303,6 +1469,7 @@ export function deriveErrorRefs(messages: SessionMessage[]): ErrorRef[] {
 async function buildArtifact(input: BuildArtifactInput): Promise<{
   artifact: PennyCompactArtifact;
   digest: string;
+  workerContinuityReady: boolean;
 }> {
   const now = new Date().toISOString();
   const readFiles = Array.from(input.preparation.fileOps.read);
@@ -1314,15 +1481,41 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
 
   // The query key is an exact run ID from owner-produced tool metadata or the
   // prior v2 appendix. No pending-run list or session correlation exists here.
-  const exactRunIds = collectExactRunIds(input.messages, input.preparation.previousSummary);
+  const exactRunIds = Array.from(
+    new Set([
+      ...collectExactRunIds(input.messages, input.preparation.previousSummary),
+      ...(input.workerContinuity ? [input.workerContinuity.session.run_id] : []),
+    ])
+  );
   const explicitMemoryIds = parsePriorMemoryIds(input.preparation.previousSummary);
   const priorArtifactRefs = parsePriorArtifactRefs(input.preparation.previousSummary);
   const checkpoint = readExactCheckpoints(exactRunIds, input.projectRoot);
   const engineRuns = checkpoint.runs;
   const currentSessionRefs = collectCurrentSessionArtifactRefs(input.messages, input.projectRoot);
+  const workerIssues: string[] = [];
+  let workerContextRefs: ArtifactRef[] = [];
+  let workerContinuityReady = input.workerContinuity === undefined;
+  if (input.workerContinuity) {
+    try {
+      const persisted = persistWorkerContinuityArtifact({
+        projectRoot: input.projectRoot,
+        compactionSeq: input.compactionSeq,
+        continuity: input.workerContinuity,
+      });
+      workerContextRefs = [persisted.ref, ...persisted.verifiedInputArtifacts];
+      workerContinuityReady = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      workerIssues.push(`worker continuity artifact persistence failed: ${message}`);
+      logger.warn("Worker continuity artifact persistence failed", { error: message });
+    }
+  }
   const artifactRefs = [
     ...new Map(
-      [...checkpoint.artifactRefs, ...currentSessionRefs].map((ref) => [ref.artifact_id, ref])
+      [...workerContextRefs, ...checkpoint.artifactRefs, ...currentSessionRefs].map((ref) => [
+        ref.artifact_id,
+        ref,
+      ])
     ).values(),
   ];
   const pending = await detectPendingState(input.messages).catch((error) => {
@@ -1337,7 +1530,10 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
     engineRuns[0]?.goal,
     previousSummaryGoal ?? undefined
   );
-  const goal = extracted.goal || "Active session - goal not yet extracted";
+  const goal =
+    input.workerContinuity?.assignment.task.replace(/\s+/gu, " ").trim().slice(0, 500) ||
+    extracted.goal ||
+    "Active session - goal not yet extracted";
   const previousStreak = parseGoalStreak(input.preparation.previousSummary);
   const goalStreak = computeGoalStreak(goal, previousSummaryGoal, previousStreak);
   if (goalStagnationCanary(goalStreak)) {
@@ -1348,20 +1544,39 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
     });
   }
 
-  const work = deriveWorkContext({
+  const derivedWork = deriveWorkContext({
     dominantSkill: extracted.superseded ? null : dominant,
     engineRuns,
     pending,
     goal,
     customInstructions: input.customInstructions,
   });
+  const workerContextRef = artifactRefs.find((ref) => ref.kind === "worker-compaction-context");
+  const work = input.workerContinuity
+    ? {
+        current_work: `Continue the exact ${input.workerContinuity.session.purpose} assignment for ${input.workerContinuity.session.agent} in orchestration state ${input.workerContinuity.session.state_id}.`,
+        next_steps: [
+          ...(workerContextRef
+            ? [
+                `Read ${workerContextRef.artifact_id} before continuing; it contains the complete authoritative opening, task, registered guidance, and verified input refs.`,
+              ]
+            : []),
+          `Complete the registered ${input.workerContinuity.session.purpose} contract and return its required result framing.`,
+        ],
+      }
+    : derivedWork;
   let artifact: PennyCompactArtifact = {
     schema_version: CONFIG.schemaVersion,
     session_id: input.sessionId,
     compaction_seq: input.compactionSeq,
     compaction_timestamp: now,
     goal,
-    constraints: extracted.constraints,
+    constraints: input.workerContinuity
+      ? [
+          `Continue only the validated ${input.workerContinuity.session.purpose} assignment for this worker branch.`,
+          "Follow the registered guidance and required result framing from the exact worker context artifact.",
+        ]
+      : extracted.constraints,
     preferences: [],
     pending,
     ...(work.current_work ? { current_work: work.current_work } : {}),
@@ -1403,8 +1618,12 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
           21
         ),
       },
-      ...(checkpoint.issues.length > 0
-        ? { checkpoint_issues: checkpoint.issues.slice(0, 20).map((issue) => issue.slice(0, 300)) }
+      ...(checkpoint.issues.length > 0 || workerIssues.length > 0
+        ? {
+            checkpoint_issues: [...checkpoint.issues, ...workerIssues]
+              .slice(0, 20)
+              .map((issue) => issue.slice(0, 300)),
+          }
         : {}),
     },
   };
@@ -1433,7 +1652,7 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
     explicitMemoryIds,
     priorArtifactRefs
   );
-  return { artifact, digest };
+  return { artifact, digest, workerContinuityReady };
 }
 
 // ============================================================
@@ -1665,6 +1884,8 @@ interface CompactionEntry {
   type?: string;
   sessionId?: string;
   firstKeptEntryId?: string;
+  customType?: string;
+  data?: unknown;
 }
 
 interface SessionBeforeCompactEvent {
@@ -1713,6 +1934,33 @@ export function enforceSelectedGoal(prose: string, selectedGoal: string): string
   return [...lines.slice(0, start), "## Goal", goal, "", ...lines.slice(end)]
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Insert code-owned worker continuity sourced only from the validated custom-entry pair. */
+export function enforceWorkerContinuity(
+  prose: string,
+  artifact: PennyCompactArtifact,
+  continuity?: TrustedWorkerContinuity
+): string {
+  const section = workerContinuitySection(artifact, continuity);
+  if (section.length === 0) return prose;
+  const lines = prose.trim().split("\n");
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (!/^#{1,6}\s+Worker Continuity\s*$/iu.test(lines[index]?.trim() ?? "")) continue;
+    let end = index + 1;
+    while (end < lines.length && !/^#{1,6}\s+/u.test(lines[end]?.trim() ?? "")) end++;
+    lines.splice(index, end - index);
+  }
+  const goalStart = lines.findIndex((line) => /^#{1,6}\s+Goal\s*$/iu.test(line.trim()));
+  let insertAt = goalStart >= 0 ? goalStart + 1 : 0;
+  while (insertAt < lines.length && !/^#{1,6}\s+/u.test(lines[insertAt]?.trim() ?? "")) {
+    insertAt++;
+  }
+  lines.splice(insertAt, 0, ...section);
+  return lines
+    .join("\n")
+    .replace(/\n{3,}/gu, "\n\n")
     .trim();
 }
 
@@ -1815,6 +2063,38 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
     // Merge both message windows so split-turn context is never dropped.
     const messages = mergeCompactionMessages(preparation);
 
+    let workerContinuity: TrustedWorkerContinuity | undefined;
+    const hasWorkerSessionMarker = branchEntries.some(
+      (entry) => entry.customType === CATALOG_WORKER_SESSION_METADATA
+    );
+    if (hasWorkerSessionMarker) {
+      let admission: WorkerContinuityAdmission;
+      try {
+        const runtimeConfig = loadRuntimeConfig(projectRoot);
+        admission = collectTrustedWorkerContinuity(branchEntries, runtimeConfig.projectId);
+      } catch (error) {
+        logger.warn("Worker continuity project binding failed; using Pi default compaction", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      if (admission.status !== "trusted") {
+        logger.warn("Recognized worker session has no admissible continuity; using Pi default", {
+          admission_status: admission.status,
+        });
+        return;
+      }
+      workerContinuity = admission.continuity;
+    }
+
+    if (workerContinuity?.assignment.compaction_continuity.mode === "pi_default_private_context") {
+      logger.info("Using Pi default compaction for owner-resolved private worker context", {
+        run_id: workerContinuity.session.run_id,
+        state_id: workerContinuity.session.state_id,
+      });
+      return;
+    }
+
     // boundary_shift is populated on every compaction after the first.
     const boundaryShift = computeBoundaryShift(
       branchEntries,
@@ -1826,6 +2106,7 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
       sessionId,
       compactionSeq,
       projectRoot,
+      ...(workerContinuity ? { workerContinuity } : {}),
       messages,
       preparation: {
         firstKeptEntryId: preparation.firstKeptEntryId,
@@ -1838,6 +2119,13 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
       boundaryShift,
       signal: event.signal,
     });
+    if (workerContinuity !== undefined && !build.workerContinuityReady) {
+      logger.warn("Exact worker continuity was unavailable; using Pi default compaction", {
+        run_id: workerContinuity.session.run_id,
+        state_id: workerContinuity.session.state_id,
+      });
+      return;
+    }
     const artifact = build.artifact;
     const resultBudget = compactionResultBudget();
 
@@ -1867,9 +2155,10 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
       artifact.summary_model = modelResult.model;
       // Goal and skill status are code-owned: model prose cannot revive or
       // misclassify an older skill.
-      modelProse = enforceSkillContinuity(
-        enforceSelectedGoal(modelResult.prose, artifact.goal),
-        artifact
+      modelProse = enforceWorkerContinuity(
+        enforceSkillContinuity(enforceSelectedGoal(modelResult.prose, artifact.goal), artifact),
+        artifact,
+        workerContinuity
       );
       artifact.prose_summary = modelProse.slice(0, 20_000);
     } else if (loanEnabled("compaction_deterministic_summary")) {
@@ -1895,10 +2184,13 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
     const proseOnly =
       modelProse !== null
         ? modelProse
-        : createProseSummary({
-            ...artifact,
-            resume_refs: { version: RESUME_REFS_VERSION, refs: [] },
-          });
+        : createProseSummary(
+            {
+              ...artifact,
+              resume_refs: { version: RESUME_REFS_VERSION, refs: [] },
+            },
+            workerContinuity
+          );
     const proseWithCanary = appendGoalStreakMarker(proseOnly, artifact.metadata.goal_streak ?? 0);
     let fitted = fitCompactionSummary(proseWithCanary, artifact.resume_refs, resultBudget);
     if (fitted.resumeRefs.refs.length !== artifact.resume_refs.refs.length) {

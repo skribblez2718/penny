@@ -22,9 +22,15 @@ memory:<durable_memory_id>
 
 ## 2. Reorient from prose
 
-Read Goal, Current Work, In-Flight Runs, Pending, Next Steps, constraints, unresolved
-errors, and touched files. A newer user goal supersedes older completed-skill context.
-The prose is sufficient for ordinary continuation; dereference only when detail is needed.
+Read Goal, Current Work, Worker Continuity, In-Flight Runs, Pending, Next Steps,
+constraints, unresolved errors, and touched files. A newer user goal supersedes older
+completed-skill context. The prose is sufficient for ordinary continuation; dereference only
+when detail is needed. When a code-owned Worker Continuity section is present, read its exact
+`worker-compaction-context` artifact before continuing; if only a handoff-index ref is visible,
+resolve that exact context record through the index first. In exact-opening mode, follow the stored
+authoritative opening—including role guidance, assignment, liveness instructions, and result
+framing—rather than substituting an ordinary narrative response. Owner-resolved private-context
+workers are deliberately left to Pi's default compaction and do not create this generic artifact.
 
 ## 3. Resume exact runs
 
@@ -56,9 +62,13 @@ artifact recovery.
 ## 6. Exact-source invariant
 
 Compaction preserves only IDs proven to come from current-session completed `subagent` or
-`skill` result metadata, IDs explicitly passed later through `input_artifacts`, or a prior
-code-owned current-session resume block/index. It never scans historical artifacts, grant
-state, memory, or task-text names.
+`skill` result metadata, IDs explicitly passed later through `input_artifacts`, a prior
+code-owned current-session resume block/index, or one strictly validated and project-bound
+orchestration worker-session/continuity custom-entry pair. Worker input refs are re-verified
+against the exact project artifact store before admission. A recognized worker-session marker with a
+missing or inadmissible companion, or a worker context that cannot be persisted and re-read, makes the
+custom handler yield to Pi's default compaction without emitting partial continuity. Compaction never
+scans historical artifacts, grant state, memory, or task-text names.
 
 When direct lines exceed the shared result budget, compaction persists one immutable
 handoff index and emits only its ID. If that index cannot be persisted and re-read, the
