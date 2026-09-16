@@ -1,0 +1,66 @@
+{
+  "schema_id": "penny.sca-fixture-manifest.v1",
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "filename": "phase-role-map.json",
+      "sha256": "b3e1acdd3e9a13f23ce437bcb02a8a4f4c8c5f1999ef8d1edf984392604aa106",
+      "schema_identity": {
+        "schema_id": "penny.sca-phase-role-map.v1",
+        "schema_version": 1
+      },
+      "expected_outcome": "accepted",
+      "required_environment": "offline_local",
+      "negative_oracle": "reject_invalid_or_schema_incompatible_content",
+      "license_tag": "project-authored",
+      "safety_tag": "no-external-action"
+    },
+    {
+      "filename": "profile.json",
+      "sha256": "3f62367f192f00b79e000fe4a2c475785571074b61ce9c37585e77e5f55f51fb",
+      "schema_identity": {
+        "schema_id": "penny.sca-profile.v1",
+        "schema_version": 1
+      },
+      "expected_outcome": "accepted",
+      "required_environment": "offline_local",
+      "negative_oracle": "reject_invalid_or_schema_incompatible_content",
+      "license_tag": "project-authored",
+      "safety_tag": "no-external-action"
+    },
+    {
+      "filename": "policy.json",
+      "sha256": "bb61d2f735e6559f9a7068ebf8dbf2dfe37be82d9459025ad4febc304d9ab1d3",
+      "schema_identity": {
+        "schema_id": "penny.sca-policy.v1",
+        "schema_version": 1
+      },
+      "expected_outcome": "accepted",
+      "required_environment": "offline_local",
+      "negative_oracle": "reject_invalid_or_schema_incompatible_content",
+      "license_tag": "project-authored",
+      "safety_tag": "no-external-action"
+    },
+    {
+      "filename": "target.json",
+      "sha256": "a0f49f1336ecb149636e42395d457ef5f6747705335ba88a8b913f6fdb04e45f",
+      "schema_identity": {
+        "schema_id": "penny.sca-target.v1",
+        "schema_version": 1
+      },
+      "expected_outcome": "accepted",
+      "required_environment": "offline_local",
+      "negative_oracle": "reject_invalid_or_schema_incompatible_content",
+      "license_tag": "project-authored",
+      "safety_tag": "no-external-action"
+    }
+  ],
+  "failure_rules": {
+    "missing_fixture": "failure",
+    "empty_fixture": "failure",
+    "unreadable_fixture": "failure",
+    "digest_mismatch": "failure",
+    "unexpected_extra_fixture": "failure",
+    "skipped_case_counts_as_pass": false
+  }
+}
