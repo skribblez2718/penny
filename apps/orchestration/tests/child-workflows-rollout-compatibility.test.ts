@@ -26,12 +26,12 @@ const temporaryRoots: string[] = [];
 
 const CURRENT_BOUND_REGISTRATION_DIGESTS = {
   assess: "cb9c0500134d95d3e2562d00caf49f79decc502638475784b3a76c52291e7d7a",
-  decide: "b252972caa57226fc90be6a660401c38fb73da0cd84a86f8401422229f0a9ec9",
+  decide: "8e6891dda8ed8337b77c04d53661d3186daebda5d7cf802af9ccca1b059fa90b",
   diagnose: "5989322bcc78c2f09bf41f95bf14e86efc18716eb0e495d6db7de53bd5aeee21",
   "knowledge-base": "a41be703cb88b021666355ebf287f821605370ca4017da1b6af03e7df7d9379c",
-  plan: "1e53c2238398a2625478df011d5d05fe732184074b73494571331a45ac054c28",
+  plan: "422ef9b935b5d8e9c2b2f934db387418c40d5d83086faad3c1894ac6c589a19b",
   produce: "678136f99467d2c9853c4d36267cda41af0d7371da69f60c58bb988209e74155",
-  research: "a5602e2010c5ca0fac956ca672c1dd5f1708e92e0414146583b9aaece65f972f",
+  research: "784be35e65d6fa3bdaf07c03fbf24a8f4683c8939c3d1a32fcb46538f51d3cb4",
 } as const;
 
 const WRITING_DOCUMENT_SOURCES = [

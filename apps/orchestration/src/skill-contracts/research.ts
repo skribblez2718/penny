@@ -516,8 +516,9 @@ function canonicalVerificationModelOverride(
 
 function isTypedGroundedSynthesisRef(binding: InputArtifacts["artifacts"][number]): boolean {
   return (
-    binding.slot === "prior_grounded_synthesis" ||
-    binding.ref.content_schema?.schema_id === "penny.grounded-synthesis.v1"
+    binding.ref.kind === "semantic-core" &&
+    binding.ref.content_schema?.schema_id === "penny.grounded-synthesis.v1" &&
+    binding.ref.content_schema.schema_version === 1
   );
 }
 
@@ -2554,6 +2555,19 @@ export const RESEARCH_PORTS = {
     min_items: 0,
     max_items: 64,
     semantic_product: false,
+  },
+  evidence_context: {
+    schema_version: 1,
+    name: "evidence_context",
+    direction: "input",
+    transport: "artifact",
+    schema_id: "penny.evidence-context.v1",
+    schema_version_required: 1,
+    artifact_kind: "evidence-context",
+    source: "either",
+    min_items: 0,
+    max_items: 1,
+    semantic_product: true,
   },
   legacy_report_artifact: {
     schema_version: 1,

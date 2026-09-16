@@ -12,7 +12,9 @@ import {
   canonicalJson,
   initializePennyState,
   loadRuntimeConfig,
+  validateDecision,
   validateDirective,
+  validateEvidenceContext,
   type AgentCompletion,
   type AgentInvocation,
   type ArtifactHostStore,
@@ -23,6 +25,7 @@ import {
   type RunContext,
 } from "../src/index.js";
 import { decisionRequest, persistedDecisionDraft } from "./fixtures/decision-fixtures.js";
+import { persistEvidenceContext } from "./helpers/evidence-context.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const roots: string[] = [];
@@ -119,7 +122,8 @@ class BlockingClient implements ModelClient {
 class ChildDispatchParent implements PlaybookV1 {
   constructor(
     private readonly artifacts: ArtifactHostStore,
-    private readonly projectId: string
+    private readonly projectId: string,
+    private readonly includeEvidenceContext = false
   ) {}
 
   initialize(context: RunContext): Directive {
@@ -185,6 +189,9 @@ class ChildDispatchParent implements PlaybookV1 {
       },
       content: canonicalJson(request),
     });
+    const evidenceContext = this.includeEvidenceContext
+      ? persistEvidenceContext(this.artifacts, `child-runtime-${context.identity.run_id}`)
+      : undefined;
     const target = PLAYBOOK_REGISTRY.get("assess")?.generic_child?.parent_policy.targets.find(
       (candidate) => candidate.child_name === "decide"
     );
@@ -199,7 +206,13 @@ class ChildDispatchParent implements PlaybookV1 {
       call_key: "one-decision",
       child_name: "decide",
       request_ref: requestRef,
-      input_artifacts: { schema_version: 2, artifacts: [] },
+      input_artifacts: {
+        schema_version: 2,
+        artifacts:
+          evidenceContext === undefined
+            ? []
+            : [{ slot: "evidence_context", ref: evidenceContext.ref }],
+      },
       expected_output: target.expected_output,
       policy_binding: policyBinding,
       progress_lease: target.progress_lease,
@@ -240,12 +253,15 @@ class ChildDispatchParent implements PlaybookV1 {
   }
 }
 
-function parentRegistration(projectId: string): PlaybookRegistrationV1 {
+function parentRegistration(
+  projectId: string,
+  includeEvidenceContext = false
+): PlaybookRegistrationV1 {
   return {
     ...(PLAYBOOK_REGISTRY.get("assess") ?? ASSESS_PLAYBOOK_REGISTRATION),
     construct: (options) => {
       if (options.artifactStore === undefined) throw new Error("fixture parent requires artifacts");
-      return new ChildDispatchParent(options.artifactStore, projectId);
+      return new ChildDispatchParent(options.artifactStore, projectId, includeEvidenceContext);
     },
   };
 }
@@ -301,10 +317,10 @@ describe("lease-bound depth-one child-workflow owner", () => {
     expect(service.checkpointer.childWorkflowCallsForParent(identity.run_id)).toHaveLength(0);
   });
 
-  it("runs a real registered child, records its terminal once, consumes the exact core, and resumes the parent", async () => {
+  it("runs a real registered child with exact EvidenceContext, records its native terminal once, and resumes the parent", async () => {
     const env = environment();
     const projectId = loadRuntimeConfig(PROJECT_ROOT, env).projectId;
-    const parent = parentRegistration(projectId);
+    const parent = parentRegistration(projectId, true);
     const registry = new Map<string, PlaybookRegistrationV1>([
       ["assess", parent],
       ["decide", PLAYBOOK_REGISTRY.get("decide") ?? DECIDE_PLAYBOOK_REGISTRATION],
@@ -366,6 +382,46 @@ describe("lease-bound depth-one child-workflow owner", () => {
         content_schema: { schema_id: "penny.decision.v2", schema_version: 2 },
       },
     });
+    expect(call.input_artifacts.artifacts).toHaveLength(1);
+    const contextBinding = call.input_artifacts.artifacts[0];
+    if (contextBinding === undefined) throw new Error("child EvidenceContext binding is absent");
+    expect(contextBinding.slot).toBe("evidence_context");
+    expect(contextBinding.ref.kind).toBe("evidence-context");
+    expect(contextBinding.ref.content_schema).toEqual({
+      schema_id: "penny.evidence-context.v1",
+      schema_version: 1,
+    });
+    const context = validateEvidenceContext(
+      JSON.parse(service.artifacts.readById(contextBinding.ref.artifact_id).toString("utf8"))
+    );
+    const statementMarker = context.entries[0]?.statement;
+    if (statementMarker === undefined) throw new Error("child EvidenceContext statement is absent");
+    expect(client.invocations).toHaveLength(4);
+    for (const invocation of client.invocations) {
+      expect(
+        invocation.inputArtifacts.filter(
+          (artifact) => artifact.artifact_id === contextBinding.ref.artifact_id
+        )
+      ).toEqual([contextBinding.ref]);
+      expect(invocation.task).not.toContain(statementMarker);
+    }
+    const childRun = service.checkpointer.loadRun(call.child_identity);
+    const childRequestRef = childRun.selectedArtifacts.find(
+      (artifact) => artifact.kind === "decision-request" && artifact.phase === "intake"
+    );
+    if (childRequestRef === undefined) throw new Error("child native request ref is absent");
+    expect(service.artifacts.metadata(childRequestRef).upstream_refs).toEqual([contextBinding.ref]);
+    if (call.output_artifact === null) throw new Error("child native terminal ref is absent");
+    const decision = validateDecision(
+      JSON.parse(service.artifacts.readById(call.output_artifact.artifact_id).toString("utf8"))
+    );
+    expect(decision.request).toEqual(decisionRequest());
+    expect(decision.source_lineage.input_artifact_ids).toEqual([contextBinding.ref.artifact_id]);
+    expect(
+      service.artifacts
+        .metadata(call.output_artifact)
+        .upstream_refs.filter((artifact) => artifact.artifact_id === contextBinding.ref.artifact_id)
+    ).toEqual([contextBinding.ref]);
     expect(service.checkpointer.loadRun(identity).selectedArtifacts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

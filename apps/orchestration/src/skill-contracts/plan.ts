@@ -13,7 +13,7 @@ import {
   validateSkillSchema,
 } from "./common.js";
 
-const MAX_PLAN_INPUTS = 2;
+const MAX_PLAN_INPUTS = 3;
 const MAX_STRATEGY_PROSE_BYTES = 65_536;
 const MAX_STRATEGY_CORE_LINE_BYTES = 49_152;
 const MAX_STRATEGY_SUMMARY_LINE_BYTES = 256;

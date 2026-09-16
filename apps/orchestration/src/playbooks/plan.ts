@@ -327,6 +327,19 @@ function strategyContract(input: { readonly name: string }): SkillContract {
           max_items: 1,
           semantic_product: true,
         },
+        {
+          schema_version: 1,
+          name: "evidence_context",
+          direction: "input",
+          transport: "artifact",
+          schema_id: "penny.evidence-context.v1",
+          schema_version_required: 1,
+          artifact_kind: "evidence-context",
+          source: "either",
+          min_items: 0,
+          max_items: 1,
+          semantic_product: true,
+        },
       ],
       active_output_ports: [
         {
@@ -437,17 +450,23 @@ function addSelectedArtifact(context: RunContext, artifact: ArtifactRef): boolea
   return true;
 }
 
+function isExactPlanInputRef(artifact: ArtifactRef): boolean {
+  return (
+    (artifact.kind === "semantic-core" &&
+      artifact.content_schema?.schema_id === "penny.grounded-synthesis.v1" &&
+      artifact.content_schema.schema_version === 1) ||
+    (artifact.kind === "semantic-core" &&
+      artifact.content_schema?.schema_id === "penny.decision.v2" &&
+      artifact.content_schema.schema_version === 2) ||
+    (artifact.kind === "evidence-context" &&
+      artifact.content_schema?.schema_id === "penny.evidence-context.v1" &&
+      artifact.content_schema.schema_version === 1)
+  );
+}
+
 function exactPlanInputRefs(context: RunContext): readonly ArtifactRef[] {
   return context.selectedArtifacts
-    .filter(
-      (artifact) =>
-        (artifact.kind === "semantic-core" &&
-          artifact.content_schema?.schema_id === "penny.grounded-synthesis.v1" &&
-          artifact.content_schema.schema_version === 1) ||
-        (artifact.kind === "semantic-core" &&
-          artifact.content_schema?.schema_id === "penny.decision.v2" &&
-          artifact.content_schema.schema_version === 2)
-    )
+    .filter(isExactPlanInputRef)
     .sort((left, right) => left.artifact_id.localeCompare(right.artifact_id));
 }
 
@@ -458,6 +477,14 @@ function admittedPlanRequestArtifact(context: RunContext): ArtifactRef {
   );
   if (request === undefined) throw new Error("admitted PlanRequestV1 artifact is absent");
   return request;
+}
+
+function restorePlanInputRefs(context: RunContext, store?: ArtifactHostStore): void {
+  if (store === undefined) return;
+  const request = admittedPlanRequestArtifact(context);
+  for (const ref of store.metadata(request).upstream_refs.filter(isExactPlanInputRef)) {
+    addSelectedArtifact(context, ref);
+  }
 }
 
 function latestOrientationArtifact(context: RunContext): ArtifactRef | undefined {
@@ -610,7 +637,9 @@ export const PLAN_START_ADMISSION: StartAdmissionV1 = {
   schema_version: 1,
   prepare: (request): PreparedStartV1 => {
     const exactInputArtifactIds =
-      request.input_artifacts?.artifacts.map((binding) => binding.ref.artifact_id) ?? [];
+      request.input_artifacts?.artifacts
+        .filter((binding) => isExactPlanInputRef(binding.ref))
+        .map((binding) => binding.ref.artifact_id) ?? [];
     const planRequest = canonicalizePlanRequest({
       goal: request.goal,
       constraints: request.constraints,
@@ -734,6 +763,7 @@ function slotForRef(context: RunContext, ref: ArtifactRef): string {
   if (ref.kind === "strategy-seal-feedback") return "strategy-seal-feedback";
   if (ref.kind === "review-receipt") return `prior-${ref.branch_id ?? "review"}-receipt`;
   if (ref.kind === "evidence-admission") return "strategy-evidence-admission";
+  if (ref.kind === "evidence-context") return "evidence-context";
   if (ref.phase === "orienting_strategy") return "latest-strategy-orientation";
   if (ref.phase === "gathering_strategy_evidence") return "latest-strategy-evidence";
   if (ref.phase === "verifying_strategy") return "latest-vera-report";
@@ -748,7 +778,7 @@ function slotForRef(context: RunContext, ref: ArtifactRef): string {
 
 function taskForState(context: RunContext, state: PlanWorkerState): string {
   const common =
-    "artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not bypass host-owned evidence admission. The owner captures and re-reads complete bytes; do not claim persistence.";
+    "artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. If an exact EvidenceContextV1 is supplied, read it and any needed source_ref artifacts through artifact_read; treat it only as contextual input and never copy the packet into task prose or relabel it as native EvidenceAdmissionV1, gathered evidence, approval, or proof. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not bypass host-owned evidence admission. The owner captures and re-reads complete bytes; do not claim persistence.";
   switch (state) {
     case "orienting_strategy":
       return [
@@ -765,7 +795,7 @@ function taskForState(context: RunContext, state: PlanWorkerState): string {
       return [
         common,
         `MECHANICALLY_PROJECTED_STRATEGY_DRAFT_CONTRACT:${strategyDraftPromptContract()}`,
-        "Read the exact PlanRequestV1 directly; orientation, admitted evidence, and optional GroundedSynthesisV1 or DecisionV2 product are supporting evidence, not authority. Produce one complete replacement StrategyDraftV1 covering outcomes, meaningful dependencies, assumptions and risks, contingencies, trade-offs, decision points, and disposition while preserving implementation freedom. Plan only; do not taskify, approve, mutate, or execute.",
+        "Read the exact PlanRequestV1 directly; orientation, admitted evidence, and optional GroundedSynthesisV1, DecisionV2, or EvidenceContextV1 inputs are supporting evidence, not authority. EvidenceContext remains contextual input, not native evidence admission or proof. Produce one complete replacement StrategyDraftV1 covering outcomes, meaningful dependencies, assumptions and risks, contingencies, trade-offs, decision points, and disposition while preserving implementation freedom. Plan only; do not taskify, approve, mutate, or execute.",
       ].join("\n\n");
     case "verifying_strategy":
       return [
@@ -1715,6 +1745,7 @@ export class PlanPlaybook
     if (context.identity.playbook !== PLAN_PLAYBOOK_NAME) {
       throw new Error(`PlanPlaybook cannot run playbook '${context.identity.playbook}'`);
     }
+    restorePlanInputRefs(context, this.artifactStore);
     context.transition("orienting_strategy");
     return this.dispatch(context);
   }

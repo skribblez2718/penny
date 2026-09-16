@@ -14,11 +14,13 @@ import {
   validateEvidenceAdmission,
   validateDecision,
   validateDecisionProductEnvelope,
+  validateDecisionRequest,
   validateDecisionProductIntegrity,
   validateReviewReceipt,
   type AgentCompletion,
   type AgentInvocation,
   type Directive,
+  type InputArtifacts,
   type JsonValue,
   type ModelClient,
   type PlaybookRegistrationV1,
@@ -28,6 +30,7 @@ import {
   decisionRequest,
   persistedDecisionDraft,
 } from "./fixtures/decision-fixtures.js";
+import { persistEvidenceContext } from "./helpers/evidence-context.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const roots: string[] = [];
@@ -56,7 +59,7 @@ function identity(runId: string, playbook = DECIDE_PLAYBOOK_NAME) {
   };
 }
 
-function start(runId: string, playbook = DECIDE_PLAYBOOK_NAME) {
+function start(runId: string, playbook = DECIDE_PLAYBOOK_NAME, inputArtifacts?: InputArtifacts) {
   const request = decisionRequest();
   const { decision_question: goal, ...constraints } = request;
   return {
@@ -65,6 +68,7 @@ function start(runId: string, playbook = DECIDE_PLAYBOOK_NAME) {
     identity: identity(runId, playbook),
     goal,
     constraints,
+    ...(inputArtifacts === undefined ? {} : { input_artifacts: inputArtifacts }),
     project_root: PROJECT_ROOT,
     trust_profile: "hardened-untrusted" as const,
   };
@@ -308,6 +312,81 @@ describe("orchestrated decide workflow", () => {
       expect(service.checkpointer.completionAdmission(terminal.identity.run_id)).toBeDefined();
     }
   );
+
+  it("preserves one EvidenceContext ref without flattening the native request, decision, or task prose", async () => {
+    sequence += 1;
+    const runId = `run-decide-evidence-context-${sequence}`;
+    const client = new ScriptedDecideClient([
+      analysisEvidenceGap(),
+      evidencePacket(),
+      persistedDecisionDraft("unresolved"),
+      veraPass(),
+      carrenApprove(true),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    const evidenceContext = persistEvidenceContext(service.artifacts, "decide-playbook");
+    const terminal = completeDirective(
+      await service.execute(
+        start(runId, DECIDE_PLAYBOOK_NAME, {
+          schema_version: 2,
+          artifacts: [{ slot: "evidence_context", ref: evidenceContext.ref }],
+        })
+      )
+    );
+    const run = service.checkpointer.loadRunById(runId);
+    if (run === undefined) throw new Error("completed Decide run is absent");
+    const requestRef = run.selectedArtifacts.find(
+      (artifact) => artifact.kind === "decision-request" && artifact.phase === "intake"
+    );
+    if (requestRef === undefined) throw new Error("admitted DecisionRequestV1 ref is absent");
+    const nativeRequest = validateDecisionRequest(readJson(service, requestRef.artifact_id));
+    expect(nativeRequest).toEqual(decisionRequest());
+    expect(service.artifacts.metadata(requestRef).upstream_refs).toEqual([evidenceContext.ref]);
+
+    const terminalRef = outputRef(terminal);
+    const productRef = terminal.artifacts.find(
+      (artifact) => artifact.artifact_id === String(terminalRef.artifact_id)
+    );
+    if (productRef === undefined) throw new Error("terminal DecisionV2 ref is absent");
+    const decision = validateDecision(readJson(service, productRef.artifact_id));
+    expect(decision.request).toEqual(nativeRequest);
+    expect(decision.source_lineage.input_artifact_ids).toEqual([evidenceContext.ref.artifact_id]);
+    expect(
+      service.artifacts
+        .metadata(productRef)
+        .upstream_refs.filter(
+          (artifact) => artifact.artifact_id === evidenceContext.ref.artifact_id
+        )
+    ).toEqual([evidenceContext.ref]);
+
+    expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
+      "analyzing_decision",
+      "gathering_decision_evidence",
+      "deciding",
+      "verifying_decision",
+      "critiquing_decision",
+    ]);
+    for (const invocation of client.invocations) {
+      expect(
+        invocation.inputArtifacts.filter(
+          (artifact) => artifact.artifact_id === evidenceContext.ref.artifact_id
+        )
+      ).toEqual([evidenceContext.ref]);
+      expect(invocation.task).not.toContain(evidenceContext.statementMarker);
+    }
+    const admissionRef = terminal.artifacts.find(
+      (artifact) => artifact.kind === "evidence-admission"
+    );
+    if (admissionRef === undefined) throw new Error("Decision EvidenceAdmissionV1 ref is absent");
+    const admission = validateEvidenceAdmission(readJson(service, admissionRef.artifact_id));
+    expect(admission.domain).toBe("decision");
+    expect(admission.source_artifact_ref.artifact_id).not.toBe(evidenceContext.ref.artifact_id);
+  });
 
   it("routes only from persisted SUMMARY bytes and ignores forged completion details", async () => {
     const forged: ModelClient = {

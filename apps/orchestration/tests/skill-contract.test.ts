@@ -34,6 +34,7 @@ describe("P2 research reference contract", () => {
     expect(RESEARCH_SKILL_CONTRACT.io.input_ports.map((port) => port.name)).toEqual([
       "prior_grounded_synthesis",
       "legacy_context",
+      "evidence_context",
     ]);
     expect(RESEARCH_SKILL_CONTRACT.io.active_output_ports.map((port) => port.name)).toEqual([
       "grounded_synthesis",

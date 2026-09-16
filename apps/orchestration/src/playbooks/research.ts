@@ -294,6 +294,9 @@ function semanticDraftInvocationContext(context: RunContext): string {
   ].join("\n\n");
 }
 
+const EVIDENCE_CONTEXT_HANDOFF =
+  "If input_artifacts includes an EvidenceContextV1, read that artifact and any needed source_ref artifacts through artifact_read. Treat it only as contextual input: never copy the packet into task prose or relabel it as a native ResearchRequestV1, GroundedSynthesisV1, evidence admission, approval, or proof.";
+
 function taskForState(context: RunContext, state: ResearchState): string {
   const research = context.research;
   const clarification = context.clarificationText
@@ -301,8 +304,9 @@ function taskForState(context: RunContext, state: ResearchState): string {
     : "";
   const handoff =
     "\n\nRead every task-provided input_artifact through the artifact reader before working. " +
-    "Treat those exact bytes as the sole prior-stage handoff. Return the complete stage output; " +
-    "the execution owner captures it. Summary fields are routing data only.";
+    "Treat those exact bytes as the sole prior-stage handoff. " +
+    EVIDENCE_CONTEXT_HANDOFF +
+    " Return the complete stage output; the execution owner captures it. Summary fields are routing data only.";
   let task: string;
   switch (state) {
     case "planning": {
@@ -350,6 +354,14 @@ function taskForState(context: RunContext, state: ResearchState): string {
   return `${task}${handoff}${clarification}`;
 }
 
+function isEvidenceContextRef(artifact: ArtifactRef): boolean {
+  return (
+    artifact.kind === "evidence-context" &&
+    artifact.content_schema?.schema_id === "penny.evidence-context.v1" &&
+    artifact.content_schema.schema_version === 1
+  );
+}
+
 function selectedInputRefs(
   context: RunContext,
   state: ResearchState,
@@ -362,18 +374,28 @@ function selectedInputRefs(
   const entryState = state === "planning" || state === "researching";
   return context.selectedArtifacts
     .filter((artifact) =>
-      artifact.kind === "context-source-ref"
-        ? contextOwner?.acceptsState(artifact, state) === true
-        : artifact.kind === "research-request"
-          ? ["synthesizing", "validating", "critiquing_report"].includes(state)
-          : phases.has(artifact.phase) ||
-            (entryState && artifact.run_id !== context.identity.run_id)
+      isEvidenceContextRef(artifact)
+        ? true
+        : artifact.kind === "context-source-ref"
+          ? contextOwner?.acceptsState(artifact, state) === true
+          : artifact.kind === "research-request"
+            ? ["synthesizing", "validating", "critiquing_report"].includes(state)
+            : phases.has(artifact.phase) ||
+              (entryState && artifact.run_id !== context.identity.run_id)
     )
     .sort((left, right) =>
       `${left.phase}/${left.branch_id ?? ""}/${left.version}/${left.artifact_id}`.localeCompare(
         `${right.phase}/${right.branch_id ?? ""}/${right.version}/${right.artifact_id}`
       )
     );
+}
+
+function restoreEvidenceContextRefs(context: RunContext, store?: ArtifactHostStore): void {
+  if (store === undefined) return;
+  const request = admittedResearchRequestArtifact(context);
+  for (const ref of store.metadata(request).upstream_refs.filter(isEvidenceContextRef)) {
+    addSelectedArtifact(context, ref);
+  }
 }
 
 function inputArtifacts(
@@ -504,7 +526,11 @@ export const RESEARCH_SKILL_CONTRACT: SkillContract = {
     "Investigate a question against external evidence and produce one grounded synthesis semantic core.",
   io: {
     request: RESEARCH_PORTS.request,
-    input_ports: [RESEARCH_PORTS.prior_grounded_synthesis, RESEARCH_PORTS.legacy_context],
+    input_ports: [
+      RESEARCH_PORTS.prior_grounded_synthesis,
+      RESEARCH_PORTS.legacy_context,
+      RESEARCH_PORTS.evidence_context,
+    ],
     active_output_ports: [RESEARCH_PORTS.grounded_synthesis],
   },
   behavior: {
@@ -727,6 +753,7 @@ export class ResearchPlaybook
     if (context.identity.playbook !== "research") {
       throw new Error(`ResearchPlaybook cannot run playbook '${context.identity.playbook}'`);
     }
+    restoreEvidenceContextRefs(context, this.artifactStore);
     const callerMode = String(context.constraints.mode ?? "");
     context.research.mode = MODES.has(callerMode) ? callerMode : "";
     context.research.max_sub_queries = Math.min(
@@ -1445,7 +1472,7 @@ export class ResearchPlaybook
         : `Research this sub-query for '${context.goal}'. Sub-query:`;
       return {
         branchId: `sq${branchNumber}`,
-        task: `${prefix} ${query}`,
+        task: `${prefix} ${query}\n\n${EVIDENCE_CONTEXT_HANDOFF}`,
       };
     });
     context.research.echo_branches_dispatched = Math.max(
@@ -2030,10 +2057,7 @@ function exactResearchEvidence(context: RunContext): ArtifactRef[] {
 }
 
 function exactContextTrace(context: RunContext): string {
-  const refs = context.selectedArtifacts
-    .filter((artifact) => artifact.kind === "context-source-ref")
-    .sort((left, right) => left.artifact_id.localeCompare(right.artifact_id));
-  return sha256(canonicalJson(refs));
+  return sha256(canonicalJson(exactContextRefs(context)));
 }
 
 function admittedResearchRequestArtifact(context: RunContext): ArtifactRef {
@@ -2083,7 +2107,7 @@ function extractSemanticDraft(bytes: Buffer) {
 
 function exactContextRefs(context: RunContext): ArtifactRef[] {
   return context.selectedArtifacts
-    .filter((artifact) => artifact.kind === "context-source-ref")
+    .filter((artifact) => artifact.kind === "context-source-ref" || isEvidenceContextRef(artifact))
     .sort((left, right) => left.artifact_id.localeCompare(right.artifact_id));
 }
 

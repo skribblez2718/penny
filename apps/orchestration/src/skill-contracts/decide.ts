@@ -276,18 +276,19 @@ export function decisionDraftPromptContract(): string {
       comparison_dimension_ids:
         "supplied hard_constraints[].constraint_id, objectives[].objective_id, or preferences[].preference_id only",
       basis_ids_used:
-        "supplied constraint, objective, preference, uncertainty, evidence, or admitted prior grounded-synthesis artifact IDs only; request transport IDs are forbidden",
+        "supplied constraint, objective, preference, uncertainty, evidence, admitted prior grounded-synthesis artifact, or admitted EvidenceContext artifact IDs only; request transport IDs are forbidden",
       "sensitivity[].basis_ids":
-        "supplied constraint, objective, preference, uncertainty, evidence, or admitted prior grounded-synthesis artifact IDs only; request transport IDs are forbidden",
+        "supplied constraint, objective, preference, uncertainty, evidence, admitted prior grounded-synthesis artifact, or admitted EvidenceContext artifact IDs only; request transport IDs are forbidden",
     },
     allowed_basis_artifact_roles: [
       "exact admitted prior grounded-synthesis semantic-core artifacts",
+      "exact admitted EvidenceContextV1 contextual-input artifacts when their content is actually used",
     ],
     forbidden_basis_artifact_roles: [
       "the host-admitted decision-request transport artifact",
       "prior decision drafts",
       "decision seal feedback",
-      "analysis, evidence-packet, review-report, or review-receipt transport artifacts",
+      "host-minted EvidenceAdmissionV1, gathered-evidence, review-report, or review-receipt transport artifacts",
       "random, stale, wrong-run, or otherwise unadmitted artifacts",
     ],
     outcome_rules: {

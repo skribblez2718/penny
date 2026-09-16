@@ -451,7 +451,20 @@ describe("DecisionDraftV2 transport and deterministic DecisionV2 sealing", () =>
     expect(unknownString(idNamespaces.comparison_dimension_ids, "dimension namespace")).toContain(
       "constraint_id"
     );
-    expect(unknownString(idNamespaces.basis_ids_used, "basis namespace")).toContain("artifact");
+    expect(unknownString(idNamespaces.basis_ids_used, "basis namespace")).toContain(
+      "admitted EvidenceContext artifact"
+    );
+    expect(contract.allowed_basis_artifact_roles).toEqual([
+      "exact admitted prior grounded-synthesis semantic-core artifacts",
+      "exact admitted EvidenceContextV1 contextual-input artifacts when their content is actually used",
+    ]);
+    expect(contract.forbidden_basis_artifact_roles).toEqual([
+      "the host-admitted decision-request transport artifact",
+      "prior decision drafts",
+      "decision seal feedback",
+      "host-minted EvidenceAdmissionV1, gathered-evidence, review-report, or review-receipt transport artifacts",
+      "random, stale, wrong-run, or otherwise unadmitted artifacts",
+    ]);
     expect(unknownString(outcomeRules.not_applicable, "not-applicable outcome rule")).toContain(
       "empty"
     );

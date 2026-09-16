@@ -12,6 +12,7 @@ import {
   canonicalJson,
   initializePennyState,
   validateEvidenceAdmission,
+  validatePlanRequest,
   validateReviewReceipt,
   validateStrategy,
   validateStrategyProductEnvelope,
@@ -19,12 +20,14 @@ import {
   type AgentCompletion,
   type AgentInvocation,
   type Directive,
+  type InputArtifacts,
   type JsonValue,
   type ModelClient,
   type PlanRequestConstraintsV1,
   type PlaybookRegistrationV1,
   type StrategyCoreV1,
 } from "../src/index.js";
+import { persistEvidenceContext } from "./helpers/evidence-context.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const roots: string[] = [];
@@ -136,13 +139,14 @@ function identity(runId: string, playbook = PLAN_PLAYBOOK_NAME) {
   };
 }
 
-function start(runId: string, playbook = PLAN_PLAYBOOK_NAME) {
+function start(runId: string, playbook = PLAN_PLAYBOOK_NAME, inputArtifacts?: InputArtifacts) {
   return {
     schema_version: 2 as const,
     action: "start" as const,
     identity: identity(runId, playbook),
     goal: "Form a safe transition strategy without execution.",
     constraints: constraints(),
+    ...(inputArtifacts === undefined ? {} : { input_artifacts: inputArtifacts }),
     project_root: PROJECT_ROOT,
     trust_profile: "hardened-untrusted" as const,
   };
@@ -408,6 +412,96 @@ describe("provider-free orchestrated plan workflow", () => {
       expect(service.checkpointer.completionAdmission(terminal.identity.run_id)).toBeDefined();
     }
   );
+
+  it("preserves one EvidenceContext ref without flattening the native request, strategy, or task prose", async () => {
+    sequence += 1;
+    const runId = `run-plan-evidence-context-${sequence}`;
+    const evidenceAwareCore = core("blocked");
+    const client = new ScriptedPlanClient([
+      orientationEvidenceGap(),
+      evidencePacket(),
+      persistedStrategy({
+        ...evidenceAwareCore,
+        request_coverage: {
+          ...evidenceAwareCore.request_coverage,
+          input_artifact_slots: [0],
+        },
+      }),
+      veraPass(),
+      carrenApprove(true),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
+    });
+    const evidenceContext = persistEvidenceContext(service.artifacts, "plan-playbook");
+    const terminal = completeDirective(
+      await service.execute(
+        start(runId, PLAN_PLAYBOOK_NAME, {
+          schema_version: 2,
+          artifacts: [{ slot: "evidence_context", ref: evidenceContext.ref }],
+        })
+      )
+    );
+    const run = service.checkpointer.loadRunById(runId);
+    if (run === undefined) throw new Error("completed Plan run is absent");
+    const requestRef = run.selectedArtifacts.find(
+      (artifact) => artifact.kind === "plan-request" && artifact.phase === "intake"
+    );
+    if (requestRef === undefined) throw new Error("admitted PlanRequestV1 ref is absent");
+    const nativeRequest = validatePlanRequest(readJson(service, requestRef.artifact_id));
+    expect(nativeRequest.schema_version).toBe(1);
+    expect(nativeRequest.goal).toBe("Form a safe transition strategy without execution.");
+    expect(nativeRequest.input_artifact_ids).toEqual([evidenceContext.ref.artifact_id]);
+    expect(nativeRequest.desired_outcomes).toEqual(constraints().desired_outcomes);
+    expect(nativeRequest.current_state).toEqual(constraints().current_state);
+    expect(nativeRequest.hard_constraints).toEqual(constraints().hard_constraints);
+    expect(nativeRequest.non_goals).toEqual(constraints().non_goals);
+    expect(nativeRequest.known_uncertainties).toEqual(constraints().known_uncertainties);
+    expect(nativeRequest.prior_decisions).toEqual(constraints().prior_decisions);
+    expect(service.artifacts.metadata(requestRef).upstream_refs).toEqual([evidenceContext.ref]);
+
+    const terminalRef = outputRef(terminal);
+    const productRef = terminal.artifacts.find(
+      (artifact) => artifact.artifact_id === String(terminalRef.artifact_id)
+    );
+    if (productRef === undefined) throw new Error("terminal StrategyV1 ref is absent");
+    const strategy = validateStrategy(readJson(service, productRef.artifact_id));
+    expect(strategy.request).toEqual(nativeRequest);
+    expect(strategy.source_lineage.input_artifact_ids).toEqual([evidenceContext.ref.artifact_id]);
+    expect(
+      service.artifacts
+        .metadata(productRef)
+        .upstream_refs.filter(
+          (artifact) => artifact.artifact_id === evidenceContext.ref.artifact_id
+        )
+    ).toEqual([evidenceContext.ref]);
+
+    expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
+      "orienting_strategy",
+      "gathering_strategy_evidence",
+      "strategizing",
+      "verifying_strategy",
+      "critiquing_strategy",
+    ]);
+    for (const invocation of client.invocations) {
+      expect(
+        invocation.inputArtifacts.filter(
+          (artifact) => artifact.artifact_id === evidenceContext.ref.artifact_id
+        )
+      ).toEqual([evidenceContext.ref]);
+      expect(invocation.task).not.toContain(evidenceContext.statementMarker);
+    }
+    const admissionRef = terminal.artifacts.find(
+      (artifact) => artifact.kind === "evidence-admission"
+    );
+    if (admissionRef === undefined) throw new Error("Strategy EvidenceAdmissionV1 ref is absent");
+    const admission = validateEvidenceAdmission(readJson(service, admissionRef.artifact_id));
+    expect(admission.domain).toBe("strategy");
+    expect(admission.source_artifact_ref.artifact_id).not.toBe(evidenceContext.ref.artifact_id);
+  });
 
   it("routes one closed Piper evidence gap through Echo using admitted refs only", async () => {
     const client = new ScriptedPlanClient([

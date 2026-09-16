@@ -9,6 +9,7 @@ import { canonicalJson, sha256 } from "../src/checkpointer.js";
 import { CompositionAdmissionError, validateSemanticComposition } from "../src/composition.js";
 import type { ArtifactRef, SkillContract } from "../src/contracts.js";
 import { DECIDE_SKILL_CONTRACT } from "../src/playbooks/decide.js";
+import { PLAN_SKILL_CONTRACT } from "../src/playbooks/plan.js";
 import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
 import { sealAssessmentDraft, type AssessmentDraftV1 } from "../src/skill-contracts/assess.js";
 import {
@@ -18,6 +19,7 @@ import {
 } from "../src/skill-contracts/decide.js";
 import { validateGroundedSynthesis } from "../src/skill-contracts/research.js";
 import { decisionDraft, decisionRequest } from "./fixtures/decision-fixtures.js";
+import { persistEvidenceContext } from "./helpers/evidence-context.js";
 
 const roots: string[] = [];
 
@@ -271,6 +273,108 @@ function persistDecision(store: ArtifactStore, operationId = "sealed-decision"):
 }
 
 describe("generic exact-byte semantic composition", () => {
+  it("declares and admits one exact optional EvidenceContextV1 for Research, Decide, and Plan", () => {
+    using store = new ArtifactStore(path.join(root(), "artifacts"));
+    const evidenceContext = persistEvidenceContext(store, "composition-positive");
+    const contracts = [RESEARCH_SKILL_CONTRACT, DECIDE_SKILL_CONTRACT, PLAN_SKILL_CONTRACT];
+    for (const contract of contracts) {
+      expect(contract.io.input_ports.find((port) => port.name === "evidence_context")).toEqual({
+        schema_version: 1,
+        name: "evidence_context",
+        direction: "input",
+        transport: "artifact",
+        schema_id: "penny.evidence-context.v1",
+        schema_version_required: 1,
+        artifact_kind: "evidence-context",
+        source: "either",
+        min_items: 0,
+        max_items: 1,
+        semantic_product: true,
+      });
+      expect(() =>
+        validateSemanticComposition({
+          contract,
+          inputArtifacts: input(evidenceContext.ref, "evidence_context"),
+          artifactReader: store,
+        })
+      ).not.toThrow();
+    }
+  });
+
+  it("rejects duplicate, stale, malformed, oversized, wrong-identity, and absent EvidenceContext inputs", () => {
+    using store = new ArtifactStore(path.join(root(), "artifacts"));
+    using absentStore = new ArtifactStore(path.join(root(), "absent-artifacts"));
+    const evidenceContext = persistEvidenceContext(store, "composition-negative");
+    const absent = persistEvidenceContext(absentStore, "composition-absent");
+    const metadata = store.metadata(evidenceContext.ref);
+    const summaryOnly = store.persist({
+      metadata: { ...metadata, operation_id: "evidence-context-summary-only" },
+      content: 'SUMMARY:{"confidence":"CERTAIN"}',
+    });
+    const noncanonical = store.persist({
+      metadata: { ...metadata, operation_id: "evidence-context-noncanonical" },
+      content: `${JSON.stringify(evidenceContext.context, null, 2)}\n`,
+    });
+    const oversized = store.persist({
+      metadata: { ...metadata, operation_id: "evidence-context-oversized" },
+      content: Buffer.alloc(1_048_577, "x"),
+    });
+    const stale = { ...evidenceContext.ref, content_digest: "0".repeat(64) };
+    const wrongKind = { ...evidenceContext.ref, kind: "semantic-core" };
+    const wrongVersion = {
+      ...evidenceContext.ref,
+      content_schema: { schema_id: "penny.evidence-context.v1", schema_version: 2 },
+    };
+
+    for (const contract of [RESEARCH_SKILL_CONTRACT, DECIDE_SKILL_CONTRACT, PLAN_SKILL_CONTRACT]) {
+      expect(() =>
+        validateSemanticComposition({
+          contract,
+          inputArtifacts: {
+            schema_version: 2,
+            artifacts: [
+              { slot: "evidence_context", ref: evidenceContext.ref },
+              { slot: "evidence_context_duplicate", ref: evidenceContext.ref },
+            ],
+          },
+          artifactReader: store,
+        })
+      ).toThrow(/COMPOSITION_PORT_CARDINALITY/u);
+      for (const ref of [summaryOnly, noncanonical, oversized]) {
+        expect(() =>
+          validateSemanticComposition({
+            contract,
+            inputArtifacts: input(ref, "evidence_context"),
+            artifactReader: store,
+          })
+        ).toThrow(/COMPOSITION_SEMANTIC_INVALID/u);
+      }
+      expect(() =>
+        validateSemanticComposition({
+          contract,
+          inputArtifacts: input(stale, "evidence_context"),
+          artifactReader: store,
+        })
+      ).toThrow(/COMPOSITION_ARTIFACT_STALE/u);
+      for (const ref of [wrongKind, wrongVersion]) {
+        expect(() =>
+          validateSemanticComposition({
+            contract,
+            inputArtifacts: input(ref, "evidence_context"),
+            artifactReader: store,
+          })
+        ).toThrow(/COMPOSITION_PORT_UNMATCHED/u);
+      }
+      expect(() =>
+        validateSemanticComposition({
+          contract,
+          inputArtifacts: input(absent.ref, "evidence_context"),
+          artifactReader: store,
+        })
+      ).toThrow(/COMPOSITION_ARTIFACT_STALE/u);
+    }
+  });
+
   it("admits one exact canonical GroundedSynthesisV1 through Research and optional Decide ports", () => {
     using store = new ArtifactStore(path.join(root(), "artifacts"));
     const ref = persistCore(store);

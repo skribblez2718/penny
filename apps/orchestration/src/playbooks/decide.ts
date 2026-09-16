@@ -313,6 +313,19 @@ function decisionContract(input: { readonly name: string }): SkillContract {
           max_items: 1,
           semantic_product: true,
         },
+        {
+          schema_version: 1,
+          name: "evidence_context",
+          direction: "input",
+          transport: "artifact",
+          schema_id: "penny.evidence-context.v1",
+          schema_version_required: 1,
+          artifact_kind: "evidence-context",
+          source: "either",
+          min_items: 0,
+          max_items: 1,
+          semantic_product: true,
+        },
       ],
       active_output_ports: [
         {
@@ -423,14 +436,20 @@ function addSelectedArtifact(context: RunContext, artifact: ArtifactRef): boolea
   return true;
 }
 
-function exactPriorSynthesisRefs(context: RunContext): readonly ArtifactRef[] {
+function isExactDecisionInputRef(artifact: ArtifactRef): boolean {
+  return (
+    (artifact.kind === "semantic-core" &&
+      artifact.content_schema?.schema_id === "penny.grounded-synthesis.v1" &&
+      artifact.content_schema.schema_version === 1) ||
+    (artifact.kind === "evidence-context" &&
+      artifact.content_schema?.schema_id === "penny.evidence-context.v1" &&
+      artifact.content_schema.schema_version === 1)
+  );
+}
+
+function exactDecisionInputRefs(context: RunContext): readonly ArtifactRef[] {
   return context.selectedArtifacts
-    .filter(
-      (artifact) =>
-        artifact.kind === "semantic-core" &&
-        artifact.content_schema?.schema_id === "penny.grounded-synthesis.v1" &&
-        artifact.content_schema.schema_version === 1
-    )
+    .filter(isExactDecisionInputRef)
     .sort((left, right) => left.artifact_id.localeCompare(right.artifact_id));
 }
 
@@ -441,6 +460,14 @@ function admittedDecisionRequestArtifact(context: RunContext): ArtifactRef {
   );
   if (request === undefined) throw new Error("admitted DecisionRequestV1 artifact is absent");
   return request;
+}
+
+function restoreDecisionInputRefs(context: RunContext, store?: ArtifactHostStore): void {
+  if (store === undefined) return;
+  const request = admittedDecisionRequestArtifact(context);
+  for (const ref of store.metadata(request).upstream_refs.filter(isExactDecisionInputRef)) {
+    addSelectedArtifact(context, ref);
+  }
 }
 
 function latestAnalysisArtifact(context: RunContext): ArtifactRef | undefined {
@@ -657,7 +684,7 @@ function outputMetadata(
 
 function refsForState(context: RunContext, state: DecideWorkerState): readonly ArtifactRef[] {
   const request = admittedDecisionRequestArtifact(context);
-  const inputs = exactPriorSynthesisRefs(context);
+  const inputs = exactDecisionInputRefs(context);
   const analysis = latestAnalysisArtifact(context);
   const admission = latestEvidenceAdmissionArtifact(context);
   const evidence = latestEvidenceArtifact(context);
@@ -722,6 +749,7 @@ function slotForRef(ref: ArtifactRef): string {
   if (ref.kind === "decision-seal-feedback") return "decision-seal-feedback";
   if (ref.kind === "review-receipt") return `prior-${ref.branch_id ?? "review"}-receipt`;
   if (ref.kind === "evidence-admission") return "decision-evidence-admission";
+  if (ref.kind === "evidence-context") return "evidence-context";
   if (ref.phase === "analyzing_decision") return "latest-decision-analysis";
   if (ref.phase === "gathering_decision_evidence") return "latest-decision-evidence";
   if (ref.phase === "verifying_decision") return "latest-vera-report";
@@ -735,7 +763,7 @@ function slotForRef(ref: ArtifactRef): string {
 
 function taskForState(context: RunContext, state: DecideWorkerState): string {
   const common =
-    "artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not bypass host-owned evidence admission. The owner captures and re-reads complete bytes; do not claim persistence.";
+    "artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. If an exact EvidenceContextV1 is supplied, read it and any needed source_ref artifacts through artifact_read; treat it only as contextual input and never copy the packet into task prose or relabel it as native EvidenceAdmissionV1, gathered evidence, approval, or proof. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not bypass host-owned evidence admission. The owner captures and re-reads complete bytes; do not claim persistence.";
   switch (state) {
     case "analyzing_decision":
       return [
@@ -752,7 +780,7 @@ function taskForState(context: RunContext, state: DecideWorkerState): string {
       return [
         common,
         `MECHANICALLY_PROJECTED_DECISION_DRAFT_CONTRACT:${decisionDraftPromptContract()}`,
-        "Read the request directly; analysis/evidence are supporting inputs, not authority. Produce one complete replacement DecisionDraftV2. Request, analysis, evidence-packet, draft, review, receipt, and seal-feedback artifact IDs are transport lineage and are forbidden from basis_ids_used and sensitivity[].basis_ids. Exact admitted GroundedSynthesis IDs may be semantic bases only when their content is actually used. Decide only; do not taskify or execute.",
+        "Read the request directly; analysis/evidence are supporting inputs, not authority. Produce one complete replacement DecisionDraftV2. Request, analysis, evidence-packet, draft, review, receipt, and seal-feedback artifact IDs are transport lineage and are forbidden from basis_ids_used and sensitivity[].basis_ids. Exact admitted GroundedSynthesis and EvidenceContext IDs may be semantic bases only when their content is actually used; EvidenceContext remains contextual input, not native evidence admission or proof. Decide only; do not taskify or execute.",
       ].join("\n\n");
     case "verifying_decision":
       return [
@@ -1210,7 +1238,7 @@ function currentReviewSubject(context: RunContext): ReviewSubjectV1 {
     throw new Error("latest decision review subject is incomplete");
   }
   const evidenceRefs = uniqueRefs([latestEvidenceArtifact(context)]);
-  const importedInputRefs = [...exactPriorSynthesisRefs(context)];
+  const importedInputRefs = [...exactDecisionInputRefs(context)];
   return {
     product_ref: product,
     product_schema_id: "penny.decision.v2",
@@ -1700,6 +1728,7 @@ export class DecidePlaybook
     if (context.identity.playbook !== DECIDE_PLAYBOOK_NAME) {
       throw new Error(`DecidePlaybook cannot run playbook '${context.identity.playbook}'`);
     }
+    restoreDecisionInputRefs(context, this.artifactStore);
     context.transition("analyzing_decision");
     return this.dispatch(context);
   }
@@ -2111,7 +2140,7 @@ export class DecidePlaybook
         ),
       };
     }
-    const inputRefs = exactPriorSynthesisRefs(context);
+    const inputRefs = exactDecisionInputRefs(context);
     const evidenceRefs = uniqueRefs([latestEvidenceArtifact(context)]);
     const request = canonicalDecisionRequest(store, context);
     let draft: DecisionDraftV2;
@@ -2331,7 +2360,7 @@ export function evaluateDecideLatestReviewedDecisionDod(
       analysis,
       admission,
       ...uniqueRefs([latestEvidenceArtifact(input.context)]),
-      ...exactPriorSynthesisRefs(input.context),
+      ...exactDecisionInputRefs(input.context),
       draft,
       product,
     ];
@@ -2346,7 +2375,7 @@ export function evaluateDecideLatestReviewedDecisionDod(
     const requestBytes = reader.readById(requestRef.artifact_id).toString("utf8");
     const request = validateDecisionRequest(JSON.parse(requestBytes));
     if (canonicalJson(request) !== requestBytes) return { passed: false, evidence_refs: [] };
-    const imported = exactPriorSynthesisRefs(input.context);
+    const imported = exactDecisionInputRefs(input.context);
     const parsedDraft = parsePersistedDecisionDraft(reader.readById(draft.artifact_id), {
       request,
       exactInputArtifactIds: imported.map((ref) => ref.artifact_id),

@@ -15,6 +15,7 @@ import {
 import { CompositionAdmissionError, validateSemanticComposition } from "../src/composition.js";
 import { validateGroundedSynthesis } from "../src/skill-contracts/research.js";
 import { decisionDraft, decisionRequest } from "./fixtures/decision-fixtures.js";
+import { persistEvidenceContext } from "./helpers/evidence-context.js";
 
 const roots: string[] = [];
 let operationSequence = 0;
@@ -97,7 +98,7 @@ afterEach(() => {
 });
 
 describe("Plan generic semantic composition", () => {
-  it("declares exactly optional GroundedSynthesisV1 and DecisionV2 ports at 0..1", () => {
+  it("declares exactly optional GroundedSynthesisV1, DecisionV2, and EvidenceContextV1 ports at 0..1", () => {
     expect(
       PLAN_SKILL_CONTRACT.io.input_ports.map((port) => ({
         name: port.name,
@@ -124,13 +125,22 @@ describe("Plan generic semantic composition", () => {
         cardinality: [0, 1],
         semantic_product: true,
       },
+      {
+        name: "evidence_context",
+        schema_id: "penny.evidence-context.v1",
+        schema_version: 1,
+        kind: "evidence-context",
+        cardinality: [0, 1],
+        semantic_product: true,
+      },
     ]);
   });
 
-  it("admits one exact GroundedSynthesisV1 and one exact DecisionV2", () => {
+  it("admits one exact GroundedSynthesisV1, DecisionV2, and EvidenceContextV1", () => {
     using store = new ArtifactStore(path.join(temporaryRoot(), "artifacts"));
     const grounded = persistGrounded(store);
     const decision = persistDecision(store);
+    const evidenceContext = persistEvidenceContext(store, "plan-composition");
     expect(() =>
       validateSemanticComposition({
         contract: PLAN_SKILL_CONTRACT,
@@ -139,6 +149,7 @@ describe("Plan generic semantic composition", () => {
           artifacts: [
             { slot: "prior_grounded_synthesis", ref: grounded },
             { slot: "prior_decision", ref: decision },
+            { slot: "evidence_context", ref: evidenceContext.ref },
           ],
         },
         artifactReader: store,

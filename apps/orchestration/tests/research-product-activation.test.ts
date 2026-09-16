@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { Checkpointer, canonicalJson, sha256 } from "../src/checkpointer.js";
-import type { Directive, JsonValue, RunIdentity } from "../src/contracts.js";
+import type { Directive, InputArtifacts, JsonValue, RunIdentity } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
 import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
 import {
@@ -21,10 +21,12 @@ import {
 import {
   researchSemanticDraftPromptContract,
   validateCanonicalGroundedSynthesisBytes,
+  validateResearchRequest,
   validateSemanticCoreRef,
 } from "../src/skill-contracts/research.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
 import { requireRecord } from "./helpers/narrowing.js";
+import { persistEvidenceContext } from "./helpers/evidence-context.js";
 import { researchSemanticDraftFixture } from "./helpers/research-semantic-draft.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
@@ -58,13 +60,19 @@ function identity(runId: string): RunIdentity {
   };
 }
 
-function start(root: string, runId: string, mode: "quick" | "standard" | "deep") {
+function start(
+  root: string,
+  runId: string,
+  mode: "quick" | "standard" | "deep",
+  inputArtifacts?: InputArtifacts
+) {
   return {
     schema_version: 2,
     action: "start",
     identity: identity(runId),
     goal: "What does P3 activate?",
     constraints: { mode },
+    ...(inputArtifacts === undefined ? {} : { input_artifacts: inputArtifacts }),
     project_root: root,
     trust_profile: "trusted-interactive",
   };
@@ -99,6 +107,7 @@ interface ProductClientOptions {
 
 class ProductClient implements ModelClient {
   readonly states: string[] = [];
+  readonly invocations: AgentInvocation[] = [];
   readonly synthesisTasks: string[] = [];
   private validationCalls = 0;
   private qualityCalls = 0;
@@ -111,6 +120,7 @@ class ProductClient implements ModelClient {
 
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
     this.states.push(invocation.stateId);
+    this.invocations.push(invocation);
     switch (invocation.stateId) {
       case "planning":
         return {
@@ -340,6 +350,79 @@ describe("P3 semantic product activation", () => {
       stack.checkpointer.close();
     }
   );
+
+  it("preserves one EvidenceContext ref without flattening the native request, core, or task prose", async () => {
+    const root = temporaryRoot();
+    const runId = "run-p3-evidence-context";
+    const stack = runtime(root);
+    const evidenceContext = persistEvidenceContext(stack.artifacts, "research-playbook");
+    const terminal = await new OrchestrationRunner(stack.engine, stack.workers).runUntilBoundary(
+      stack.engine.handle(
+        start(root, runId, "deep", {
+          schema_version: 2,
+          artifacts: [{ slot: "evidence_context", ref: evidenceContext.ref }],
+        })
+      )
+    );
+    expect(terminal.action).toBe("complete");
+    const run = stack.checkpointer.loadRunById(runId);
+    if (run === undefined) throw new Error("completed Research run is absent");
+    const requestRef = run.selectedArtifacts.find(
+      (artifact) => artifact.kind === "research-request" && artifact.phase === "intake"
+    );
+    if (requestRef === undefined) throw new Error("admitted ResearchRequestV1 ref is absent");
+    const nativeRequest = validateResearchRequest(
+      JSON.parse(stack.artifacts.readById(requestRef.artifact_id).toString("utf8"))
+    );
+    expect(nativeRequest.schema_id).toBe("penny.research-request.v1");
+    expect(nativeRequest.question).toBe("What does P3 activate?");
+    expect(nativeRequest.mode).toBe("deep");
+    expect(nativeRequest.input_products).toEqual([]);
+    expect(stack.artifacts.metadata(requestRef).upstream_refs).toEqual([evidenceContext.ref]);
+
+    const result = terminalResult(terminal);
+    const output = requireRecord(result["output_artifact_ref"], "terminal semantic core");
+    const outputRef = stack.artifacts.refById(String(output["artifact_id"]));
+    if (outputRef === undefined) throw new Error("terminal GroundedSynthesisV1 ref is absent");
+    const core = validateCanonicalGroundedSynthesisBytes(
+      stack.artifacts.readById(outputRef.artifact_id),
+      outputRef
+    );
+    expect(core.request.normalized_question).toBe(nativeRequest.question);
+    expect(core.provenance.context_trace_sha256).toBe(sha256(canonicalJson([evidenceContext.ref])));
+    expect(
+      core.provenance.evidence_artifacts.some(
+        (artifact) => artifact.artifact_id === evidenceContext.ref.artifact_id
+      )
+    ).toBe(false);
+    expect(
+      stack.artifacts
+        .metadata(outputRef)
+        .upstream_refs.filter(
+          (artifact) => artifact.artifact_id === evidenceContext.ref.artifact_id
+        )
+    ).toEqual([evidenceContext.ref]);
+
+    expect(stack.client.states).toEqual([
+      "planning",
+      "critiquing_plan",
+      "researching",
+      "researching",
+      "synthesizing",
+      "validating",
+      "critiquing_report",
+    ]);
+    for (const invocation of stack.client.invocations) {
+      expect(
+        invocation.inputArtifacts.filter(
+          (artifact) => artifact.artifact_id === evidenceContext.ref.artifact_id
+        )
+      ).toEqual([evidenceContext.ref]);
+      expect(invocation.task).not.toContain(evidenceContext.statementMarker);
+    }
+    stack.artifacts.close();
+    stack.checkpointer.close();
+  });
 
   it("rejects an empty semantic-draft turn before persistence or routing repair", async () => {
     const root = temporaryRoot();

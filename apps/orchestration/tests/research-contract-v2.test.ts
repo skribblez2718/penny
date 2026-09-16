@@ -614,6 +614,51 @@ describe("P2 research request and budget projections", () => {
     });
   });
 
+  it("classifies native synthesis products by exact identity instead of a misleading slot", () => {
+    const evidenceContextRef: ArtifactRef = {
+      schema_version: 2,
+      artifact_id: `art_${"e".repeat(64)}`,
+      run_id: "run-evidence-context",
+      phase: "evidence_context",
+      branch_id: null,
+      kind: "evidence-context",
+      operation_id: "evidence-context:misleading-slot",
+      version: 1,
+      producer: "host:evidence-context",
+      media_type: "application/json",
+      content_schema: { schema_id: "penny.evidence-context.v1", schema_version: 1 },
+      byte_length: 2,
+      content_digest: "e".repeat(64),
+      store_ref: `artifact://sha256/${"e".repeat(64)}`,
+    };
+    const groundedSynthesisRef: ArtifactRef = {
+      ...evidenceContextRef,
+      artifact_id: `art_${"b".repeat(64)}`,
+      run_id: "run-grounded-synthesis",
+      phase: "sealing_core",
+      kind: "semantic-core",
+      operation_id: "grounded-synthesis:nonstandard-slot",
+      producer: "host:research-core",
+      content_schema: { schema_id: "penny.grounded-synthesis.v1", schema_version: 1 },
+      content_digest: "a".repeat(64),
+      store_ref: `artifact://sha256/${"a".repeat(64)}`,
+    };
+    const request = canonicalizeResearchRequest({
+      question: "Classify exact inputs?",
+      constraints: {},
+      inputArtifacts: {
+        schema_version: 2,
+        artifacts: [
+          { slot: "prior_grounded_synthesis", ref: evidenceContextRef },
+          { slot: "caller-selected-product", ref: groundedSynthesisRef },
+        ],
+      },
+    });
+    expect(request.input_products).toEqual([
+      { port_name: "prior_grounded_synthesis", artifact_ref: groundedSynthesisRef },
+    ]);
+  });
+
   it("maps frozen presets onto V3 progress leases without elapsed-work ceilings", () => {
     validateSkillSchema(ResearchBudgetPolicyV3Schema, RESEARCH_BUDGET_POLICY, "policy");
     for (const mode of ["quick", "standard", "deep"] as const) {
