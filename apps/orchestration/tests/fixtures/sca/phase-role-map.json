@@ -1,0 +1,102 @@
+{
+  "schema_id": "penny.sca-phase-role-map.v1",
+  "schema_version": 1,
+  "phases": [
+    {
+      "phase_id": "integrate_security_model",
+      "agent": "synthia",
+      "class": "production",
+      "child_route": null
+    },
+    {
+      "phase_id": "generate_hypotheses",
+      "agent": "ida",
+      "class": "production",
+      "child_route": null
+    },
+    {
+      "phase_id": "explore_evidence_gap",
+      "agent": "echo",
+      "class": "production",
+      "child_route": { "workflow": "research", "max_calls": 1 }
+    },
+    {
+      "phase_id": "analyze_candidate",
+      "agent": "annie",
+      "class": "production",
+      "child_route": null
+    },
+    {
+      "phase_id": "select_next_action",
+      "agent": "demetri",
+      "class": "production",
+      "child_route": { "workflow": "decide", "max_calls": 1 }
+    },
+    {
+      "phase_id": "design_verification",
+      "agent": "piper",
+      "class": "production",
+      "child_route": { "workflow": "plan", "max_calls": 1 }
+    },
+    {
+      "phase_id": "taskify_verification",
+      "agent": "tabitha",
+      "class": "production",
+      "child_route": null
+    },
+    {
+      "phase_id": "verify_evidence",
+      "agent": "vera",
+      "class": "review",
+      "child_route": null
+    },
+    {
+      "phase_id": "critique_finding",
+      "agent": "carren",
+      "class": "review",
+      "child_route": null
+    },
+    {
+      "phase_id": "synthesize_security_assessment",
+      "agent": "synthia",
+      "class": "production",
+      "child_route": null
+    },
+    {
+      "phase_id": "verify_security_assessment",
+      "agent": "vera",
+      "class": "review",
+      "child_route": null
+    },
+    {
+      "phase_id": "generate_rule_candidate",
+      "agent": "skribble",
+      "class": "production",
+      "child_route": null
+    },
+    {
+      "phase_id": "verify_coverage",
+      "agent": "vera",
+      "class": "review",
+      "child_route": null
+    },
+    {
+      "phase_id": "materialize_report",
+      "agent": "skribble",
+      "class": "production",
+      "child_route": null
+    },
+    {
+      "phase_id": "critique_report",
+      "agent": "carren",
+      "class": "review",
+      "child_route": null
+    },
+    {
+      "phase_id": "verify_final_product",
+      "agent": "vera",
+      "class": "review",
+      "child_route": null
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "schema_id": "penny.sca-policy.v1",
+  "schema_version": 1,
+  "policy_id": "sca-default-deny-synthetic-v1",
+  "destination": {
+    "default": "deny",
+    "canonical_artifact_store": "allow",
+    "deterministic_analysis_runtime": "qualification_required",
+    "cloud_model": {
+      "capability_id": "sca.model.provider.v1",
+      "status": "qualification_required",
+      "binding_ref": null,
+      "binding_sha256": null
+    },
+    "osv_api": {
+      "status": "disabled",
+      "origin": "https://api.osv.dev",
+      "redirects": 0
+    },
+    "research_web": {
+      "status": "disabled",
+      "allowed_origins": [],
+      "max_origins_per_call": 8,
+      "max_requests_per_call": 32
+    },
+    "private_application_network": {
+      "status": "qualification_required",
+      "endpoint_bindings": []
+    },
+    "package_registry": "disabled",
+    "third_party_sandbox": "disabled",
+    "report_publication": "disabled"
+  },
+  "network": {
+    "default": "deny",
+    "scanner_and_cpg_egress": "deny",
+    "public_dns": "deny",
+    "lan": "deny",
+    "metadata_services": "deny",
+    "host_services": "deny",
+    "redirects": 0,
+    "credential_forwarding": "deny"
+  },
+  "consequence": {
+    "default": "deny",
+    "target_mutation": "deny",
+    "host_execution": "deny",
+    "host_docker_fallback": "deny",
+    "rule_promotion": "deny",
+    "report_submission": "deny",
+    "migration": "deny",
+    "production_registration": "deny"
+  },
+  "approval": {
+    "default": "deny",
+    "active_approval_refs": [],
+    "runtime_capability_bindings": []
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "schema_id": "penny.sca-target.v1",
+  "schema_version": 1,
+  "target_id": "synthetic-public-target-v1",
+  "source_visibility": "public_synthetic",
+  "source_root_ref": "sca-boundary/source",
+  "snapshot_ref": {
+    "schema_version": 2,
+    "artifact_id": "art_49cb0c55b656fe9c2d83d6cf0239804305212ceb72264ec3fd5c51cb1092a63e",
+    "run_id": "synthetic-sca-config-run",
+    "phase": "source-admission",
+    "branch_id": null,
+    "kind": "source-snapshot",
+    "operation_id": "synthetic-snapshot-v1",
+    "version": 1,
+    "producer": "synthetic-fixture",
+    "media_type": "application/octet-stream",
+    "content_schema": {
+      "schema_id": "penny.sca-source-snapshot.v1",
+      "schema_version": 1
+    },
+    "byte_length": 22,
+    "content_digest": "0a97db669b916ce3ab4ad3cfb97511a135c285c2dc59ea860c5b395217cc0b71",
+    "store_ref": "artifact://sha256/0a97db669b916ce3ab4ad3cfb97511a135c285c2dc59ea860c5b395217cc0b71"
+  },
+  "snapshot_sha256": "0a97db669b916ce3ab4ad3cfb97511a135c285c2dc59ea860c5b395217cc0b71",
+  "snapshot_manifest_ref": {
+    "schema_version": 2,
+    "artifact_id": "art_2b25e9150759bbf7602b44c9daf31754bd3e0ccde0d8011fe43ce89151c3f5a4",
+    "run_id": "synthetic-sca-config-run",
+    "phase": "source-admission",
+    "branch_id": null,
+    "kind": "source-snapshot-manifest",
+    "operation_id": "synthetic-snapshot-manifest-v1",
+    "version": 1,
+    "producer": "synthetic-fixture",
+    "media_type": "application/json",
+    "content_schema": {
+      "schema_id": "penny.sca-source-manifest.v1",
+      "schema_version": 1
+    },
+    "byte_length": 31,
+    "content_digest": "418f9f84cd966ea24811d2efd07301111b95230ecb0df823aa9a0bd68ad106d1",
+    "store_ref": "artifact://sha256/418f9f84cd966ea24811d2efd07301111b95230ecb0df823aa9a0bd68ad106d1"
+  },
+  "snapshot_manifest_sha256": "418f9f84cd966ea24811d2efd07301111b95230ecb0df823aa9a0bd68ad106d1",
+  "target_policy_ref": "sca-boundary/policies/synthetic-target-policy.v1.json",
+  "target_policy_sha256": "b1621dc4305670efdaa61552621245ea73466e60ce677b52d49d9706124728d9",
+  "target_execution": "disabled",
+  "target_network": "disabled",
+  "third_party_interaction": "deny",
+  "evaluator_oracle_access": "disabled"
+}

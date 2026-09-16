@@ -1,0 +1,265 @@
+{
+  "schema_id": "penny.sca-profile.v1",
+  "schema_version": 1,
+  "profile_id": "sca-r1-synthetic-qualification-v1",
+  "resolution_base_ref": "sca-boundary",
+  "roots": [
+    {
+      "root_kind": "artifact_store",
+      "capability_id": "sca.artifact.store.v1",
+      "project_relative_ref": "sca-boundary/artifacts"
+    },
+    {
+      "root_kind": "image_store",
+      "capability_id": "sca.image.store.v1",
+      "project_relative_ref": "sca-boundary/images"
+    },
+    {
+      "root_kind": "report_export",
+      "capability_id": "sca.report.export.v1",
+      "project_relative_ref": "sca-boundary/reports"
+    },
+    {
+      "root_kind": "scratch",
+      "capability_id": "sca.scratch.v1",
+      "project_relative_ref": "sca-boundary/scratch"
+    },
+    {
+      "root_kind": "source",
+      "capability_id": "sca.source.root.v1",
+      "project_relative_ref": "sca-boundary/source"
+    },
+    {
+      "root_kind": "state",
+      "capability_id": "sca.state.v1",
+      "project_relative_ref": "sca-boundary/state"
+    },
+    {
+      "root_kind": "tool_cache",
+      "capability_id": "sca.tool.cache.v1",
+      "project_relative_ref": "sca-boundary/tools"
+    }
+  ],
+  "bindings": {
+    "phase_role_map": {
+      "ref": "config/sca/phase-role-map.json",
+      "sha256": "b27de9d3106dd69bdf8a8bb191394eb0d8a872d89719d9179e76ab4970f88c2a"
+    },
+    "policy": {
+      "ref": "config/sca/policy.json",
+      "sha256": "5638449989b76b8715370637251f3c6255281ac229cae75d58671b0d806c091d"
+    },
+    "target": {
+      "ref": "config/sca/target.json",
+      "sha256": "2b54f0d795a53ad2c611f201705d269a13810034db2741f47bcb0682b15dac2a"
+    }
+  },
+  "model_policy": {
+    "schema_id": "penny.sca-model-policy.v1",
+    "schema_version": 1,
+    "scope": "run_local",
+    "aliases": [
+      {
+        "alias": "deepseek-flash",
+        "model_override": "ollama/deepseek-v4.1-flash:cloud",
+        "resolved": {
+          "provider": "ollama",
+          "model": "deepseek-v4.1-flash:cloud"
+        }
+      }
+    ],
+    "fallback": null,
+    "per_agent_overrides": [],
+    "process_global_override": false,
+    "per_request_limits": {
+      "input_tokens": 128000,
+      "output_tokens": 32000
+    },
+    "provider_capability": {
+      "capability_id": "sca.model.provider.v1",
+      "status": "qualification_required",
+      "binding_ref": null,
+      "binding_sha256": null
+    },
+    "provider_data_policy": {
+      "training_use": "disabled",
+      "retention_max_days": 30,
+      "attestation_status": "qualification_required",
+      "allowed_data_classes": [
+        "content_free_run_metadata",
+        "nonsensitive_synthetic_fixture",
+        "normalized_public_dependency_fact",
+        "public_policy_reference",
+        "redacted_public_snapshot_excerpt"
+      ],
+      "denied_data_classes": [
+        "credential_or_secret",
+        "environment_or_browser_state",
+        "evaluator_oracle",
+        "private_path",
+        "private_repository",
+        "protected_runtime_configuration",
+        "raw_crash_or_memory_dump",
+        "target_service_credential",
+        "undeclared_file",
+        "unredacted_pii",
+        "unrestricted_application_log"
+      ]
+    }
+  },
+  "model_policy_sha256": "20a2dbc216fea8c2f8149c45d1f40f230a46c02adfaf1b3bbe1ab7bebf3a188c",
+  "campaign_quotas": {
+    "target_ids": 1,
+    "immutable_snapshots": 1,
+    "sequential_child_calls": 3,
+    "active_children": 1,
+    "nesting_depth": 1,
+    "project_child_concurrency": 1,
+    "model_turns": 192,
+    "model_input_tokens": 4000000,
+    "model_output_tokens": 1000000,
+    "priced_model_microusd": 10000000,
+    "tool_calls": 2048,
+    "external_requests": 256,
+    "state_steps": 2048,
+    "changed_strategy_repairs": 8,
+    "retained_evidence_bytes": 2147483648,
+    "final_output_reserved_bytes": 134217728
+  },
+  "source_quotas": {
+    "roots": 1,
+    "files": 100000,
+    "path_depth": 64,
+    "total_bytes": 1073741824,
+    "per_file_bytes": 16777216,
+    "binary_files": 0,
+    "history_entries": 0,
+    "archive_expansion_bytes": 0
+  },
+  "jobs": {
+    "per_campaign": 64,
+    "simultaneously_active": 1,
+    "static_job": {
+      "vcpu": 4,
+      "memory_bytes": 8589934592,
+      "pids": 512,
+      "scratch_bytes": 17179869184,
+      "operation_timeout_ms": 1800000,
+      "log_bytes": 33554432,
+      "result_bytes": 268435456
+    },
+    "cpg_build": {
+      "vcpu": 8,
+      "memory_bytes": 25769803776,
+      "pids": 1024,
+      "scratch_bytes": 68719476736,
+      "operation_timeout_ms": 5400000,
+      "log_bytes": 67108864,
+      "result_bytes": 1073741824
+    },
+    "cpg_query": {
+      "vcpu": 4,
+      "memory_bytes": 8589934592,
+      "pids": 512,
+      "operation_timeout_ms": 300000,
+      "log_bytes": 16777216,
+      "result_bytes": 67108864,
+      "query_artifact_bytes": 262144,
+      "ast_nodes": 10000,
+      "traversal_depth": 16,
+      "rows": 10000,
+      "page_size": 1000,
+      "pages": 10,
+      "attempts": 3
+    }
+  },
+  "analysis_quotas": {
+    "rule_candidates": 32,
+    "validation_jobs": 128,
+    "repair_rounds": 2,
+    "optional_rescans": 1
+  },
+  "application_vm_quotas": {
+    "active_vms": 1,
+    "concurrent_jobs": 1,
+    "vcpu": 8,
+    "memory_bytes": 17179869184,
+    "writable_scratch_bytes": 68719476736,
+    "guest_container_pids": 1024,
+    "file_descriptors": 4096,
+    "operation_timeout_ms": 3600000,
+    "inactivity_watchdog_ms": 600000,
+    "cancellation_grace_ms": 15000,
+    "cleanup_attempts": 3,
+    "cleanup_deadline_ms": 1800000,
+    "output_bytes": 67108864,
+    "retained_export_bytes": 1073741824,
+    "exported_files": 10000,
+    "exported_file_bytes": 67108864,
+    "exported_path_depth": 32,
+    "exact_plan_attempts": 1,
+    "swap_bytes": 0,
+    "privileged_containers": 0,
+    "host_devices": 0,
+    "host_runtime_sockets": 0
+  },
+  "retention": {
+    "canonical_days": 90,
+    "restricted_raw_days": 14,
+    "restricted_raw_bytes_per_campaign": 1073741824,
+    "local_model_content_days": 30,
+    "content_free_model_metadata_days": 90,
+    "provider_model_data_days": 30,
+    "policy_and_qualification_days": 365,
+    "rule_candidate_days": 90,
+    "superseded_rule_bundle_days": 365,
+    "retained_rule_predecessors": 2,
+    "scratch_max_hours": 24,
+    "vm_cleanup_deadline_minutes": 30,
+    "deletion_authority": "operator_approved_retention_controller"
+  },
+  "external_capabilities": [
+    {
+      "capability_id": "sca.container.runtime.v1",
+      "capability_class": "container_runtime",
+      "status": "qualification_required",
+      "binding_ref": null,
+      "binding_sha256": null
+    },
+    {
+      "capability_id": "sca.cpg.runtime.v1",
+      "capability_class": "cpg_runtime",
+      "status": "qualification_required",
+      "binding_ref": null,
+      "binding_sha256": null
+    },
+    {
+      "capability_id": "sca.model.provider.v1",
+      "capability_class": "model_provider",
+      "status": "qualification_required",
+      "binding_ref": null,
+      "binding_sha256": null
+    },
+    {
+      "capability_id": "sca.network.private-test.v1",
+      "capability_class": "private_test_network",
+      "status": "qualification_required",
+      "binding_ref": null,
+      "binding_sha256": null
+    },
+    {
+      "capability_id": "sca.static-analysis.runtime.v1",
+      "capability_class": "static_analysis_runtime",
+      "status": "qualification_required",
+      "binding_ref": null,
+      "binding_sha256": null
+    },
+    {
+      "capability_id": "sca.vm.runtime.v1",
+      "capability_class": "vm_runtime",
+      "status": "qualification_required",
+      "binding_ref": null,
+      "binding_sha256": null
+    }
+  ]
+}
