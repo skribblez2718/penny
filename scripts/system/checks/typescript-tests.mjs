@@ -66,7 +66,12 @@ function packageDirectories(projectRoot) {
     const directory = path.join(extensionRoot, entry.name);
     if (existsSync(path.join(directory, "package.json"))) directories.push(directory);
   }
-  for (const relative of ["apps/observability", "apps/orchestration", "apps/platform-memory"]) {
+  for (const relative of [
+    "apps/observability",
+    "apps/orchestration",
+    "apps/platform-memory",
+    "apps/sca-service",
+  ]) {
     directories.push(path.join(projectRoot, relative));
   }
   return directories;

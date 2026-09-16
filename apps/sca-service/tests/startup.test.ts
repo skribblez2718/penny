@@ -79,6 +79,10 @@ function capabilityFrame(token = TOKEN): Record<string, unknown> {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function request(socketPath: string, payload: string): Promise<Record<string, unknown>> {
   return await new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
@@ -95,7 +99,12 @@ async function request(socketPath: string, payload: string): Promise<Record<stri
     socket.on("end", () => {
       clearTimeout(timer);
       try {
-        resolve(JSON.parse(body) as Record<string, unknown>);
+        const parsed: unknown = JSON.parse(body);
+        if (!isRecord(parsed)) {
+          reject(new Error("IPC response must be a JSON object"));
+          return;
+        }
+        resolve(parsed);
       } catch (error) {
         reject(error);
       }

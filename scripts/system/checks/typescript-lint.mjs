@@ -12,6 +12,7 @@ export const TYPESCRIPT_SCOPED_ROOTS = Object.freeze([
   "apps/observability",
   "apps/orchestration",
   "apps/platform-memory",
+  "apps/sca-service",
 ]);
 
 const extensionTargets = [
@@ -55,6 +56,25 @@ export const TYPE_AWARE_LINT_TARGETS = Object.freeze([
     project: ".pi/extensions/compaction/tsconfig.test.json",
     prefixes: [".pi/extensions/compaction/tests"],
     exactFiles: [],
+    excludedPrefixes: [],
+  }),
+  Object.freeze({
+    id: "extension:sca-source",
+    scopeRoot: ".pi/extensions",
+    project: ".pi/extensions/sca/tsconfig.json",
+    prefixes: [".pi/extensions/sca/src"],
+    exactFiles: [".pi/extensions/sca/index.ts"],
+    excludedPrefixes: [],
+  }),
+  Object.freeze({
+    id: "extension:sca-tests",
+    scopeRoot: ".pi/extensions",
+    project: ".pi/extensions/sca/tsconfig.test.json",
+    prefixes: [".pi/extensions/sca/tests"],
+    exactFiles: [
+      ".pi/extensions/sca/vitest.config.ts",
+      ".pi/extensions/sca/vitest.integration.config.ts",
+    ],
     excludedPrefixes: [],
   }),
   Object.freeze({
@@ -106,6 +126,22 @@ export const TYPE_AWARE_LINT_TARGETS = Object.freeze([
     project: "apps/platform-memory/tsconfig.json",
     prefixes: ["apps/platform-memory"],
     exactFiles: [],
+    excludedPrefixes: [],
+  }),
+  Object.freeze({
+    id: "sca-service-source",
+    scopeRoot: "apps/sca-service",
+    project: "apps/sca-service/tsconfig.json",
+    prefixes: ["apps/sca-service/src"],
+    exactFiles: [],
+    excludedPrefixes: [],
+  }),
+  Object.freeze({
+    id: "sca-service-tests",
+    scopeRoot: "apps/sca-service",
+    project: "apps/sca-service/tsconfig.test.json",
+    prefixes: ["apps/sca-service/tests"],
+    exactFiles: ["apps/sca-service/vitest.config.ts"],
     excludedPrefixes: [],
   }),
 ]);

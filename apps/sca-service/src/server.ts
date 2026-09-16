@@ -49,11 +49,16 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.device === right.device && left.inode === right.inode && left.owner === right.owner;
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
 async function lstatOrNull(target: string): Promise<Awaited<ReturnType<typeof lstat>> | null> {
   try {
     return await lstat(target);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (errorCode(error) === "ENOENT") return null;
     throw error;
   }
 }
@@ -154,7 +159,7 @@ async function removeOwnedSocket(
     // is confined to an unpredictable name inside the owner-only directory.
     await rename(target, quarantinePath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if (errorCode(error) === "ENOENT") return false;
     throw error;
   }
 

@@ -33,6 +33,7 @@ const SCOPED_ROOTS = [
   "apps/observability",
   "apps/orchestration",
   "apps/platform-memory",
+  "apps/sca-service",
 ];
 const EXPECTED_DETECTOR_CODES = new Set([
   "ROOT_MISSING",
@@ -134,7 +135,7 @@ function buildPositiveFixture(root) {
     type: "module",
     scripts: {
       typecheck:
-        "tsc -p .pi/lib/tsconfig.json && tsc -p apps/observability/tsconfig.json && tsc -p apps/orchestration/tsconfig.json && tsc -p apps/platform-memory/tsconfig.json",
+        "tsc -p .pi/lib/tsconfig.json && tsc -p apps/observability/tsconfig.json && tsc -p apps/orchestration/tsconfig.json && tsc -p apps/platform-memory/tsconfig.json && tsc -p apps/sca-service/tsconfig.json",
     },
     devDependencies: {
       "@earendil-works/pi-agent-core": "0.84.2",
@@ -186,7 +187,7 @@ function buildPositiveFixture(root) {
   write(root, ".pi/lib/owned.d.ts", "export interface OwnedDeclaration { value: string }\n");
   write(root, ".pi/lib/fresh-untracked.ts", "export const discoveredFromDisk = true;\n");
 
-  for (const application of ["observability", "orchestration", "platform-memory"]) {
+  for (const application of ["observability", "orchestration", "platform-memory", "sca-service"]) {
     writeJson(root, `apps/${application}/tsconfig.json`, strictTsconfig());
     write(
       root,
@@ -270,6 +271,13 @@ function buildRunnerFixture(root) {
     "apps/platform-memory/tests/unit/passing.test.ts",
     "platform application layout passes"
   );
+
+  runnerPackage(root, "apps/sca-service", {
+    test: "vitest run --config vitest.config.ts",
+    "test:all": "bun run test",
+  });
+  runnerConfig(root, "apps/sca-service/vitest.config.ts", "tests/**/*.test.ts");
+  passingTest(root, "apps/sca-service/tests/passing.test.ts", "SCA service layout passes");
 }
 
 function runFocusedVitest(config, testFile, cwdRelative) {
@@ -365,7 +373,7 @@ try {
     write(baseFixture, "outside-scope/not-owned.ts", "export const outside: any = 1;\n");
     const report = await analyzeTypeScriptGuard(guardOptions(baseFixture));
     assert.deepEqual(report.violations, []);
-    assert.equal(report.summary.files, 9);
+    assert.equal(report.summary.files, 10);
     assert(report.files.some((file) => file.path === ".pi/lib/fresh-untracked.ts"));
     assert(!report.files.some((file) => file.path.includes("outside-scope")));
     assert.equal(report.evaluation.exitPass, true);
@@ -1122,7 +1130,7 @@ try {
     try {
       buildRunnerFixture(fixture);
       const targets = collectTypeScriptTestTargets(fixture);
-      assert.equal(targets.length, 5);
+      assert.equal(targets.length, 6);
       assert.equal(targets.filter((target) => target.gatedLiveModel).length, 1);
 
       updateJson(fixture, ".pi/extensions/demo/package.json", (manifest) => {
@@ -1153,6 +1161,7 @@ try {
         "apps/platform-memory/tests/unit/generated-negative.test.ts",
         "TS420_PLATFORM_RUNNER_FAILURE",
       ],
+      ["apps/sca-service/tests/generated-negative.test.ts", "TS420_SCA_RUNNER_FAILURE"],
     ];
     try {
       buildRunnerFixture(fixture);
@@ -1168,7 +1177,7 @@ try {
         () => runTypeScriptTests(fixture, { captureOutput: true, quiet: true }),
         (error) => {
           assert(error instanceof Error);
-          assert.match(error.message, /5 TypeScript test runner\(s\) failed/u);
+          assert.match(error.message, /6 TypeScript test runner\(s\) failed/u);
           for (const [, sentinel] of negatives)
             assert.match(error.message, new RegExp(sentinel, "u"));
           return true;
@@ -1177,7 +1186,7 @@ try {
 
       for (const [relative] of negatives) rmSync(path.join(fixture, relative), { force: true });
       const targets = runTypeScriptTests(fixture, { captureOutput: true, quiet: true });
-      assert.equal(targets.length, 5);
+      assert.equal(targets.length, 6);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
       assert.equal(existsSync(fixture), false);

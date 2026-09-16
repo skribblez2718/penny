@@ -79,7 +79,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isAction(value: unknown): value is ScaServiceAction {
-  return typeof value === "string" && ACTIONS.has(value as ScaServiceAction);
+  return typeof value === "string" && [...ACTIONS].some((action) => action === value);
 }
 
 function hasExactFrameKeys(value: Record<string, unknown>): boolean {

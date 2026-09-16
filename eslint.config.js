@@ -10,6 +10,7 @@ const TYPE_AWARE_FILES = [
   "apps/observability/**/*.{ts,tsx,mts,cts}",
   "apps/orchestration/**/*.{ts,tsx,mts,cts}",
   "apps/platform-memory/**/*.{ts,tsx,mts,cts}",
+  "apps/sca-service/**/*.{ts,tsx,mts,cts}",
 ];
 const MANDATORY_RULES = {
   "@typescript-eslint/no-explicit-any": "error",
