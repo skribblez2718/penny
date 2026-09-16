@@ -51,6 +51,7 @@ const REQUIRED_ROOT_COMMANDS = [
   "bun run typescript:architecture",
   "bun run typescript:guard-tests",
   "bun run test:typescript",
+  "bun run test:skill-conformance",
   "bun run build:observability",
   "bun run build:orchestration",
   "bun run security:secrets:provision",

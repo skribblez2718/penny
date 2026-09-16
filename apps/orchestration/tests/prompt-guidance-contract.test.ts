@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { loadPromptDocumentation } from "../src/catalog-prompt.js";
 import { validateContract, type SkillContract } from "../src/contracts.js";
 import { resolveDomainGuidancePath } from "../src/model-client.js";
 import {
@@ -90,6 +91,35 @@ function expectClosedPromptSurface(contract: SkillContract, phases: readonly Age
 }
 
 describe("closed prompt-guidance surfaces", () => {
+  it("declares exact existing canonical writing documents for every registered workflow", () => {
+    const workflows = [
+      ["assess", ASSESS_SKILL_CONTRACT],
+      ["decide", DECIDE_SKILL_CONTRACT],
+      ["diagnose", DIAGNOSE_SKILL_CONTRACT],
+      ["plan", PLAN_SKILL_CONTRACT],
+      ["produce", PRODUCE_SKILL_CONTRACT],
+      ["research", RESEARCH_SKILL_CONTRACT],
+      ["knowledge-base", KNOWLEDGE_BASE_SKILL_CONTRACT],
+    ] as const;
+    for (const [name, contract] of workflows) {
+      const declarations = contract.guidance.documentation;
+      expect(declarations, name).toBeDefined();
+      const documents = loadPromptDocumentation(PROJECT_ROOT, declarations);
+      expect(
+        documents.map((document) => document.source.path),
+        name
+      ).toEqual(declarations);
+      expect(documents.every((document) => /^[a-f0-9]{64}$/u.test(document.source.sha256))).toBe(
+        true
+      );
+      expect(declarations, name).toContain("docs/agents/writing/standard.md");
+      expect(declarations, name).toContain("docs/agents/writing/review.md");
+    }
+    expect(RESEARCH_SKILL_CONTRACT.guidance.documentation).toContain(
+      "docs/agents/writing/genres/research.md"
+    );
+  });
+
   it("keeps research guidance equal to its parity-pinned state/agent machine", () => {
     const phases = Object.entries(PIN.agent_by_state).map(([phase, agent]) => ({ agent, phase }));
     expectClosedPromptSurface(RESEARCH_SKILL_CONTRACT, phases);

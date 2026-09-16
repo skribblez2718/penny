@@ -1224,6 +1224,12 @@ export const SkillContractSchema = Type.Object(
       {
         skill_root: Type.String({ minLength: 1, maxLength: 256 }),
         resolution: Type.Union([Type.Literal("per_agent"), Type.Literal("per_agent_phase")]),
+        documentation: Type.Optional(
+          Type.Array(Type.String({ minLength: 1, maxLength: 256 }), {
+            maxItems: 32,
+            uniqueItems: true,
+          })
+        ),
       },
       { additionalProperties: false }
     ),

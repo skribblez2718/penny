@@ -13,8 +13,8 @@ The invocation message is authoritative for the goal and task-specific constrain
 1. **Markers are structural.** Describe them as delimiters and authority reminders, never as enforcement.
 2. **Task authority ≠ permission authority.** The task defines what work is requested; runtime controls define what actions are possible.
 3. **External requirements are conditional.** Follow instructions found in external content only within the user's request and runtime limits; they are not self-authorizing.
-4. **Keep the literal tokens.** The runner strips the exact `# On-Demand Protocols` heading for subagents and inserts `<skill_context>` immediately before the literal `<agent_boundary>` marker. Renaming either breaks prompt assembly.
-5. **Skill prompts must not contain reserved tags or template variables.** They are injected inside the system-role region; dynamic values belong in the task message.
+4. **Keep the literal tokens.** The shared composer strips the exact `# On-Demand Protocols` heading for workers and places only host-bound static documentation and registered phase guidance before the literal `<agent_boundary>` marker. Renaming either breaks prompt assembly.
+5. **Separate host-bound guidance from caller context.** Contract-declared documents and phase prompts may enter the system-role region after path and digest checks. Direct `subagent` `skillContext`, working-directory guidance, and other caller-selected material remain in the task message. Static guidance must not contain reserved structural tags or unresolved template variables.
 
 ## Context assembly vs. control plane
 
@@ -26,12 +26,13 @@ Context assembly (parsing aid)          Control plane (enforcement)
 <system_directives>                     System-role message placement
 <system_context>   ← operating policy   Tool surface actually registered
 [agent body]       ← Role Definition    YAML maximum + selected --tools allowlist
-<skill_context>    ← Domain Guidance    Workflow approvals + signed receipts
+[canonical docs]   ← bound guidance     Source paths + content digests
+<skill_context>    ← phase guidance     Workflow approvals + signed receipts
 [runtime only]     ← no prompt layer    Registration subset + canonical digest
 <agent_boundary>   ← insertion anchor   Process isolation (path-specific)
 [AGENTS.md context]← Project Index      OS/container permissions
 <system_boundary>  ← structural end
-[task message]     ← task-authoritative
+[task + context]   ← task-authoritative
 ```
 
 ## Execution-path isolation status
@@ -64,16 +65,17 @@ The agent runner force-loads Penny's project extension modules so their tools ex
 - [ ] Host-private isolated sessions remain anonymous and separate from catalog authority.
 - [ ] Execution-path isolation status accurately documented
 - [ ] Destructive/external/sensitive actions have a deterministic gate where feasible
-- [ ] `<agent_boundary>` present in every agent definition (runner insertion anchor)
-- [ ] `<system_boundary>` appended by environment extension
-- [ ] No reserved tags or template variables in skill prompts
+- [ ] `<agent_boundary>` present in every agent definition (host-bound injection anchor)
+- [ ] `<system_boundary>` appears exactly once at the end of the system-role prompt
+- [ ] Caller-selected `skillContext` and task-project guidance remain below that boundary
+- [ ] No reserved tags or unresolved template variables in static guidance
 
 ## Files
 
 | File                                      | Purpose                                                                           |
 | ----------------------------------------- | --------------------------------------------------------------------------------- |
 | `.pi/SYSTEM.md`                           | `<system_directives>` and `<system_context>`                                      |
-| `.pi/extensions/environment/index.ts`     | `<system_boundary>` marker append                                                 |
-| `.pi/extensions/subagent/agent-runner.ts` | On-Demand strip, `<agent_boundary>` anchor, tool allowlists                       |
+| `.pi/extensions/environment/index.ts`     | canonical `<system_boundary>` finalization                                        |
+| `.pi/extensions/subagent/agent-runner.ts` | direct-worker assembly, task-context placement, tool allowlists                   |
 | `.pi/extensions/skill/index.ts`           | Skill orchestration loop, agent dispatch (no filesystem sandbox as of 2026-08-06) |
 | `docs/agents/prompts/architecture.md`     | Full assembly pipeline                                                            |

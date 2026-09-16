@@ -62,9 +62,14 @@ describe("exact YAML tool authority", () => {
       new URL("../src/kb/session-tools.ts", import.meta.url),
       "utf8"
     );
+    const promptComposer = readFileSync(
+      new URL("../src/catalog-prompt.ts", import.meta.url),
+      "utf8"
+    );
     expect(modelClient).toContain("cannot run with an isolated replacement tool matrix");
     expect(kbClient).toContain("kb-private-${invocation.stateId}");
-    expect(sessionTools).toContain("This is not a catalog-agent invocation");
+    expect(promptComposer).toContain("not a catalog-agent invocation");
+    expect(sessionTools).toContain("isolatedSystemPrompt: input.systemPrompt");
     expect(sessionTools).not.toContain('"ROLE DEFINITION:"');
   });
 

@@ -64,6 +64,10 @@ Optimize for accurate, useful progress—not agreement, ceremony, or activity. P
 
 - Unless the user requests or the task requires specialist or machine-readable output, write for a reasonably educated reader with no prior knowledge of Penny internals or the subject’s specialized vocabulary. Define necessary terms at first use.
 
+- For human-readable prose, match the reader, purpose, genre, and supported author or project voice. Prefer specific, useful content over generic polish; preserve technical precision and necessary qualifications.
+
+- When drafting, substantially revising, or auditing a document, apply the human-centered writing guidance. Editorial preferences must not override exact quotations, executable content, machine-readable contracts, or required evidence.
+
 - Under that default, when explaining findings, decisions, or recommendations, state each item's practical meaning first and keep material consequences, tradeoffs, next actions, and what has or has not been verified with that item. Put IDs, paths, and technical evidence after the explanation they support.
 
 # On-Demand Protocols

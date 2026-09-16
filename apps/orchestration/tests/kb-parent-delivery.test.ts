@@ -210,9 +210,47 @@ describe("parent delivery — request canonicalization (§5.6)", () => {
     });
     expect(computeRequestSha256(a)).toEqual(computeRequestSha256(b));
     expect(computeRequestSha256(a)).toBe(sha256Hex(canonicalJson(a)));
-    // A different query is a different digest.
+    // A different query or private context is a different digest.
     const c = baseRequest({ query: "a different question" });
     expect(computeRequestSha256(c)).not.toEqual(computeRequestSha256(a));
+    const contextual = validateQueryRequest({
+      ...a,
+      query_context: "Prefer a concise operator answer.",
+    });
+    expect(computeRequestSha256(contextual)).not.toEqual(computeRequestSha256(a));
+  });
+
+  it("preserves exact optional query_context bytes under one combined UTF-8 cap", () => {
+    const omitted = baseRequest({ query: "q" });
+    expect(Object.hasOwn(omitted, "query_context")).toBe(false);
+    expect(validateQueryRequest({ ...omitted, query_context: "x" }).query_context).toBe("x");
+    expect(
+      validateQueryRequest({ ...omitted, query_context: "Line one\nLine two" }).query_context
+    ).toBe("Line one\nLine two");
+    const exact = validateQueryRequest({
+      ...omitted,
+      query_context: "c".repeat(32_767),
+    });
+    expect(exact.query_context).toBe("c".repeat(32_767));
+    const unicodeExact = validateQueryRequest({
+      ...omitted,
+      query: "é",
+      query_context: "界".repeat(10_922),
+    });
+    expect(
+      Buffer.byteLength(unicodeExact.query, "utf8") +
+        Buffer.byteLength(unicodeExact.query_context ?? "", "utf8")
+    ).toBe(32_768);
+    expect(() =>
+      validateQueryRequest({
+        ...omitted,
+        query: "é",
+        query_context: `${"界".repeat(10_922)}a`,
+      })
+    ).toThrow(/32768/u);
+    expect(() => validateQueryRequest({ ...omitted, query_context: "c".repeat(32_768) })).toThrow(
+      /32768/u
+    );
   });
 
   it("admits closed requests and refuses open/malformed ones", () => {
@@ -224,6 +262,28 @@ describe("parent delivery — request canonicalization (§5.6)", () => {
     // empty/oversized query
     expect(() => validateQueryRequest({ ...baseRequest(), query: "" })).toThrow();
     expect(() => validateQueryRequest({ ...baseRequest(), query: "x".repeat(32_769) })).toThrow();
+    expect(() => validateQueryRequest({ ...baseRequest(), query_context: "" })).toThrow();
+    expect(() => validateQueryRequest({ ...baseRequest(), query_context: null })).toThrow();
+    expect(() => validateQueryRequest({ ...baseRequest(), query_context: 7 })).toThrow();
+    expect(() =>
+      validateQueryRequest({ ...baseRequest(), action: "status", query_context: "context" })
+    ).toThrow();
+    expect(() =>
+      validateQueryRequest({ ...baseRequest(), query_context: "x".repeat(32_769) })
+    ).toThrow();
+    expect(() =>
+      validateQueryRequest({
+        ...baseRequest(),
+        query: "q".repeat(16_384),
+        query_context: "c".repeat(16_385),
+      })
+    ).toThrow(/32768/u);
+    expect(() =>
+      validateQueryRequest({
+        ...baseRequest(),
+        query_context: "Read secret://operator-token",
+      })
+    ).toThrow(/private|credential/u);
     // bad answer_delivery
     expect(() =>
       validateQueryRequest({ ...baseRequest(), answer_delivery: "parent_tool_result!" })

@@ -109,10 +109,11 @@ retrying. Discovery never queries durable memory or infers remote service presen
 
 ## Prompt assembly
 
-The worker receives the transformed Cognitive Frame, the selected role definition,
-optional static `skillContext`, project indexes, and the task. `skillContext` is inserted
-immediately before the literal `<agent_boundary>` marker. Dynamic values belong in the
-task, not static skill guidance.
+The worker receives the transformed Cognitive Frame, the selected role definition, the
+canonical project index, and the task. Optional `skillContext` is caller-supplied task context,
+not system authority; the runner places it with the task below the final system boundary.
+Engine-backed skills bind their static canonical documents and phase guidance through their
+registered prompt contract instead.
 
 ## Durable Pi sessions
 

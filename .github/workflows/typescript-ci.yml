@@ -108,6 +108,9 @@ jobs:
       - name: Repository TypeScript tests
         run: bun run test:typescript
 
+      - name: Provider-free skill conformance
+        run: bun run test:skill-conformance
+
       - name: Build observability
         run: bun run build:observability
 

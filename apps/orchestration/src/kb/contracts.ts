@@ -871,11 +871,33 @@ function duplicateIdentityIssues<T>(
   return [];
 }
 
+export function queryContextIssues(query: string, queryContext: string | undefined): string[] {
+  const issues: string[] = [];
+  const combinedBytes =
+    Buffer.byteLength(query, "utf8") +
+    (queryContext === undefined ? 0 : Buffer.byteLength(queryContext, "utf8"));
+  if (combinedBytes > 32_768) {
+    issues.push("/query_context: query and query_context must total at most 32768 UTF-8 bytes");
+  }
+  if (
+    queryContext !== undefined &&
+    (/(?:secret|credential|vault|artifact|capability|token):\/\//iu.test(queryContext) ||
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----/u.test(queryContext) ||
+      /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/u.test(queryContext))
+  ) {
+    issues.push("/query_context: forbidden private or credential reference");
+  }
+  return issues;
+}
+
 function requestIssues(request: KnowledgeBaseRequest): string[] {
   if (request.action === "init") {
     if (request.create !== ("title" in request && request.title !== undefined)) {
       return ["/title: required exactly when create is true"];
     }
+  }
+  if (request.action === "query") {
+    return queryContextIssues(request.query, request.query_context);
   }
   if (request.action === "promote") {
     return duplicateIdentityIssues(
@@ -1654,8 +1676,8 @@ export const KbSessionProfileGrantUseSchema = Type.Object(
 export type KbSessionProfileGrantUse = Static<typeof KbSessionProfileGrantUseSchema>;
 
 /**
- * `QueryKbRequestV1` (§5.6). Closed validation: query 1–32,768; filter ID sets
- * 0–256 and unique; `max_candidates` 1–100; `verify_grounding` and
+ * `QueryKbRequestV1` (§5.6). Closed validation: query and optional private context
+ * 1–32,768 UTF-8 bytes each; filter ID sets 0–256 and unique; `max_candidates` 1–100; `verify_grounding` and
  * `answer_delivery` default true / `artifact_ref`. `answer_delivery` is a
  * request, never a grant: `parent_tool_result` additionally requires an exact
  * unconsumed `ParentDeliveryGrantV1` plus the policy allowance.
@@ -1666,6 +1688,9 @@ export const QueryKbRequestSchema = Type.Object(
     action: Type.Literal("query"),
     kb_profile_id: OpaqueIdSchema,
     query: humanTextSchema({ minUtf8Bytes: 1, maxUtf8Bytes: 32_768, multiline: true }),
+    query_context: Type.Optional(
+      humanTextSchema({ minUtf8Bytes: 1, maxUtf8Bytes: 32_768, multiline: true })
+    ),
     page_ids: Type.Optional(Type.Array(OpaqueIdSchema, { maxItems: 256, uniqueItems: true })),
     source_ids: Type.Optional(Type.Array(OpaqueIdSchema, { maxItems: 256, uniqueItems: true })),
     max_candidates: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
@@ -3033,6 +3058,9 @@ export const KbPhaseBriefSchema = Type.Union([
     {
       action: Type.Literal("query"),
       query: humanTextSchema({ minUtf8Bytes: 1, maxUtf8Bytes: 32_768, multiline: true }),
+      query_context: Type.Optional(
+        humanTextSchema({ minUtf8Bytes: 1, maxUtf8Bytes: 32_768, multiline: true })
+      ),
       page_ids: Type.Array(OpaqueIdSchema, { maxItems: 256, uniqueItems: true }),
       source_ids: Type.Array(SourceIdSchema, { maxItems: 256, uniqueItems: true }),
       max_candidates: Type.Integer({ minimum: 1, maximum: 100 }),

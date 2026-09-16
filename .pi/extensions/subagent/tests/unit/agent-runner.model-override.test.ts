@@ -6,7 +6,7 @@
  */
 
 import { EventEmitter } from "node:events";
-import { lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -26,7 +26,9 @@ vi.mock("node:fs", async () => {
   return {
     ...actual,
     existsSync: vi.fn(() => true),
-    readFileSync: vi.fn(() => "test prompt"),
+    readFileSync: vi.fn((...args: Parameters<typeof actual.readFileSync>) =>
+      actual.readFileSync(...args)
+    ),
     promises: {
       mkdtemp: vi.fn(() => Promise.resolve("/tmp/pi-subagent-xyz")),
       writeFile: vi.fn(() => Promise.resolve()),
@@ -86,6 +88,12 @@ describe("runSingleAgent modelOverride", () => {
     sandbox = mkdtempSync(path.join(tmpdir(), "penny-agent-runner-model-test-"));
     testProjectRoot = path.join(sandbox, "project");
     mkdirSync(testProjectRoot, { mode: 0o700 });
+    mkdirSync(path.join(testProjectRoot, ".pi"));
+    writeFileSync(
+      path.join(testProjectRoot, ".pi", "SYSTEM.md"),
+      "<system_context>\nYou are **Penny**.\n# On-Demand Protocols\nParent only.\n</system_context>"
+    );
+    writeFileSync(path.join(testProjectRoot, "AGENTS.md"), "Canonical index");
     process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
     initializePennyState(testProjectRoot, { env: process.env });
   });

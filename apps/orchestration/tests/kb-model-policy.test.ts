@@ -38,9 +38,16 @@ const agentFile = (name: string): string =>
 /** Seed a tmp project with one agent SSOT and (optionally) its phase guidance. */
 function seedAgent(root: string, name: string, frontmatter: string, withGuidance = true): void {
   mkdirSync(path.join(root, ".pi", "agents"), { recursive: true });
-  writeFileSync(path.join(root, ".pi", "SYSTEM.md"), "# Test Cognitive Frame\n", {
-    mode: 0o600,
-  });
+  writeFileSync(
+    path.join(root, ".pi", "SYSTEM.md"),
+    "<system_context>\nYou are **Penny**.\n# On-Demand Protocols\nParent only.\n</system_context>\n",
+    { mode: 0o600 }
+  );
+  writeFileSync(path.join(root, "AGENTS.md"), "# Test project index\n", { mode: 0o600 });
+  const writing = path.join(root, "docs", "agents", "writing");
+  mkdirSync(writing, { recursive: true });
+  writeFileSync(path.join(writing, "standard.md"), "# Test writing standard\n", { mode: 0o600 });
+  writeFileSync(path.join(writing, "review.md"), "# Test writing review\n", { mode: 0o600 });
   writeFileSync(path.join(root, ".pi", "agents", `${name}.md`), frontmatter, { mode: 0o600 });
   if (withGuidance) {
     const prompts = path.join(root, ".pi", "skills", "knowledge-base", "assets", "prompts");

@@ -42,3 +42,7 @@ SUMMARY:{"confidence":"CERTAIN","verdict":"PASS","gap_kind":"none","repair_owner
 FAIL example:
 
 SUMMARY:{"confidence":"PROBABLE","verdict":"FAIL","gap_kind":"assessment_product_gap","repair_owner":"carren","findings":["Criterion 0 is absent from criterion_outcomes."],"evidence":["The request has criterion index 0; the current draft does not."],"strategy_delta":"Replace the complete assessment draft with one exact outcome per criterion, then reseal and reverify."}
+
+## Writing integrity verification
+
+Use the supplied canonical writing guidance only for validity-bearing concerns in human-readable fields: source fidelity, misleading ambiguity, required qualifications, protected values, citations, and schema or contract integrity. Do not perform style or quality critique, issue an authorship verdict, use a phrase blacklist or style score, or force an arbitrary finding count. Preserve this phase's exact schema and treat integrity or contract failures as non-compensable.

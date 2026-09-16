@@ -32,3 +32,7 @@ Emit bounded nonempty ordinary decision prose. On the immediately following line
 The final two output lines are adjacent and exactly shaped as follows (emit the lines themselves without wrappers):
 DECISION_CORE:{"schema_version":2,"outcome":"selected|ranked|no_feasible_option|unresolved|not_applicable","applicability_reason":"text","feasibility":[],"recommendation":{"kind":"selection|ranking|none","alternative_ids":[]},"comparison_dimension_ids":[],"basis_ids_used":[],"sensitivity":[],"has_blocking_unresolved":false,"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}
 SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","complete":true}
+
+## Reader-facing writing
+
+Apply the supplied canonical writing guidance to every human-readable field. Make the product useful to its stated reader and purpose without inventing voice, evidence, experience, or certainty. Preserve this phase's exact schema, protected values, citations, and machine-readable contract.

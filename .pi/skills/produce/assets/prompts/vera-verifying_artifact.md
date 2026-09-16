@@ -40,3 +40,7 @@ PASS requires `none/none`, at least one concrete exact-check evidence item, and 
 Emit a concise validity report followed by exactly one compact final SUMMARY line:
 
 SUMMARY:{"confidence":"CERTAIN","verdict":"PASS","gap_kind":"none","repair_owner":"none","findings":[],"evidence":["Exact request coverage, content hash, effect-policy fields, and request/Ida/Demetri/Skribble/source lineage all match the current product; unknown effect evidence remains explicit."],"strategy_delta":"Admit only this exact current product and its current Carren and Vera evidence."}
+
+## Writing integrity verification
+
+Use the supplied canonical writing guidance only for validity-bearing concerns in human-readable fields: source fidelity, misleading ambiguity, required qualifications, protected values, citations, and schema or contract integrity. Do not perform style or quality critique, issue an authorship verdict, use a phrase blacklist or style score, or force an arbitrary finding count. Preserve this phase's exact schema and treat integrity or contract failures as non-compensable.

@@ -109,7 +109,7 @@ The roster is not one flat set. Recognising three families removes the pressure 
 
 Family membership is descriptive, **not** a workflow constraint. `analyze → decide`, `generate → verify` and `explore → synthesize` are all valid without passing through an intermediate family.
 
-Roles know nothing about code, travel, or research. Domain-specific knowledge comes from the skill prompt (`assets/prompts/*.md`) injected via `<skill_context>`.
+Roles know nothing about code, travel, or research. Domain-specific knowledge comes from a registered skill phase prompt (`assets/prompts/*.md`) injected via `<skill_context>` after host binding; caller-selected `skillContext` remains task material instead.
 
 ```
 Agent Definition (.pi/agents/carren.md)

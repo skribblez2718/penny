@@ -532,6 +532,11 @@ export const RESEARCH_SKILL_CONTRACT: SkillContract = {
   guidance: {
     skill_root: ".pi/skills/research/assets/prompts",
     resolution: "per_agent_phase",
+    documentation: [
+      "docs/agents/writing/standard.md",
+      "docs/agents/writing/review.md",
+      "docs/agents/writing/genres/research.md",
+    ],
   },
   budget_policy: {
     schema_version: 1,

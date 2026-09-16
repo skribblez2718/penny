@@ -376,6 +376,7 @@ async function runGroundedQuery(input: {
   projectRoot: string;
   runId: string;
   verificationPasses: boolean;
+  queryContext?: string;
 }) {
   const stateRoot = tmpRoot();
   const stateEnv = {
@@ -392,6 +393,7 @@ async function runGroundedQuery(input: {
     action: "query",
     kb_profile_id: PROFILE,
     query: QUERY_BODY,
+    ...(input.queryContext === undefined ? {} : { query_context: input.queryContext }),
   });
   const identity = {
     schema_version: 2 as const,
@@ -466,6 +468,9 @@ async function runGroundedQuery(input: {
       phaseBriefs.push(invocation.phaseBrief);
       expect(invocation.phaseBrief).not.toContain(QUERY_BODY);
       expect(invocation.phaseBrief).not.toContain(SOURCE_BODY);
+      if (input.queryContext !== undefined) {
+        expect(invocation.phaseBrief).not.toContain(input.queryContext);
+      }
       const privateBriefText = invocation.readPhaseBrief?.() ?? "{}";
       expect(privateBriefText).toContain(QUERY_BODY);
       const privateBrief = validateKbContract(
@@ -481,14 +486,24 @@ async function runGroundedQuery(input: {
         "schema_version",
         "state_id",
       ]);
-      expect(Object.keys(privateBrief.brief).sort()).toEqual([
-        "action",
-        "max_candidates",
-        "page_ids",
-        "query",
-        "source_ids",
-        "verify_grounding",
-      ]);
+      expect(Object.keys(privateBrief.brief).sort()).toEqual(
+        [
+          "action",
+          "max_candidates",
+          "page_ids",
+          "query",
+          ...(input.queryContext === undefined ? [] : ["query_context"]),
+          "source_ids",
+          "verify_grounding",
+        ].sort()
+      );
+      if (input.queryContext !== undefined) {
+        expect(privateBrief.brief.action).toBe("query");
+        if (privateBrief.brief.action !== "query") {
+          throw new Error("query phase returned a non-query private brief");
+        }
+        expect(privateBrief.brief.query_context).toBe(input.queryContext);
+      }
       expect(privateBriefText).not.toContain("expected_artifact_kind");
       expect(privateBriefText).not.toContain("task");
       const search = validateKbContract(
@@ -622,8 +637,7 @@ describe("engine-owned query start (§5.6)", () => {
         }),
         submitPhaseResult: (result) => canonicalJson(result),
       },
-      cognitiveFrame: "Cognitive frame.",
-      phaseGuidance: "Use the query readers and submit one typed result.",
+      systemPrompt: "Cognitive frame.\n\nUse the query readers and submit one typed result.",
     });
     expect(spec.noTools).toBe("all");
     expect(spec.tools).toEqual([
@@ -812,6 +826,36 @@ describe("engine-owned query start (§5.6)", () => {
     }
   });
 
+  it("delivers optional query context privately to synthesis and verification without control-plane leakage", async () => {
+    const projectRoot = tmpRoot();
+    installKbWithPage(projectRoot);
+    const runId = "qstart_context";
+    const queryContext =
+      "Audience: first-time maintainer.\nPreference: concise operational answer.";
+    const { directive, phases, service, worker } = await runGroundedQuery({
+      projectRoot,
+      runId,
+      verificationPasses: true,
+      queryContext,
+    });
+    try {
+      expect(phases).toEqual(["query", "verify"]);
+      expect(directive.action).toBe("complete");
+      const run = service.checkpointer.loadRunById(runId);
+      expect(
+        canonicalJson(
+          requireValue(run, "apps/orchestration/tests/kb-query-start.test.ts:context").snapshot()
+        )
+      ).not.toContain(queryContext);
+      for (const event of service.checkpointer.events(runId)) {
+        expect(canonicalJson(event.payload)).not.toContain(queryContext);
+      }
+    } finally {
+      service.close();
+      worker.close();
+    }
+  });
+
   it("completes met:false and creates no claim when Vera's citation report fails", async () => {
     const projectRoot = tmpRoot();
     installKbWithPage(projectRoot);
@@ -896,7 +940,8 @@ describe("engine-owned query start (§5.6)", () => {
       schema_version: 1,
       action: "query",
       kb_profile_id: PROFILE,
-      query: "a different private query for the same invocation 9d11ef",
+      query: QUERY_BODY,
+      query_context: "A changed private context for the same invocation 9d11ef.",
       verify_grounding: false,
     });
     let error: unknown = null;

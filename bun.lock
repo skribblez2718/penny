@@ -61,6 +61,9 @@
     ".pi/extensions/environment": {
       "name": "pi-environment-extension",
       "version": "0.1.0",
+      "dependencies": {
+        "@penny/orchestration": "workspace:*",
+      },
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
       },

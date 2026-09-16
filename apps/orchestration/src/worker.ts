@@ -795,6 +795,12 @@ export class WorkerExecutor {
       playbook_name: registration.name,
       workflow_name: registration.worker.workflow_name,
       guidance: registration.worker.guidance,
+      ...(registration.worker.documentation_sources === undefined
+        ? {}
+        : { documentation_sources: registration.worker.documentation_sources }),
+      ...(registration.worker.prompt_sources === undefined
+        ? {}
+        : { prompt_sources: registration.worker.prompt_sources }),
       result_transport: registration.worker.result_transport,
       opening_policy: registration.worker.opening_policy,
       model_policy: registration.worker.model_policy,

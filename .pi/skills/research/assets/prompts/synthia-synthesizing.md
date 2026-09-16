@@ -49,3 +49,7 @@ Return the complete `ResearchSemanticDraftV1` JSON value, then end with exactly 
 ```text
 SUMMARY:{"synthesis_complete":true,"confidence":"PROBABLE","needs_clarification":false,"clarifying_questions":[]}
 ```
+
+## Reader-facing writing
+
+Apply the supplied canonical writing guidance to every human-readable field. Make the product useful to its stated reader and purpose without inventing voice, evidence, experience, or certainty. Preserve this phase's exact schema, protected values, citations, and machine-readable contract.

@@ -326,6 +326,7 @@ export const PRODUCE_SKILL_CONTRACT: SkillContract = {
   guidance: {
     skill_root: ".pi/skills/produce/assets/prompts",
     resolution: "per_agent_phase",
+    documentation: ["docs/agents/writing/standard.md", "docs/agents/writing/review.md"],
   },
   budget_policy: {
     schema_version: 1,

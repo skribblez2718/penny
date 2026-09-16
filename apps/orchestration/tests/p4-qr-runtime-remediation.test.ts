@@ -473,9 +473,20 @@ describe("P4-QR summary-only repair prompt", () => {
       domainGuidance: "FULL_CANDIDATE_GUIDANCE_SENTINEL",
       activeToolNames: ["artifact_read"],
     });
-    expect(opening).toContain("ROLE_GUIDANCE_SENTINEL");
-    expect(opening).toContain("Summary-Only Routing Repair");
+    expect(opening).not.toContain("ROLE_GUIDANCE_SENTINEL");
+    expect(opening).not.toContain("Summary-Only Routing Repair");
     expect(opening).not.toContain("FULL_CANDIDATE_GUIDANCE_SENTINEL");
     expect(opening).toContain("Do not return prose or semantic body bytes");
+    const missingGuidance = { ...invocation };
+    delete missingGuidance.routingRepairGuidance;
+    expect(() =>
+      buildAgentOpening({
+        invocation: missingGuidance,
+        registration: invocation.registration,
+        agentGuidance: "ROLE_GUIDANCE_SENTINEL",
+        domainGuidance: "FULL_CANDIDATE_GUIDANCE_SENTINEL",
+        activeToolNames: ["artifact_read"],
+      })
+    ).toThrow("no mechanically projected");
   });
 });

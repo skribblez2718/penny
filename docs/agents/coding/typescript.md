@@ -21,7 +21,7 @@ package `test:all`. A new file must be discovered automatically and must acquire
 | `bun run typescript:guard-tests`  | Runs generated positive and negative tests for every guard detector and verifies temporary-fixture cleanup.                                                                                              |
 | `bun run lint`                    | Runs inventory, architecture, then the sequential type-aware ESLint runner with zero warnings.                                                                                                           |
 | `bun run typecheck`               | Runs inventory, architecture, then every extension, library, application, orchestration test, and orchestration smoke project.                                                                           |
-| `bun run test:typescript`         | Runs inventory, architecture, shared-library tests, then every distinct Vitest config reachable from package `test:all` scripts.                                                                         |
+| `bun run test:typescript`         | Runs inventory and architecture, builds orchestration's production path, runs shared-library tests, then every distinct Vitest config reachable from package `test:all` scripts.                         |
 | `bun run format:check`            | Checks TypeScript, JavaScript, JSON, and Markdown formatting without writing.                                                                                                                            |
 | `make verify-publication`         | Runs frozen Bun/uv installs; format, lint, strict checks, guards, mapped TypeScript and root tests, builds, Make checks, and staged secret scan—without staging, remote access, or live-model execution. |
 

@@ -29,3 +29,7 @@ Emit a concise verification report followed by exactly one compact final SUMMARY
 `SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","verdict":"PASS|FAIL","gap_kind":"none|evidence_gap|analysis_gap|product_gap","repair_owner":"none|echo|piper","findings":["..."],"evidence":["exact check or ref"],"strategy_delta":"..."}`
 
 PASS requires `none/none`; FAIL requires the matching closed gap and owner.
+
+## Writing integrity verification
+
+Use the supplied canonical writing guidance only for validity-bearing concerns in human-readable fields: source fidelity, misleading ambiguity, required qualifications, protected values, citations, and schema or contract integrity. Do not perform style or quality critique, issue an authorship verdict, use a phrase blacklist or style score, or force an arbitrary finding count. Preserve this phase's exact schema and treat integrity or contract failures as non-compensable.

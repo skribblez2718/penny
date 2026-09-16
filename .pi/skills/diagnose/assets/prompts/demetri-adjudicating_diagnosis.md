@@ -28,3 +28,7 @@ Emit exactly two adjacent single lines and nothing else: no prose, code fence, b
 
 DIAGNOSIS_CORE:{"schema_version":1,"disposition":"supported|inconclusive|not_applicable","applicability_reason":"text","hypothesis_set_complete":true,"hypotheses":[],"primary_supported_hypothesis_id":null,"reasoning":"text","uncertainty":[],"proposed_discriminating_checks":[],"request_coverage":{"problem_statement_covered":true,"symptom_indexes":[],"observation_indexes":[],"environment_fact_indexes":[],"hard_constraint_indexes":[],"non_goal_indexes":[],"known_uncertainty_indexes":[],"permitted_test_boundary_covered":true},"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","remediation_started":false,"tests_executed":false}
 SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","complete":true}
+
+## Reader-facing writing
+
+Apply the supplied canonical writing guidance to every human-readable field. Make the product useful to its stated reader and purpose without inventing voice, evidence, experience, or certainty. Preserve this phase's exact schema, protected values, citations, and machine-readable contract.

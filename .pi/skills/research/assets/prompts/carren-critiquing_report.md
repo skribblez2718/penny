@@ -44,3 +44,7 @@ Return the complete critique, then exactly one `SUMMARY:` line and nothing after
 ```text
 SUMMARY:{"verdict":"NEEDS_REVISION","issues":["section-0002 states certainty despite conflicting qualified evidence"],"evidence":["compared section-0002 with claim-0004, evidence-0007, and contradiction-0001"],"confidence":"PROBABLE","needs_clarification":false,"clarifying_questions":[]}
 ```
+
+## Editorial review
+
+Apply the supplied canonical review guidance to human-readable fields. Report only consequential, evidence-linked reader-visible weaknesses; do not use an authorship verdict, phrase blacklist, style score, or arbitrary finding count. Preserve this phase's exact schema and treat integrity or contract failures as non-compensable.

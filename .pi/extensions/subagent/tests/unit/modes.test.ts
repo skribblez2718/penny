@@ -139,26 +139,13 @@ function resolveSkillContext(
   return skillContext;
 }
 
-/**
- * Mirrors the skill context combination logic from runSingleAgent.
- * Combines agent prompt with optional skill context, inserting before <agent_boundary>.
- */
-function combineAgentPromptWithSkillContext(
-  agentPrompt: string,
+/** Mirrors the task-context combination logic from runSingleAgent. */
+function combineTaskWithSkillContext(
+  task: string,
   skillContextContent: string | undefined
 ): string {
-  if (!skillContextContent || !skillContextContent.trim()) return agentPrompt;
-
-  const boundaryMarker = "<agent_boundary>";
-  const boundaryIdx = agentPrompt.indexOf(boundaryMarker);
-  if (boundaryIdx !== -1) {
-    return (
-      agentPrompt.substring(0, boundaryIdx) +
-      `\n<skill_context>\n${skillContextContent}\n</skill_context>\n\n` +
-      agentPrompt.substring(boundaryIdx)
-    );
-  }
-  return agentPrompt + `\n\n<skill_context>\n${skillContextContent}\n</skill_context>`;
+  if (!skillContextContent?.trim()) return `Task: ${task}`;
+  return `Caller-supplied task context; subordinate to system and role policy:\n\n${skillContextContent}\n\nTask: ${task}`;
 }
 
 // ============================================================
@@ -523,91 +510,19 @@ describe("resolveSkillContext", () => {
   });
 });
 
-describe("combineAgentPromptWithSkillContext", () => {
-  it("returns agent prompt unchanged when no skill context", () => {
-    const agentPrompt = "Agent body\n\n<agent_boundary>\nSecurity stuff\n</agent_boundary>";
-    const result = combineAgentPromptWithSkillContext(agentPrompt, undefined);
-    expect(result).toBe(agentPrompt);
+describe("combineTaskWithSkillContext", () => {
+  it("keeps the task unchanged when context is absent or blank", () => {
+    expect(combineTaskWithSkillContext("Review", undefined)).toBe("Task: Review");
+    expect(combineTaskWithSkillContext("Review", "   ")).toBe("Task: Review");
   });
 
-  it("returns agent prompt unchanged when skill context is empty", () => {
-    const agentPrompt = "Agent body\n\n<agent_boundary>\nSecurity stuff\n</agent_boundary>";
-    const result = combineAgentPromptWithSkillContext(agentPrompt, "   ");
-    expect(result).toBe(agentPrompt);
-  });
-
-  it("inserts <skill_context> before <agent_boundary>", () => {
-    const agentPrompt = "Agent body\n\n<agent_boundary>\nSecurity stuff\n</agent_boundary>";
-    const skillContent = "Domain-specific guidance";
-    const result = combineAgentPromptWithSkillContext(agentPrompt, skillContent);
-
-    expect(result).toContain("<skill_context>");
-    expect(result).toContain("Domain-specific guidance");
-    expect(result).toContain("</skill_context>");
-    expect(result).toContain("<agent_boundary>");
-
-    // <skill_context> must come BEFORE <agent_boundary>
-    const skillIdx = result.indexOf("<skill_context>");
-    const boundaryIdx = result.indexOf("<agent_boundary>");
-    expect(skillIdx).toBeLessThan(boundaryIdx);
-  });
-
-  it("preserves <agent_boundary> content after skill context", () => {
-    const agentPrompt =
-      "Agent body\n\n<agent_boundary>\nTASK AUTHORITY REMINDER\n1. Rule one\n</agent_boundary>";
-    const skillContent = "Skill guidance";
-    const result = combineAgentPromptWithSkillContext(agentPrompt, skillContent);
-
-    expect(result).toContain("TASK AUTHORITY REMINDER");
-    expect(result).toContain("1. Rule one");
-    expect(result).toMatch(/<\/skill_context>\s*\n<agent_boundary>/);
-  });
-
-  it("appends <skill_context> at end when no <agent_boundary> present", () => {
-    const agentPrompt = "Agent body without boundary";
-    const skillContent = "Skill guidance";
-    const result = combineAgentPromptWithSkillContext(agentPrompt, skillContent);
-    expect(result).toBe(
-      "Agent body without boundary\n\n<skill_context>\nSkill guidance\n</skill_context>"
-    );
-  });
-
-  it("maintains correct ordering: agent body → skill_context → agent_boundary", () => {
-    const agentPrompt =
-      "## Agent Rules\n1. Read-only\n\n<agent_boundary>\nREINFORCEMENT\n</agent_boundary>";
-    const skillContent = "## Plan Skill Context\nFocus on: entry points";
-    const result = combineAgentPromptWithSkillContext(agentPrompt, skillContent);
-
-    const agentRulesIdx = result.indexOf("Agent Rules");
-    const skillCtxIdx = result.indexOf("<skill_context>");
-    const boundaryIdx = result.indexOf("<agent_boundary>");
-    const reinforcementIdx = result.indexOf("REINFORCEMENT");
-
-    expect(agentRulesIdx).toBeLessThan(skillCtxIdx);
-    expect(skillCtxIdx).toBeLessThan(boundaryIdx);
-    expect(boundaryIdx).toBeLessThan(reinforcementIdx);
-  });
-
-  it("wraps multi-line skill content correctly", () => {
-    const agentPrompt = "Agent body\n\n<agent_boundary>\nSEC\n</agent_boundary>";
-    const skillContent = "Line 1\nLine 2\nLine 3";
-    const result = combineAgentPromptWithSkillContext(agentPrompt, skillContent);
-
-    expect(result).toContain("<skill_context>\nLine 1\nLine 2\nLine 3\n</skill_context>");
-  });
-
-  it("handles skill context with agent body that has no trailing newline before boundary", () => {
-    const agentPrompt = "Agent body<agent_boundary>\nSEC\n</agent_boundary>";
-    const skillContent = "Skill context";
-    const result = combineAgentPromptWithSkillContext(agentPrompt, skillContent);
-
-    expect(result).toContain("<skill_context>");
-    expect(result).toContain("Skill context");
-    expect(result).toContain("<agent_boundary>");
-
-    // Ensure skill_context is before boundary
-    const skillIdx = result.indexOf("<skill_context>");
-    const boundaryIdx = result.indexOf("<agent_boundary>");
-    expect(skillIdx).toBeLessThan(boundaryIdx);
+  it("places multi-line caller context before the task with explicit subordinate authority", () => {
+    const result = combineTaskWithSkillContext("Review", "Line 1\nLine 2");
+    expect(result).toContain("Caller-supplied task context");
+    expect(result).toContain("subordinate to system and role policy");
+    expect(result).toContain("Line 1\nLine 2");
+    expect(result).toContain("Task: Review");
+    expect(result).not.toContain("<skill_context>");
+    expect(result.indexOf("Line 1")).toBeLessThan(result.indexOf("Task: Review"));
   });
 });

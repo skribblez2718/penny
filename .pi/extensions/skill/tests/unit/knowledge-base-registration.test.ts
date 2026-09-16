@@ -449,7 +449,14 @@ describe("knowledge_base registration and closed authority surface", () => {
     const valid = [
       { ...profile, action: "init", create: true, title: "Demo" },
       { ...profile, action: "ingest", source_capability_ids: ["cap_1"] },
-      { ...profile, action: "query", query: "what changed?", page_ids: [], source_ids: [] },
+      {
+        ...profile,
+        action: "query",
+        query: "what changed?",
+        query_context: "Prefer the operator's concise terminology.",
+        page_ids: [],
+        source_ids: [],
+      },
       { ...profile, action: "save", query_run_id: "run_1", page_kind: "synthesis", title: "T" },
       { ...profile, action: "lint", mode: "deterministic" },
       {
@@ -471,6 +478,20 @@ describe("knowledge_base registration and closed authority surface", () => {
     ).toBe(false);
     expect(
       Value.Check(kb.parameters, { ...profile, action: "query", query: "q", page_ids: ["a..b"] })
+    ).toBe(false);
+    expect(
+      Value.Check(kb.parameters, { ...profile, action: "query", query: "q", context: "legacy" })
+    ).toBe(false);
+    expect(
+      Value.Check(kb.parameters, { ...profile, action: "query", query: "q", query_context: null })
+    ).toBe(false);
+    expect(
+      Value.Check(kb.parameters, {
+        ...profile,
+        action: "status",
+        run_id: "run_1",
+        query_context: "x",
+      })
     ).toBe(false);
   });
 

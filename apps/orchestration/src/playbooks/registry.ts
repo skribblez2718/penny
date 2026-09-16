@@ -41,6 +41,11 @@ import path from "node:path";
 import type { TSchema } from "typebox";
 
 import {
+  loadPromptDocumentation,
+  loadStaticPromptSourceBindings,
+  type StaticDocumentSource,
+} from "../catalog-prompt.js";
+import {
   ChildWorkflowBudgetAllocationV1Schema,
   ChildWorkflowOutputContractV1Schema,
   JsonValueSchema,
@@ -153,6 +158,8 @@ export type WorkerRegistrationV1 =
       readonly kind: "catalog-agent";
       readonly workflow_name: string;
       readonly guidance: SkillContract["guidance"];
+      readonly documentation_sources?: readonly StaticDocumentSource[];
+      readonly prompt_sources?: readonly StaticDocumentSource[];
       readonly guidance_required: true;
       readonly result_transport: "persisted_summary";
       readonly opening_policy: "registration_guidance_task_artifacts";
@@ -181,6 +188,8 @@ export type WorkerRegistrationV1 =
       readonly kind: "host-private";
       readonly workflow_name: "knowledge-base";
       readonly guidance: SkillContract["guidance"];
+      readonly documentation_sources?: readonly StaticDocumentSource[];
+      readonly prompt_sources?: readonly StaticDocumentSource[];
       readonly guidance_required: true;
       readonly result_transport: "host_typed";
       readonly opening_policy: "host_private_opening";
@@ -1089,6 +1098,30 @@ function withGenericChildAuthority(registration: PlaybookRegistrationV1): Playbo
   });
 }
 
+function registrationPromptSourcePaths(registration: PlaybookRegistrationV1): readonly string[] {
+  const rolePaths = [
+    ...new Set(
+      [...registration.worker.phases.values()].map((phase) => `.pi/agents/${phase.agent}.md`)
+    ),
+  ].sort();
+  const guidancePaths = [...registration.worker.phases.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([stateId, phase]) =>
+      registration.worker.guidance.resolution === "per_agent"
+        ? `${registration.worker.guidance.skill_root}/${phase.agent}.md`
+        : `${registration.worker.guidance.skill_root}/${phase.agent}-${stateId}.md`
+    );
+  return [...new Set([".pi/SYSTEM.md", "AGENTS.md", ...rolePaths, ...guidancePaths])];
+}
+
+function hasCompletePromptCatalog(projectRoot: string): boolean {
+  return (
+    existsSync(path.join(projectRoot, ".pi", "SYSTEM.md")) &&
+    existsSync(path.join(projectRoot, "AGENTS.md")) &&
+    hasCatalogAgentDefinitions(projectRoot)
+  );
+}
+
 /**
  * Bind an ordinary registry template to the caller project catalog before it becomes active.
  * Templates deliberately retain `null` YAML carriers so import/discovery needs no caller path.
@@ -1099,27 +1132,79 @@ export function bindGenericChildYamlAuthority(
   registration: PlaybookRegistrationV1,
   catalogProjectRoot: string
 ): PlaybookRegistrationV1 {
-  if (registration.generic_child === undefined) return registration;
   if (!path.isAbsolute(catalogProjectRoot)) {
     throw new Error("generic child catalog project root must be absolute");
   }
-  if (!hasCatalogAgentDefinitions(catalogProjectRoot)) return registration;
-  const yamlMaximums = registration.generic_child.provider.phases.filter(
+  const declarations = registration.contract.guidance.documentation;
+  let boundRegistration = registration;
+  if (declarations !== undefined && existsSync(path.join(catalogProjectRoot, "docs", "agents"))) {
+    const currentSources = Object.freeze(
+      loadPromptDocumentation(catalogProjectRoot, declarations).map((document) =>
+        Object.freeze({ ...document.source })
+      )
+    );
+    const recordedSources = registration.worker.documentation_sources;
+    if (
+      recordedSources !== undefined &&
+      canonicalJson(recordedSources) !== canonicalJson(currentSources)
+    ) {
+      throw new Error(`documentation source binding drifted for '${registration.name}'`);
+    }
+    if (recordedSources === undefined) {
+      boundRegistration = Object.freeze({
+        ...registration,
+        worker: Object.freeze({
+          ...registration.worker,
+          documentation_sources: currentSources,
+        }),
+      });
+    }
+  }
+  if (hasCompletePromptCatalog(catalogProjectRoot)) {
+    const currentPromptSources = Object.freeze(
+      loadStaticPromptSourceBindings(
+        catalogProjectRoot,
+        registrationPromptSourcePaths(boundRegistration)
+      ).map((source) => Object.freeze({ ...source }))
+    );
+    const recordedPromptSources = boundRegistration.worker.prompt_sources;
+    if (
+      recordedPromptSources !== undefined &&
+      canonicalJson(recordedPromptSources) !== canonicalJson(currentPromptSources)
+    ) {
+      throw new Error(`prompt source binding drifted for '${registration.name}'`);
+    }
+    if (recordedPromptSources === undefined) {
+      boundRegistration = Object.freeze({
+        ...boundRegistration,
+        worker: Object.freeze({
+          ...boundRegistration.worker,
+          prompt_sources: currentPromptSources,
+        }),
+      });
+    }
+  }
+  if (boundRegistration.generic_child === undefined) {
+    validateRegistrationContract(boundRegistration, catalogProjectRoot);
+    return boundRegistration;
+  }
+  if (!hasCatalogAgentDefinitions(catalogProjectRoot)) return boundRegistration;
+  const yamlMaximums = boundRegistration.generic_child.provider.phases.filter(
     (phase) => phase.tool_authority.carrier === "catalog_agent_yaml_maximum"
   );
   if (yamlMaximums.some((phase) => phase.tool_authority.allowed_tools !== null)) {
-    validateRegistrationContract(registration, catalogProjectRoot);
-    return registration;
+    validateRegistrationContract(boundRegistration, catalogProjectRoot);
+    return boundRegistration;
   }
   const provider = projectGenericChildProvider(
-    registration,
-    genericChildValidator(registration.name),
+    boundRegistration,
+    genericChildValidator(boundRegistration.name),
     catalogProjectRoot
   );
   const bound = Object.freeze({
-    ...registration,
+    ...boundRegistration,
     generic_child: Object.freeze({
-      ...registration.generic_child,
+      ...boundRegistration.generic_child,
       provider,
     }),
   });
@@ -1171,6 +1256,12 @@ export function runtimeRegistrationSha256(registration: PlaybookRegistrationV1):
           kind: registration.worker.kind,
           workflow_name: registration.worker.workflow_name,
           guidance: registration.worker.guidance,
+          ...(registration.worker.documentation_sources === undefined
+            ? {}
+            : { documentation_sources: registration.worker.documentation_sources }),
+          ...(registration.worker.prompt_sources === undefined
+            ? {}
+            : { prompt_sources: registration.worker.prompt_sources }),
           guidance_required: registration.worker.guidance_required,
           result_transport: registration.worker.result_transport,
           opening_policy: registration.worker.opening_policy,
@@ -1193,6 +1284,12 @@ export function runtimeRegistrationSha256(registration: PlaybookRegistrationV1):
           kind: registration.worker.kind,
           workflow_name: registration.worker.workflow_name,
           guidance: registration.worker.guidance,
+          ...(registration.worker.documentation_sources === undefined
+            ? {}
+            : { documentation_sources: registration.worker.documentation_sources }),
+          ...(registration.worker.prompt_sources === undefined
+            ? {}
+            : { prompt_sources: registration.worker.prompt_sources }),
           guidance_required: registration.worker.guidance_required,
           result_transport: registration.worker.result_transport,
           opening_policy: registration.worker.opening_policy,
@@ -1682,6 +1779,70 @@ export function validateRegistrationContract(
     worker.guidance.resolution !== contract.guidance.resolution
   ) {
     throw new Error(`worker guidance does not match contract for '${registration.name}'`);
+  }
+  const documentation = contract.guidance.documentation;
+  if (documentation === undefined && worker.documentation_sources !== undefined) {
+    throw new Error(`worker documentation sources are undeclared for '${registration.name}'`);
+  }
+  if (documentation !== undefined) {
+    for (const declaration of documentation) {
+      const normalized = path.posix.normalize(declaration);
+      if (
+        path.isAbsolute(declaration) ||
+        declaration.includes("\\") ||
+        !declaration.startsWith("docs/agents/") ||
+        !declaration.endsWith(".md") ||
+        normalized !== declaration ||
+        normalized.includes("/../")
+      ) {
+        throw new Error(`worker documentation path '${declaration}' is invalid`);
+      }
+    }
+    if (worker.documentation_sources !== undefined) {
+      if (
+        canonicalJson(worker.documentation_sources.map((source) => source.path)) !==
+        canonicalJson(documentation)
+      ) {
+        throw new Error(`worker documentation projection diverges for '${registration.name}'`);
+      }
+      if (worker.documentation_sources.some((source) => !/^[a-f0-9]{64}$/u.test(source.sha256))) {
+        throw new Error(`worker documentation digest is invalid for '${registration.name}'`);
+      }
+    }
+    if (
+      catalogProjectRoot !== undefined &&
+      existsSync(path.join(catalogProjectRoot, "docs", "agents"))
+    ) {
+      const current = loadPromptDocumentation(catalogProjectRoot, documentation).map(
+        (document) => document.source
+      );
+      if (
+        worker.documentation_sources !== undefined &&
+        canonicalJson(worker.documentation_sources) !== canonicalJson(current)
+      ) {
+        throw new Error(`worker documentation content drifted for '${registration.name}'`);
+      }
+    }
+  }
+  if (worker.prompt_sources !== undefined) {
+    if (
+      canonicalJson(worker.prompt_sources.map((source) => source.path)) !==
+      canonicalJson(registrationPromptSourcePaths(registration))
+    ) {
+      throw new Error(`worker prompt-source projection diverges for '${registration.name}'`);
+    }
+    if (worker.prompt_sources.some((source) => !/^[a-f0-9]{64}$/u.test(source.sha256))) {
+      throw new Error(`worker prompt-source digest is invalid for '${registration.name}'`);
+    }
+    if (catalogProjectRoot !== undefined && hasCompletePromptCatalog(catalogProjectRoot)) {
+      const current = loadStaticPromptSourceBindings(
+        catalogProjectRoot,
+        registrationPromptSourcePaths(registration)
+      );
+      if (canonicalJson(worker.prompt_sources) !== canonicalJson(current)) {
+        throw new Error(`worker prompt-source content drifted for '${registration.name}'`);
+      }
+    }
   }
   if (worker.phases.size === 0) {
     throw new Error(`worker registration '${registration.name}' declares no phases`);

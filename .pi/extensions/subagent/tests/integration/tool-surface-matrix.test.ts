@@ -1,7 +1,7 @@
 /** Production-mode matrix for exact catalog-agent tool visibility. */
 
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,8 @@ interface SpawnCapture {
   readonly agent: string;
   readonly tools: readonly string[];
   readonly cwd: string;
+  readonly systemPrompt: string;
+  readonly task: string;
 }
 
 const { mockSpawn, spawnCaptures } = vi.hoisted(() => ({
@@ -190,6 +192,7 @@ describe("subagent production-mode exact tool surfaces", () => {
     const temporaryRoot = mkdtempSync(path.join(tmpdir(), "penny-subagent-tool-matrix-"));
     const externalTarget = path.join(temporaryRoot, "untrusted-target");
     mkdirSync(externalTarget, { mode: 0o700 });
+    writeFileSync(path.join(externalTarget, "AGENTS.md"), "TASK_CWD_ONLY_SENTINEL");
     const priorStateRoot = process.env.PENNY_STATE_ROOT;
     const priorPiDirectory = process.env.PI_DIRECTORY;
     const priorProjectRoot = process.env.PROJECT_ROOT;
@@ -211,7 +214,12 @@ describe("subagent production-mode exact tool surfaces", () => {
           agent,
           tools: argValue(args, "--tools").split(","),
           cwd,
+          systemPrompt: `${readFileSync(argValue(args, "--system-prompt"), "utf8")}
+
+${readFileSync(argValue(args, "--append-system-prompt"), "utf8")}`,
+          task: args.at(-1) ?? "",
         });
+        expect(args).toContain("--no-context-files");
         return fakeProcess(agent);
       }
     );
@@ -255,6 +263,15 @@ describe("subagent production-mode exact tool surfaces", () => {
           expect.arrayContaining(declared.filter((name) => name.startsWith("memory_")))
         );
         expect(capture.cwd, `${mode}/${agent} external target`).toBe(externalTarget);
+        const displayName = agent.charAt(0).toUpperCase() + agent.slice(1);
+        expect(capture.systemPrompt).toContain(`You are **${displayName}**`);
+        expect(capture.systemPrompt).toContain("# Penny Index");
+        expect(capture.systemPrompt).toContain("## Purpose");
+        expect(capture.systemPrompt).not.toContain("# On-Demand Protocols");
+        expect(capture.systemPrompt).not.toContain("TASK_CWD_ONLY_SENTINEL");
+        expect(capture.systemPrompt.split("<system_boundary>")).toHaveLength(2);
+        expect(capture.systemPrompt.trimEnd()).toMatch(/<\/system_boundary>$/u);
+        expect(capture.task).toContain("TASK_CWD_ONLY_SENTINEL");
       }
     };
 

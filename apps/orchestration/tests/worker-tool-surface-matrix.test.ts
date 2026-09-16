@@ -13,6 +13,7 @@ interface SessionCapture {
   readonly requested: readonly string[];
   readonly active: readonly string[];
   readonly thinkingLevel: unknown;
+  readonly systemPrompt: string;
   registeredBrowserAllowlist?: readonly string[];
   playwrightExtensionLoaded?: boolean;
   prompt?: string;
@@ -32,6 +33,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
       const requested = [...(args[0]?.tools ?? [])];
       const capture: SessionCapture = {
         requested,
+        systemPrompt: created.session.systemPrompt,
         active: [...created.session.getActiveToolNames()],
         thinkingLevel: args[0]?.thinkingLevel,
       };
@@ -152,6 +154,7 @@ function registration(
   }
   const guidance = { skill_root: ".pi/agents", resolution: "per_agent" } as const;
   const { generic_child: shippedAuthority, ...synthetic } = shipped;
+  const { prompt_sources: _promptSources, ...syntheticWorker } = shipped.worker;
   if (shippedAuthority === undefined) {
     throw new Error("research generic-child authority is unavailable");
   }
@@ -163,7 +166,7 @@ function registration(
       repair_routing: { schema_version: 1, routes: [] },
     },
     worker: {
-      ...shipped.worker,
+      ...syntheticWorker,
       guidance,
       phases: new Map([
         [
@@ -300,7 +303,14 @@ describe("TypeScript skill worker exact tool surfaces", () => {
       expect([...capture.active].sort()).toEqual([...declared].sort());
       expect(capture.thinkingLevel).toBeUndefined();
       expect(capture.prompt).toContain("'piper' role for a registered workflow");
-      expect(capture.prompt).toContain("# Generic Fixture Planning");
+      expect(capture.prompt).not.toContain("# Generic Fixture Planning");
+      expect(capture.systemPrompt).toContain("# Generic Fixture Planning");
+      expect(capture.systemPrompt).toContain("You are **Piper**");
+      expect(capture.systemPrompt).toContain("# Penny Index");
+      expect(capture.systemPrompt.indexOf("# Generic Fixture Planning")).toBeLessThan(
+        capture.systemPrompt.indexOf("<agent_boundary>")
+      );
+      expect(capture.systemPrompt).not.toContain("# On-Demand Protocols");
       expect(capture.prompt).not.toContain(`'${CORE_ONLY_PLAYBOOK_NAME}' workflow`);
       expect(capture.prompt).not.toContain("'research' workflow");
       expect(pending).toMatchObject({ state_id: "planning", agent: "piper" });

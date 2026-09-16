@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ArtifactStore } from "../src/artifact-store.js";
+import { loadPromptDocumentation } from "../src/catalog-prompt.js";
 import {
   canonicalBrowserNetworkAllowlist,
   currentRegisteredBrowserPolicyCarrier,
@@ -209,6 +210,47 @@ describe("W6 active worker registration", () => {
     expect(client.invocations).toHaveLength(0);
   });
 
+  it("binds canonical document digests and refuses content drift before model work", () => {
+    const catalog = temporaryRoot();
+    const template = resolvePlaybook("research");
+    if (template === undefined) throw new Error("research registration is unavailable");
+    const declarations = template.contract.guidance.documentation;
+    if (declarations === undefined) throw new Error("research documentation is undeclared");
+    for (const declaration of declarations) {
+      const destination = path.join(catalog, ...declaration.split("/"));
+      mkdirSync(path.dirname(destination), { recursive: true });
+      copyFileSync(path.join(PROJECT_ROOT, ...declaration.split("/")), destination);
+    }
+    const bound = bindGenericChildYamlAuthority(template, catalog);
+    expect(bound.worker.documentation_sources?.map((source) => source.path)).toEqual(declarations);
+    const first = declarations[0];
+    if (first === undefined) throw new Error("research documentation is empty");
+    writeFileSync(path.join(catalog, ...first.split("/")), "# Drifted guidance\n", "utf8");
+    expect(() => bindGenericChildYamlAuthority(bound, catalog)).toThrow(
+      /documentation source binding drifted/u
+    );
+  });
+
+  it("binds frame, index, role, and phase sources and refuses nonterminal drift", () => {
+    const catalog = temporaryRoot();
+    const template = resolvePlaybook("research");
+    if (template === undefined) throw new Error("research registration is unavailable");
+    const active = bindGenericChildYamlAuthority(template, PROJECT_ROOT);
+    const promptSources = active.worker.prompt_sources;
+    if (promptSources === undefined) throw new Error("research prompt sources are unbound");
+    for (const source of [...promptSources, ...(active.worker.documentation_sources ?? [])]) {
+      const destination = path.join(catalog, ...source.path.split("/"));
+      mkdirSync(path.dirname(destination), { recursive: true });
+      copyFileSync(path.join(PROJECT_ROOT, ...source.path.split("/")), destination);
+    }
+    const bound = bindGenericChildYamlAuthority(template, catalog);
+    expect(bound.worker.prompt_sources).toEqual(promptSources);
+    writeFileSync(path.join(catalog, "AGENTS.md"), "# Drifted project index\n", "utf8");
+    expect(() => bindGenericChildYamlAuthority(bound, catalog)).toThrow(
+      /prompt source binding drifted/u
+    );
+  });
+
   it("projects bounded registration metadata into a direct shipped-registry worker", async () => {
     const root = temporaryRoot();
     using artifacts = new ArtifactStore(path.join(root, "artifacts"));
@@ -222,13 +264,27 @@ describe("W6 active worker registration", () => {
       workers.execute(researchDirective({ runId: "run-registration-capture" }))
     ).rejects.toBe(client.boundary);
     expect(client.invocations).toHaveLength(1);
+    const template = resolvePlaybook("research");
+    if (template === undefined) throw new Error("research registration is unavailable");
+    const active = bindGenericChildYamlAuthority(template, PROJECT_ROOT);
     expect(client.invocations[0]?.registration).toEqual({
       playbook_name: "research",
       workflow_name: "research",
       guidance: {
         skill_root: ".pi/skills/research/assets/prompts",
         resolution: "per_agent_phase",
+        documentation: [
+          "docs/agents/writing/standard.md",
+          "docs/agents/writing/review.md",
+          "docs/agents/writing/genres/research.md",
+        ],
       },
+      documentation_sources: loadPromptDocumentation(PROJECT_ROOT, [
+        "docs/agents/writing/standard.md",
+        "docs/agents/writing/review.md",
+        "docs/agents/writing/genres/research.md",
+      ]).map((document) => document.source),
+      prompt_sources: active.worker.prompt_sources,
       result_transport: "persisted_summary",
       opening_policy: "registration_guidance_task_artifacts",
       model_policy: "directive_override_or_runtime_default",

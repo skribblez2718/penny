@@ -113,6 +113,7 @@ function shippedResearchRegistration(): PlaybookRegistrationV1 {
 
 describe("P2 recursive contract-consumption oracle", () => {
   const leaves = schemaLeafPaths(SkillContractSchema).sort();
+  const optionalLeaves = new Set(["guidance.documentation"]);
   const dispositions = Object.fromEntries(leaves.map((path) => [path, disposition(path)]));
 
   it("has exact bidirectional equality and no debt disposition", () => {
@@ -129,6 +130,7 @@ describe("P2 recursive contract-consumption oracle", () => {
 
   it("makes every leaf required in a maximal valid contract", () => {
     for (const path of leaves) {
+      if (optionalLeaves.has(path)) continue;
       const candidate = contractWithEveryCompletionLeaf();
       deletePath(candidate, path);
       expect(
@@ -136,6 +138,14 @@ describe("P2 recursive contract-consumption oracle", () => {
         path
       ).toThrow();
     }
+  });
+
+  it("keeps optional documentation omission valid while enforcing it when declared", () => {
+    const withoutDocumentation = contractWithEveryCompletionLeaf();
+    delete withoutDocumentation.guidance.documentation;
+    expect(() =>
+      validateContract(SkillContractSchema, withoutDocumentation, "optional documentation omitted")
+    ).not.toThrow();
   });
 
   it("names whole-object equality projections for every I/O, behavior, and budget leaf", () => {

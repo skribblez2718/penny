@@ -50,7 +50,7 @@ Invoke through the `knowledge_base` tool:
 ```ts
 knowledge_base({schema_version: 1, action: "init", kb_profile_id: "kbp_demo", create: true, title: "Demo advisory KB"})
 knowledge_base({schema_version: 1, action: "ingest", kb_profile_id: "kbp_demo", source_capability_ids: ["src_cap_1"]})
-knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "artifact_ref"})
+knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", query_context: "Optional user intent, preferences, or answer-shaping context; not evidence.", answer_delivery: "artifact_ref"})
 knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "parent_tool_result"}) // requires exact ParentDeliveryGrantV1 + policy
 knowledge_base({schema_version: 1, action: "save", kb_profile_id: "kbp_demo", query_run_id: "run_1", page_kind: "synthesis", title: "..."})
 knowledge_base({schema_version: 1, action: "lint", kb_profile_id: "kbp_demo", mode: "deterministic_and_semantic"})
@@ -58,6 +58,8 @@ knowledge_base({schema_version: 1, action: "promote", kb_profile_id: "kbp_demo",
 knowledge_base({schema_version: 1, action: "status", kb_profile_id: "kbp_demo", run_id: "run_1"})
 knowledge_base({schema_version: 1, action: "resume", kb_profile_id: "kbp_demo", run_id: "run_1"})
 ```
+
+For `query`, optional `query_context` is private bounded task context. Use it to clarify what the user means and how the answer should be shaped. It is never KB evidence, a citation source, credential storage, an opaque private reference, or authority to widen readers, filters, delivery, or other policy.
 
 ## Authority
 

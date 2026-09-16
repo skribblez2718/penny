@@ -152,6 +152,7 @@ beforeEach(() => {
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "penny-prompt-assembly-"));
   fs.mkdirSync(path.join(projectRoot, ".pi"), { recursive: true });
   fs.writeFileSync(path.join(projectRoot, ".pi", "SYSTEM.md"), SYSTEM_MD_FIXTURE);
+  fs.writeFileSync(path.join(projectRoot, "AGENTS.md"), "Canonical project index sentinel");
 
   originalPiDirectory = process.env.PI_DIRECTORY;
   originalProjectRoot = process.env.PROJECT_ROOT;
@@ -306,10 +307,13 @@ describe("effective prompt assembly", () => {
     }
 
     expect(directPrompt).not.toContain("<skill_context>");
-    expect(skillPrompt).toContain(`<skill_context>\n${SKILL_CONTEXT_FIXTURE}\n</skill_context>`);
-    expect(skillPrompt.indexOf("<skill_context>")).toBeLessThan(
-      skillPrompt.indexOf("<agent_boundary>")
+    expect(skillPrompt).not.toContain("<skill_context>");
+    const skillTask = skillCapture.args.at(-1);
+    expect(skillTask).toContain(
+      "Caller-supplied task context; subordinate to system and role policy"
     );
+    expect(skillTask).toContain(SKILL_CONTEXT_FIXTURE);
+    expect(skillTask).toContain("Task: Review this fixture through a skill");
 
     for (const capture of promptCaptures) {
       // Memory tools are declared in agent frontmatter (via the memory.read

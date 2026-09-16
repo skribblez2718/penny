@@ -32,3 +32,7 @@ Emit bounded ordinary strategy prose. Then emit exactly one single-line `STRATEG
 `STRATEGY_CORE:{"schema_version":1,"disposition":"ready|blocked|not_applicable","applicability_reason":"text","outcomes":[],"dependencies":[],"request_coverage":{"current_state_fact_indexes":[],"input_artifact_slots":[],"hard_constraint_indexes":[],"non_goal_indexes":[],"uncertainty_indexes":[],"prior_decision_indexes":[],"blocked_desired_outcome_indexes":[]},"blockers":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}`
 
 `SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","complete":true}`
+
+## Reader-facing writing
+
+Apply the supplied canonical writing guidance to every human-readable field. Make the product useful to its stated reader and purpose without inventing voice, evidence, experience, or certainty. Preserve this phase's exact schema, protected values, citations, and machine-readable contract.

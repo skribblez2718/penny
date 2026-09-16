@@ -1,4 +1,12 @@
 import {
+  buildCatalogPrompt,
+  catalogRoleBody,
+  loadPromptDocumentation,
+  verifyPromptDocumentation,
+  verifyStaticPromptSourceBindings,
+  type StaticDocumentSource,
+} from "./catalog-prompt.js";
+import {
   chmodSync,
   closeSync,
   constants as fsConstants,
@@ -69,6 +77,8 @@ export interface ActiveWorkerRegistrationMetadataV1 {
   readonly playbook_name: string;
   readonly workflow_name: string;
   readonly guidance: SkillContract["guidance"];
+  readonly documentation_sources?: readonly StaticDocumentSource[];
+  readonly prompt_sources?: readonly StaticDocumentSource[];
   readonly result_transport: "persisted_summary" | "host_typed";
   readonly opening_policy: "registration_guidance_task_artifacts" | "host_private_opening";
   readonly model_policy: "directive_override_or_runtime_default" | "host_private_ssot_model";
@@ -745,8 +755,7 @@ export function ssotModel(agentDoc: string): string | undefined {
 
 /** The agent SSOT body with its frontmatter removed. */
 export function ssotBody(agentDoc: string): string {
-  const match = agentDoc.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u);
-  return (match ? agentDoc.slice(match[0].length) : agentDoc).trim();
+  return catalogRoleBody(agentDoc);
 }
 
 export function parseSsotTools(agentDoc: string, agent: string): readonly string[] {
@@ -785,7 +794,8 @@ export function parseSsotTools(agentDoc: string, agent: string): readonly string
 
 export async function createWorkerResourceLoader(
   projectRoot: string,
-  extensionFactories: readonly InlineExtension[] = []
+  extensionFactories: readonly InlineExtension[] = [],
+  catalogSystemPrompt?: string
 ) {
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.create(projectRoot, agentDir);
@@ -797,6 +807,14 @@ export async function createWorkerResourceLoader(
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
+    ...(catalogSystemPrompt === undefined
+      ? {}
+      : {
+          systemPrompt: catalogSystemPrompt,
+          systemPromptOverride: () => catalogSystemPrompt,
+          appendSystemPromptOverride: () => [],
+          agentsFilesOverride: () => ({ agentsFiles: [] }),
+        }),
     ...(extensionFactories.length > 0 ? { extensionFactories: [...extensionFactories] } : {}),
   });
   await loader.reload();
@@ -1025,7 +1043,7 @@ export function buildAgentOpening(input: {
 }): string {
   const repair = input.invocation.executionPurpose === "routing_repair";
   const operativeGuidance = repair ? input.invocation.routingRepairGuidance : input.domainGuidance;
-  if (repair && operativeGuidance?.trim().length === 0) {
+  if (repair && !operativeGuidance?.trim()) {
     throw new Error("routing repair has no mechanically projected summary-only guidance");
   }
   const budget = input.invocation.livenessBudget;
@@ -1063,8 +1081,6 @@ export function buildAgentOpening(input: {
             ].join("\n\n");
   return [
     `You are executing the '${input.invocation.agent}' role for a registered workflow.`,
-    input.agentGuidance,
-    operativeGuidance ?? "",
     livenessContext,
     "TASK:",
     input.invocation.task,
@@ -1178,7 +1194,7 @@ export class PiAgentClient implements ModelClient {
     const routingRepair = invocation.executionPurpose === "routing_repair";
     if (
       routingRepair !== (invocation.workflowSession?.purpose === "routing_repair") ||
-      (routingRepair && invocation.routingRepairGuidance?.trim().length === 0)
+      (routingRepair && !invocation.routingRepairGuidance?.trim())
     ) {
       throw new Error(
         `agent '${invocation.agent}' state '${invocation.stateId}' has invalid routing-repair guidance binding`
@@ -1200,6 +1216,13 @@ export class PiAgentClient implements ModelClient {
         `agent '${invocation.agent}' state '${invocation.stateId}' has empty required guidance`
       );
     }
+    verifyStaticPromptSourceBindings(invocation.projectRoot, registration.prompt_sources);
+    const documentation =
+      isolated || routingRepair || registration.guidance.documentation === undefined
+        ? []
+        : registration.documentation_sources === undefined
+          ? loadPromptDocumentation(invocation.projectRoot, registration.guidance.documentation)
+          : verifyPromptDocumentation(invocation.projectRoot, registration.documentation_sources);
     // This is the sole catalog narrowing gate. WorkerExecutor may copy only the active
     // PlaybookRegistrationV1 phase value here; task/trust/runtime state has no selector.
     // Validate strict membership before createAgentSession, then pass the accepted list unchanged.
@@ -1249,7 +1272,14 @@ export class PiAgentClient implements ModelClient {
       isolatedResources?.resourceLoader ??
       (await createWorkerResourceLoader(
         invocation.projectRoot,
-        this.options.workerExtensions ?? []
+        this.options.workerExtensions ?? [],
+        buildCatalogPrompt({
+          projectRoot: invocation.projectRoot,
+          agentName: invocation.agent,
+          role: agentGuidance,
+          domainGuidance: routingRepair ? (invocation.routingRepairGuidance ?? "") : domainGuidance,
+          documentation,
+        }).systemPrompt
       ));
     let resolvedModel: PiModel | undefined;
     let resolvedRuntime: CreateSessionOptions["modelRuntime"];

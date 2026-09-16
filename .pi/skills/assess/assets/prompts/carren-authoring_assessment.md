@@ -28,3 +28,7 @@ Emit exactly one unwrapped canonical JSON draft line and one compact final SUMMA
 
 ASSESSMENT_DRAFT:{"assumptions":[],"confidence":"PROBABLE","criterion_outcomes":[{"contradicting_evidence_indexes":[],"criterion_index":0,"rationale":"The supplied target and evidence identify a greeting.","supporting_evidence_indexes":[0],"verdict":"met"}],"disposition":"meets","gaps":[],"improvement_suggestions":[],"request_coverage":{"assessment_purpose_covered":true,"criterion_indexes":[0],"hard_constraint_indexes":[],"known_uncertainty_indexes":[],"non_goal_indexes":[],"supplied_evidence_indexes":[0],"target_statement_indexes":[0]},"schema_version":2,"strengths":[{"criterion_indexes":[0],"evidence_indexes":[0],"statement":"The target is a direct greeting."}],"summary":"The target meets the required greeting criterion.","uncertainties":[]}
 SUMMARY:{"confidence":"PROBABLE","complete":true}
+
+## Reader-facing writing
+
+Apply the supplied canonical writing guidance to every human-readable field. Make the product useful to its stated reader and purpose without inventing voice, evidence, experience, or certainty. Preserve this phase's exact schema, protected values, citations, and machine-readable contract.

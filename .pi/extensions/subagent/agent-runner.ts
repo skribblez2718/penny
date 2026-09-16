@@ -19,6 +19,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import {
+  buildCatalogPrompt,
+  finalizeSystemBoundary,
+  requiredPromptFile,
+  taskProjectGuidance,
+  transformCatalogFrame,
   ensureOwnerDirectory,
   PennyStateResolutionError,
   resolvePennyRuntimeState,
@@ -808,86 +813,13 @@ export async function writePromptToTempFile(
 // We now resolve SYSTEM.md deterministically from the project .pi directory
 // and pass it explicitly via --system-prompt, independent of the agent cwd.
 
-function formatFrameDate(date: Date): string {
-  const months = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-  ];
-  return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
-}
-
-/** Substitute ${VAR} placeholders from process.env (+ CURRENT_DATE), mirroring
- * the environment extension so agents never see raw ${...} tokens. */
-function substituteFrameEnvVars(content: string): string {
-  const currentDate = formatFrameDate(new Date());
-  return content.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => {
-    if (name === "CURRENT_DATE") return currentDate;
-    return process.env[name] ?? "";
-  });
-}
-
-/** Resolve the project SYSTEM.md path from env, independent of the agent cwd. */
-function resolveSystemPromptPath(defaultCwd: string): string | null {
-  const candidates = [
-    process.env.PI_DIRECTORY ? path.join(process.env.PI_DIRECTORY, "SYSTEM.md") : null,
-    process.env.PROJECT_ROOT ? path.join(process.env.PROJECT_ROOT, ".pi", "SYSTEM.md") : null,
-    path.join(defaultCwd, ".pi", "SYSTEM.md"),
-  ].filter((p): p is string => Boolean(p));
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) return candidate;
-    } catch {
-      // try next candidate
-    }
-  }
-  return null;
-}
-
-/**
- * Build the per-agent base system prompt from SYSTEM.md with two invoke-time
- * transforms:
- *  - `${VAR}` env substitution (mirrors the environment extension)
- *  - the persona name "Penny" -> the agent's display name (e.g. "Echo")
- *  - strips the Penny-only "# On-Demand Protocols" section (keeps the
- *    </system_context> tag balanced)
- *
- * Returns null when SYSTEM.md cannot be found/read, in which case the caller
- * omits --system-prompt and preserves prior behavior (pi default prompt).
- */
-export function buildAgentBaseSystemPrompt(agentName: string, defaultCwd: string): string | null {
-  const sysPath = resolveSystemPromptPath(defaultCwd);
-  if (!sysPath) {
-    logger.warn("SYSTEM.md not found; agent will use pi default prompt", { agent: agentName });
-    return null;
-  }
-  let content: string;
-  try {
-    content = fs.readFileSync(sysPath, "utf-8");
-  } catch (err) {
-    logger.warn("Failed to read SYSTEM.md for agent base prompt", {
-      agent: agentName,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-  content = substituteFrameEnvVars(content);
-  // Personalize: "Penny" -> capitalized agent name (e.g. echo -> Echo).
-  const displayName = agentName.charAt(0).toUpperCase() + agentName.slice(1);
-  content = content.replace(/\bPenny\b/g, displayName);
-  // Strip the "# On-Demand Protocols" section (Penny-orchestrator-only guidance),
-  // preserving the closing </system_context> tag.
-  content = content.replace(/\n#\s*On-Demand Protocols[\s\S]*?(?=\n<\/system_context>|$)/, "");
-  return content;
+/** The caller supplies the canonical Penny root, never a task cwd fallback. */
+export function buildAgentBaseSystemPrompt(agentName: string, projectRoot: string): string {
+  return transformCatalogFrame(
+    requiredPromptFile(path.join(projectRoot, ".pi", "SYSTEM.md")),
+    agentName,
+    { ...process.env, PROJECT_ROOT: projectRoot, PI_DIRECTORY: path.join(projectRoot, ".pi") }
+  );
 }
 
 // ============================================================
@@ -1122,6 +1054,7 @@ export async function runSingleAgent(
     "--no-themes",
     "--no-skills",
     "--no-prompt-templates",
+    "--no-context-files",
     // Force-load Penny's full extension set independent of the agent cwd/trust
     // so memory/observability/tool-providing extensions are always available.
     ...resolveAgentExtensionArgs(defaultCwd),
@@ -1231,41 +1164,30 @@ export async function runSingleAgent(
   };
 
   try {
-    // Base system prompt = project SYSTEM.md (transformed per-agent), passed
-    // explicitly so every agent inherits Penny's frame regardless of spawn
-    // cwd/trust. This also prevents the Anthropic OAuth 400 "extra usage"
-    // rejection that pi's DEFAULT prompt triggers in multi-turn tool loops.
-    const baseSystemPrompt = buildAgentBaseSystemPrompt(agent.name, defaultCwd);
-    if (baseSystemPrompt && baseSystemPrompt.trim()) {
-      const baseTmp = await writePromptToTempFile(`${agent.name}-base`, baseSystemPrompt);
-      tmpBaseDir = baseTmp.dir;
-      tmpBasePath = baseTmp.filePath;
-      args.push("--system-prompt", tmpBasePath);
-    }
-
-    // Combine agent body with optional skill context
-    let combinedPrompt = agent.systemPrompt;
-    if (skillContextContent && skillContextContent.trim()) {
-      const boundaryMarker = "<agent_boundary>";
-      const boundaryIdx = combinedPrompt.indexOf(boundaryMarker);
-      if (boundaryIdx !== -1) {
-        combinedPrompt =
-          combinedPrompt.substring(0, boundaryIdx) +
-          `\n<skill_context>\n${skillContextContent}\n</skill_context>\n\n` +
-          combinedPrompt.substring(boundaryIdx);
-      } else {
-        combinedPrompt += `\n\n<skill_context>\n${skillContextContent}\n</skill_context>`;
-      }
-    }
-
-    if (combinedPrompt.trim()) {
-      const tmp = await writePromptToTempFile(agent.name, combinedPrompt);
-      tmpPromptDir = tmp.dir;
-      tmpPromptPath = tmp.filePath;
-      args.push("--append-system-prompt", tmpPromptPath);
-    }
-
-    args.push(`Task: ${task}`);
+    const prompt = buildCatalogPrompt({
+      projectRoot: sessionState.canonicalProjectRoot,
+      agentName: agent.name,
+      role: agent.systemPrompt,
+      env: ownerEnvironment ?? process.env,
+    });
+    const baseTmp = await writePromptToTempFile(`${agent.name}-base`, prompt.frame);
+    tmpBaseDir = baseTmp.dir;
+    tmpBasePath = baseTmp.filePath;
+    args.push("--system-prompt", tmpBasePath);
+    const appendedTmp = await writePromptToTempFile(
+      agent.name,
+      finalizeSystemBoundary(prompt.appended)
+    );
+    tmpPromptDir = appendedTmp.dir;
+    tmpPromptPath = appendedTmp.filePath;
+    args.push("--append-system-prompt", tmpPromptPath);
+    const subordinateContext = [
+      taskProjectGuidance(cwd, sessionState.canonicalProjectRoot),
+      skillContextContent?.trim()
+        ? `Caller-supplied task context; subordinate to system and role policy:\n\n${skillContextContent}\n\n`
+        : "",
+    ].join("");
+    args.push(`${subordinateContext}Task: ${task}`);
 
     let buffer = "";
     let eventCount = 0;

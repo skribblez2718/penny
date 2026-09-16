@@ -41,3 +41,7 @@ Return the complete verification, then exactly one `SUMMARY:` line and nothing a
 ```text
 SUMMARY:{"verdict":"FAIL","unsupported_claims":["claim-0003 has no supporting evidence"],"evidence":["re-fetched source-0002: no stated 40% figure"],"evidence_needed":["a primary benchmark source for claim-0003"],"confidence":"CERTAIN","needs_clarification":false,"clarifying_questions":[]}
 ```
+
+## Writing integrity verification
+
+Use the supplied canonical writing guidance only for validity-bearing concerns in human-readable fields: source fidelity, misleading ambiguity, required qualifications, protected values, citations, and schema or contract integrity. Do not perform style or quality critique, issue an authorship verdict, use a phrase blacklist or style score, or force an arbitrary finding count. Preserve this phase's exact schema and treat integrity or contract failures as non-compensable.

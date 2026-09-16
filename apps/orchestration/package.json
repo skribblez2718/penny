@@ -6,7 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js",
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
     "./cli": "./dist/cli.js",
     "./source": "./src/index.ts"
   },
@@ -25,7 +28,7 @@
     "typecheck:source": "tsc -p tsconfig.typecheck.json",
     "typecheck:tests": "tsc -p tsconfig.test.json",
     "typecheck:smoke": "tsc -p tsconfig.kb-model-smoke.json",
-    "test": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
+    "test": "bun run build && node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:node-unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:pi-compat": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/artifact-provider-bundled-node.test.ts tests/kb-loader-policy.test.ts tests/model-client-lifecycle.test.ts tests/package-surface.test.ts tests/ssot-session.test.ts tests/worker-tool-surface-matrix.test.ts",

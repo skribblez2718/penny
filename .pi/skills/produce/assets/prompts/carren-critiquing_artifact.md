@@ -29,3 +29,7 @@ Subjectively review the exact latest host-sealed `ProducedArtifactV2` against th
 Emit a concise quality review followed by exactly one compact final SUMMARY line:
 
 SUMMARY:{"confidence":"PROBABLE","verdict":"APPROVE","gap_kind":"none","repair_owner":"none","findings":[],"evidence":["The exact product is complete and fit for the supplied brief."],"strategy_delta":"Preserve this exact product for independent objective verification."}
+
+## Editorial review
+
+Apply the supplied canonical review guidance to human-readable fields. Report only consequential, evidence-linked reader-visible weaknesses; do not use an authorship verdict, phrase blacklist, style score, or arbitrary finding count. Preserve this phase's exact schema and treat integrity or contract failures as non-compensable.

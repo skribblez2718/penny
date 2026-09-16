@@ -2108,6 +2108,9 @@ export default function skillExtension(
               action: "query",
               kb_profile_id: profileId,
               query: String(rawParams["query"] ?? ""),
+              ...(rawParams["query_context"] !== undefined
+                ? { query_context: rawParams["query_context"] }
+                : {}),
               ...(rawParams["page_ids"] !== undefined ? { page_ids: rawParams["page_ids"] } : {}),
               ...(rawParams["source_ids"] !== undefined
                 ? { source_ids: rawParams["source_ids"] }

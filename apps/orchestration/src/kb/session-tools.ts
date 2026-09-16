@@ -348,13 +348,11 @@ function requireBoundary(invocation: KbPhaseInvocation): asserts invocation is K
 
 /**
  * Build one exact §5.8 session posture. The ResourceLoader receives only the
- * supplied Cognitive Frame, generic role, and workflow guidance; the opening
- * contains no private brief/body.
+ * supplied host-composed system prompt; the opening contains no private brief/body.
  */
 export function kbSessionSpec(input: {
   invocation: KbPhaseInvocation;
-  cognitiveFrame: string;
-  phaseGuidance: string;
+  systemPrompt: string;
 }): AgentSessionSpecV1 {
   const { invocation } = input;
   requireBoundary(invocation);
@@ -628,12 +626,7 @@ export function kbSessionSpec(input: {
     noTools: "all",
     tools: names,
     customTools,
-    isolatedSystemPrompt: [
-      input.cognitiveFrame,
-      "ANONYMOUS PRIVATE KB PHASE GUIDANCE:",
-      input.phaseGuidance,
-      "This is not a catalog-agent invocation and must not claim a catalog role.",
-    ].join("\n\n"),
+    isolatedSystemPrompt: input.systemPrompt,
     opening: [
       `Execute the anonymous private knowledge-base phase '${invocation.stateId}'.`,
       "Your first action must be read_phase_brief with {schema_version: 1}. Do not plan, answer, or stop in assistant prose before it succeeds.",

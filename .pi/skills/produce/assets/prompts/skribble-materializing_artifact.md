@@ -35,3 +35,7 @@ Emit exactly two adjacent single lines and nothing else. The first JSON object m
 
 PRODUCED_ARTIFACT_DRAFT:{"artifact_kind":"text","assumptions":[],"confidence":"PROBABLE","content":"Hello.","disposition":"produced","media_type":"text/plain; charset=utf-8","output_name":"artifact.txt","rationale":"The direct text satisfies the exact brief.","request_coverage":{"acceptance_criterion_indexes":[0],"hard_constraint_indexes":[],"known_uncertainty_indexes":[],"non_goal_indexes":[],"purpose_statement_covered":true,"source_material_indexes":[0],"specification_indexes":[0]},"schema_version":2,"uncertainties":[]}
 SUMMARY:{"confidence":"PROBABLE","complete":true}
+
+## Reader-facing writing
+
+Apply the supplied canonical writing guidance to every human-readable field. Make the product useful to its stated reader and purpose without inventing voice, evidence, experience, or certainty. Preserve this phase's exact schema, protected values, citations, and machine-readable contract.

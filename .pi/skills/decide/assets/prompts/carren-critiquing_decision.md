@@ -29,3 +29,7 @@ Emit a concise critique followed by exactly one compact final SUMMARY line:
 `SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","verdict":"APPROVE|NEEDS_REVISION","gap_kind":"none|evidence_gap|analysis_gap|product_gap","repair_owner":"none|echo|annie|demetri","findings":[{"severity":"minor|major|critical","message":"..."}],"evidence":["exact check or ref"],"strategy_delta":"..."}`
 
 APPROVE requires `none/none` and no major or critical finding. NEEDS_REVISION requires the matching closed gap and owner.
+
+## Editorial review
+
+Apply the supplied canonical review guidance to human-readable fields. Report only consequential, evidence-linked reader-visible weaknesses; do not use an authorship verdict, phrase blacklist, style score, or arbitrary finding count. Preserve this phase's exact schema and treat integrity or contract failures as non-compensable.

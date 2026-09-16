@@ -55,7 +55,7 @@
     "test:skill-conformance": "(cd apps/orchestration && bun run test:skill-conformance)",
     "test:kb-model-smoke": "(cd apps/orchestration && bun run test:kb-model-smoke)",
     "test": "bun run test:unit",
-    "test:typescript": "bun run typescript:inventory && bun run typescript:architecture && bun run test:lib && node scripts/system/checks/typescript-tests.mjs",
+    "test:typescript": "bun run typescript:inventory && bun run typescript:architecture && bun run build:orchestration && bun run test:lib && node scripts/system/checks/typescript-tests.mjs",
     "test:lib": "vitest run --config .pi/lib/tests/vitest.config.ts",
     "test:pi-compat": "bun run test:pi-update && bun run build:orchestration && (cd apps/orchestration && bun run test:pi-compat)",
     "test:pi-update": "node --test scripts/system/checks/tests/update-pi-sdk.test.mjs",

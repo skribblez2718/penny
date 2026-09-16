@@ -29,6 +29,7 @@ import {
   KbPolicySchema,
   QueryKbRequestSchema,
   canonicalJson,
+  queryContextIssues,
   sha256Hex,
   validateKbContract,
   validateKbHostInvocationContext,
@@ -116,7 +117,25 @@ export function computeRequestSha256(request: QueryKbRequest): Sha256Hex {
  * an invalid request.
  */
 export function validateQueryRequest(raw: unknown): QueryKbRequest {
-  return validateKbContract(QueryKbRequestSchema, raw, "query request");
+  if (
+    raw !== null &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    "query" in raw &&
+    typeof raw.query === "string"
+  ) {
+    const queryContext = "query_context" in raw ? raw.query_context : undefined;
+    if (queryContext === undefined || typeof queryContext === "string") {
+      const earlyIssues = queryContextIssues(raw.query, queryContext);
+      if (earlyIssues.length > 0) {
+        throw new Error(`query request invalid: ${earlyIssues.join("; ")}`);
+      }
+    }
+  }
+  const request = validateKbContract(QueryKbRequestSchema, raw, "query request");
+  const issues = queryContextIssues(request.query, request.query_context);
+  if (issues.length > 0) throw new Error(`query request invalid: ${issues.join("; ")}`);
+  return request;
 }
 
 /**

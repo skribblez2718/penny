@@ -126,8 +126,7 @@ function invocation(state: KbPhaseState): KbPhaseInvocation {
 function spec(state: KbPhaseState): AgentSessionSpecV1 {
   return kbSessionSpec({
     invocation: invocation(state),
-    cognitiveFrame: "TRUSTED_COGNITIVE_FRAME",
-    phaseGuidance: `TRUSTED_GUIDANCE_${state}`,
+    systemPrompt: `TRUSTED_COGNITIVE_FRAME\n\nTRUSTED_GUIDANCE_${state}`,
   });
 }
 
@@ -140,6 +139,7 @@ const unusedContextHost = new Proxy(
   }
 );
 
+// Purpose-built KB tools must remain context-free at this test seam.
 // Test-host exception rule: DOUBLE_ASSERTION. Rationale: Pi requires a complete ExtensionContext argument although these context-free KB tools do not read it.
 // Removal condition: Remove when Pi makes ExtensionContext optional for context-free tools or exports a supported test factory.
 // Focused test: apps/orchestration/tests/kb-loader-policy.test.ts#terminates on typed submit without host-context reads and rejects duplicate/body metadata

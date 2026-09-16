@@ -1,7 +1,9 @@
 /** P4 deterministic ordinary-worker production-entrypoint research E2E. */
 
 import {
+  cpSync,
   existsSync,
+  writeFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -369,6 +371,15 @@ function independentYamlTools(agent: string): string[] {
   return tools;
 }
 
+function installCanonicalWritingDocs(projectRoot: string): void {
+  mkdirSync(path.join(projectRoot, "docs", "agents"), { recursive: true, mode: 0o700 });
+  cpSync(
+    path.join(PROJECT_ROOT, "docs", "agents", "writing"),
+    path.join(projectRoot, "docs", "agents", "writing"),
+    { recursive: true }
+  );
+}
+
 function phaseFromPrompt(prompt: string): "researching" | "synthesizing" | "validating" {
   if (prompt.includes("Research '") && prompt.includes("tiered, cited findings"))
     return "researching";
@@ -388,6 +399,8 @@ describe("P4 production skill entrypoint", () => {
     const projectRoot = path.join(sandbox, "project");
     mkdirSync(projectRoot, { mode: 0o700 });
     symlinkSync(path.join(PROJECT_ROOT, ".pi"), path.join(projectRoot, ".pi"), "dir");
+    writeFileSync(path.join(projectRoot, "AGENTS.md"), "Canonical project index sentinel");
+    installCanonicalWritingDocs(projectRoot);
     process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
     process.env.PROJECT_ROOT = projectRoot;
     process.env.PENNY_SKILLS_DIR = path.join(projectRoot, ".pi", "skills");
@@ -538,6 +551,8 @@ describe("P4 production skill entrypoint", () => {
     const projectRoot = path.join(sandbox, "project");
     mkdirSync(projectRoot, { mode: 0o700 });
     symlinkSync(path.join(PROJECT_ROOT, ".pi"), path.join(projectRoot, ".pi"), "dir");
+    writeFileSync(path.join(projectRoot, "AGENTS.md"), "Canonical project index sentinel");
+    installCanonicalWritingDocs(projectRoot);
     process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
     process.env.PROJECT_ROOT = projectRoot;
     process.env.PENNY_SKILLS_DIR = path.join(projectRoot, ".pi", "skills");

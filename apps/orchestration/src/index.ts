@@ -1,3 +1,4 @@
+export * from "./catalog-prompt.js";
 export * from "./artifact-store.js";
 export * from "./checkpointer.js";
 export * from "./child-workflows/contracts.js";

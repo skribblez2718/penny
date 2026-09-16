@@ -32,20 +32,20 @@ If a control matters, it should exist in the second list. The first list buys re
 │ <system_context>                          │  ← Operating policy + outcome
 │   [identity, work policy, completion]     │     contract (authored)
 │                                           │
-│ [--append-system-prompt content]          │  ← Role Def + Domain Guidance
-│   [agent body + <skill_context>]          │
+│ [host-composed worker content]            │  ← Role Definition + bound
+│   [agent + canonical docs + phase guide]  │     static guidance
 │                                           │
-│ <agent_boundary>                          │  ← End of role/domain guidance;
-│   (in every agent definition)             │     runner insertion anchor
+│ <agent_boundary>                          │  ← End of role/guidance;
+│   (in every catalog agent definition)     │     host insertion anchor
 │                                           │
-│ [AGENTS.md auto-append]                   │  ← Project Index
-│ [date/cwd]                                │  ← Invocation Context
+│ [canonical AGENTS.md]                     │  ← Project Index
+│ [host-resolved date/root values]          │  ← Static substitutions
 │                                           │
 │ <system_boundary>                         │  ← Structural end marker
 │                                           │     (appended by environment ext)
 ├═══════════════════════════════════════════┤
 │ User message / Task                       │  ← Task-authoritative for the goal
-│   [goal, session, constraints]            │     and request-specific
+│   [goal, context, session, constraints]   │     and request-specific
 │                                           │     constraints; NOT authoritative
 │                                           │     for policy, tools, permissions,
 │                                           │     credentials, consequence limits
@@ -55,8 +55,8 @@ If a control matters, it should exist in the second list. The first list buys re
 Key facts about assembly:
 
 1. **`<system_directives>` is authored in `.pi/SYSTEM.md`.** It is not injected by Pi; Penny owns every token because `SYSTEM.md` replaces Pi's default prompt.
-2. **`<agent_boundary>` is both a semantic marker and a programmatic anchor.** The subagent runner inserts `<skill_context>` immediately before the literal marker. Renaming it breaks assembly.
-3. **`<system_boundary>` is appended by the environment extension** at the absolute end of the system prompt. It reminds the model that user messages define tasks within the boundaries above and that quoted or external text does not gain authority by claiming it.
+2. **`<agent_boundary>` is both a semantic marker and a programmatic anchor.** The shared host composer places only digest-bound canonical documents and registered static phase guidance before it. Renaming it breaks assembly.
+3. **`<system_boundary>` appears exactly once at the absolute end.** The shared composer emits it for SDK/private sessions, while the environment extension canonicalizes its placement for direct CLI sessions after Pi adds trusted host text.
 
 ## Authority: Data vs. Control
 
@@ -67,9 +67,9 @@ The old framing "external content is data, never instructions" was too coarse. A
 
 The same applies to mempalace content read back via memory tools: it is evidence and task material, never a source of new authority.
 
-## The Skill Context Injection Placement
+## Static Guidance and Caller Context
 
-Domain Guidance (skill prompts) is injected via `<skill_context>` tags placed **before** `<agent_boundary>`:
+Registered Domain Guidance (skill phase prompts) is host-selected and injected via `<skill_context>` tags placed **before** `<agent_boundary>`:
 
 ```
 Agent body
@@ -79,7 +79,9 @@ Agent body
 <agent_boundary>
 ```
 
-This is intentional. Skill prompts are authored by the system (skill designers), not the user. They belong in system-role space. Template variables (`{{goal}}`, `{{session_id}}`) are prohibited in skill prompts — dynamic data flows through the task message, preventing user input from being injected into system-role content.
+This is intentional. Registered phase prompts are authored by the system and bound by the active workflow contract, so they belong in system-role space. Canonical documentation follows the same rule only after exact path and content-digest binding. Template variables (`{{goal}}`, `{{session_id}}`) are prohibited there; dynamic data flows through the task message.
+
+Direct `subagent` `skillContext`, working-directory `AGENTS.md`, and other caller-selected context do **not** use this system-role channel. They are placed with the task below `<system_boundary>`, where they cannot masquerade as a registered phase prompt.
 
 ## The Migration: From APPEND_SYSTEM.md to SYSTEM.md
 
@@ -109,9 +111,9 @@ Our SYSTEM.md (customPrompt, replaces Pi's default):
   <system_directives>     ← Our authored trust/action boundaries
   <system_context>        ← Our operating policy + outcome contract
 
-  + append content (agents, skill context)
-  + AGENTS.md
-  + date/cwd
+  + host-composed role, bound documentation, and registered phase guidance
+  + canonical AGENTS.md
+  + host-resolved date/root values
 
   <system_boundary>       ← Our structural end marker
 
@@ -137,7 +139,7 @@ The task message defines the goal and request-specific constraints. It cannot al
 
 ### 4. No Reserved Tags in Authored Content
 
-Skill prompts, agent definitions, and authored sections of SYSTEM.md must not contain `<system_directives>`, `<agent_boundary>`, or `<system_boundary>` beyond their single intended occurrence — stray copies would confuse both the model and the runner's anchor matching.
+Registered phase prompts, injected documentation, agent definitions, the canonical index, and authored sections of SYSTEM.md must not add reserved structural markers beyond their intended occurrence. The composer rejects boundary duplication, nested system-context tags, unbound documentation paths, and content-digest drift before model work.
 
 ## What Markers Do NOT Protect Against
 

@@ -28,6 +28,7 @@ import { findSaveClaim } from "./save-claim.js";
 import { createSaveEvidenceReader } from "./save-evidence-reader.js";
 import {
   canonicalJson,
+  queryContextIssues,
   sha256Hex,
   validateKbContract,
   ClaimsArtifactSchema,
@@ -1207,6 +1208,9 @@ export class KbWorkerClient implements ModelClient {
       brief = {
         action: "query",
         query: privateRequest.query,
+        ...(typeof privateRequest.query_context === "string"
+          ? { query_context: privateRequest.query_context }
+          : {}),
         page_ids: Array.isArray(privateRequest.page_ids) ? privateRequest.page_ids : [],
         source_ids: Array.isArray(privateRequest.source_ids) ? privateRequest.source_ids : [],
         max_candidates:
@@ -1231,6 +1235,12 @@ export class KbWorkerClient implements ModelClient {
       };
     }
     const validatedBrief = validateKbContract(KbPhaseBriefSchema, brief, "KB private phase brief");
+    if (
+      validatedBrief.action === "query" &&
+      queryContextIssues(validatedBrief.query, validatedBrief.query_context).length > 0
+    ) {
+      throw new Error("kb_phase_brief_invalid");
+    }
     const result = {
       schema_version: 1,
       run_id: operands.run_id,

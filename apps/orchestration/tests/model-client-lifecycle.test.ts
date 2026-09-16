@@ -175,6 +175,23 @@ function temporaryProject(catalog: "linked" | "copied" | "absent" = "linked"): {
     cpSync(path.join(PROJECT_ROOT, ".pi", "agents"), path.join(piRoot, "agents"), {
       recursive: true,
     });
+    cpSync(
+      path.join(PROJECT_ROOT, ".pi", "skills", "research"),
+      path.join(piRoot, "skills", "research"),
+      {
+        recursive: true,
+      }
+    );
+  }
+  writeFileSync(path.join(projectRoot, "AGENTS.md"), "Canonical project index sentinel");
+  mkdirSync(path.join(projectRoot, "docs", "agents"), { recursive: true, mode: 0o700 });
+  cpSync(
+    path.join(PROJECT_ROOT, "docs", "agents", "writing"),
+    path.join(projectRoot, "docs", "agents", "writing"),
+    { recursive: true }
+  );
+  if (catalog === "copied") {
+    cpSync(path.join(PROJECT_ROOT, ".pi", "SYSTEM.md"), path.join(projectRoot, ".pi", "SYSTEM.md"));
   }
   return { projectRoot, sessionRoot };
 }
@@ -495,6 +512,57 @@ describe("PiAgentClient created-session lifecycle", () => {
     expect(lifecycleHarness.promptCalls).toBe(0);
     expect(lifecycleHarness.events).toEqual([]);
     expect(tracked.isOpen()).toBe(false);
+  });
+
+  it.each([
+    { label: "Cognitive Frame", relative: [".pi", "SYSTEM.md"] },
+    { label: "root index", relative: ["AGENTS.md"] },
+    { label: "role", relative: [".pi", "agents", "piper.md"] },
+    {
+      label: "phase guidance",
+      relative: [".pi", "skills", "research", "assets", "prompts", "piper-planning.md"],
+    },
+  ])("refuses $label drift introduced after worker validation", async ({ label, relative }) => {
+    const { projectRoot, sessionRoot } = temporaryProject("copied");
+    const sourcePath = path.join(projectRoot, ...relative);
+    const original = readFileSync(sourcePath, "utf8");
+    const modelResolver = vi.fn((): never => {
+      throw new Error("model resolution must not run");
+    });
+    const piClient = new PiAgentClient({
+      resolveModel: modelResolver,
+      catalogSessions: {
+        projectId: `prj_${"d".repeat(32)}`,
+        root: sessionRoot,
+      },
+    });
+    const bridge: ModelClient = {
+      async runAgent(activeInvocation) {
+        writeFileSync(sourcePath, `${original}\nDrifted after binding.\n`, "utf8");
+        return piClient.runAgent(activeInvocation);
+      },
+    };
+    const registration = resolvePlaybook("research");
+    if (registration === undefined) throw new Error("research registration is absent");
+    using artifacts = new ArtifactStore(
+      path.join(path.dirname(projectRoot), `artifacts-${label.replaceAll(" ", "-")}-drift`)
+    );
+    const worker = new WorkerExecutor(bridge, artifacts, {
+      projectRoot,
+      parallelConcurrency: 1,
+      registration,
+    });
+
+    await expect(
+      worker.execute(
+        workerDirective({
+          runId: `post-validation-${label.replaceAll(" ", "-")}-drift`,
+          modelOverride: "must-not/resolve",
+        })
+      )
+    ).rejects.toThrow(/Static prompt source binding drifted/u);
+    expect(modelResolver).not.toHaveBeenCalled();
+    expect(lifecycleHarness.sessionOptions).toHaveLength(0);
   });
 
   it("activates exact Demetri YAML for an ordinary Decide workflow phase", async () => {

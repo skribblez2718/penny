@@ -30,7 +30,7 @@ inventory and acquire the same coverage automatically.
 | `bun run typescript:guard-tests`  | Positive and negative generated fixtures exercise every guard detector and clean up after themselves.                                                                                                    |
 | `bun run lint`                    | Inventory and architecture pass, then ESLint runs with zero warnings over sequential type-aware project partitions.                                                                                      |
 | `bun run typecheck`               | Inventory and architecture pass, then all extension, library, application, orchestration-test, and orchestration-smoke projects check.                                                                   |
-| `bun run test:typescript`         | Inventory and architecture pass, shared-library tests run, then each distinct reachable Vitest configuration runs once.                                                                                  |
+| `bun run test:typescript`         | Inventory and architecture pass, orchestration's production path builds, shared-library tests run, then each distinct reachable Vitest configuration runs once.                                          |
 | `bun run format:check`            | Prettier checks TypeScript, JavaScript, JSON, and Markdown without rewriting files.                                                                                                                      |
 | `make verify-publication`         | Runs frozen Bun/uv installs; format, lint, strict checks, guards, mapped TypeScript and root tests, builds, Make checks, and staged secret scan—without staging, remote access, or live-model execution. |
 

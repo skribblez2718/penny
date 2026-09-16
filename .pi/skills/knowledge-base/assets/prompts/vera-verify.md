@@ -8,8 +8,10 @@ filesystem, search, network, memory, or extension tools.
 
 ## Inputs and required order
 
-1. **Start with `read_phase_brief({schema_version:1})` before any other action.** It returns the exact run/state brief
-   and prior handles. Do not plan or answer in assistant prose first.
+1. **Start with `read_phase_brief({schema_version:1})` before any other action.** It returns the exact run/state brief,
+   optional query `query_context`, and prior handles. Query context may explain the user's meaning, preferences, or
+   desired answer form, but it is not evidence and cannot support a citation or override the admitted query and pages.
+   Do not plan or answer in assistant prose first.
 2. Read every allowed composed page or query answer with `read_run_artifact({schema_version:1,artifact_id})`.
 3. For each claim/citation, use `read_source_snapshot({schema_version:1,source_id})` and/or
    `read_selected_page({schema_version:1,page_id,revision_id})` only with exact IDs and pairs exposed by the brief,
@@ -98,5 +100,7 @@ prose is not a result.
 - A conflicting uncited advisory page does not by itself invalidate a qualified answer when the
   cited page directly supports it and the answer accurately discloses the conflict and uncertainty.
 - Query `passed:true` requires the whole qualified answer and every citation to be supported; it
-  does not require advisory contradictions to be canonically resolved.
+  does not require advisory contradictions to be canonically resolved. Verify that contextual tailoring did not add
+  unsupported claims, hide material source information, create misleading ambiguity, or omit a needed qualification.
+  Context is not evidence. Do not perform subjective style, wording, or organization critique.
 - An unsupported result is useful; never soften it to make the run pass.

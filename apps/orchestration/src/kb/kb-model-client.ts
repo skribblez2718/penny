@@ -24,6 +24,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  buildWorkerPrompt,
+  loadPromptDocumentation,
+  verifyPromptDocumentation,
+  verifyStaticPromptSourceBindings,
+} from "../catalog-prompt.js";
+import {
   PiAgentClient,
   resolveDomainGuidancePath,
   ssotModel,
@@ -88,6 +94,7 @@ export class KbModelClient {
         `KB phase '${invocation.stateId}' has no matching active host-private registration`
       );
     }
+    verifyStaticPromptSourceBindings(projectRoot, registration.prompt_sources);
     const docPath = path.join(projectRoot, ".pi", "agents", `${invocation.agent}.md`);
     const agentDoc = await optionalText(docPath);
     if (agentDoc.trim().length === 0) {
@@ -117,18 +124,20 @@ export class KbModelClient {
         `KB phase '${invocation.stateId}': agent '${invocation.agent}' declares no 'model:' in its SSOT frontmatter; refusing to guess a model`
       );
     }
-    const cognitiveFrame = await optionalText(path.join(projectRoot, ".pi", "SYSTEM.md"));
-    if (cognitiveFrame.trim().length === 0) {
-      throw new Error(
-        `KB phase '${invocation.stateId}': Cognitive Frame is unavailable; refusing to build a partial private session`
-      );
-    }
-
-    const session = kbSessionSpec({
-      invocation,
-      cognitiveFrame,
+    const documentation =
+      registration.guidance.documentation === undefined
+        ? []
+        : registration.documentation_sources === undefined
+          ? loadPromptDocumentation(projectRoot, registration.guidance.documentation)
+          : verifyPromptDocumentation(projectRoot, registration.documentation_sources);
+    const systemPrompt = buildWorkerPrompt({
+      kind: "private_kb",
+      projectRoot,
+      phaseName: invocation.stateId,
       phaseGuidance,
-    });
+      documentation,
+    }).systemPrompt;
+    const session = kbSessionSpec({ invocation, systemPrompt });
 
     // This private, host-tool-matrix session is deliberately anonymous. It is
     // not an invocation of the catalog agent whose model/quality guidance was

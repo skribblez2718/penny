@@ -363,6 +363,7 @@ function strategyContract(input: { readonly name: string }): SkillContract {
     guidance: {
       skill_root: ".pi/skills/plan/assets/prompts",
       resolution: "per_agent_phase",
+      documentation: ["docs/agents/writing/standard.md", "docs/agents/writing/review.md"],
     },
     budget_policy: {
       schema_version: 1,

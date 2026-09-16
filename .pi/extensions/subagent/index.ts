@@ -309,7 +309,7 @@ const TaskItem = Type.Object({
   skillContext: Type.Optional(
     Type.String({
       description:
-        "Path to a skill prompt file to inject as \u003cskill_context\u003e in the system prompt, or inline content. Goes between agent body and \u003cagent_boundary\u003e.",
+        "Path to caller-supplied task context, or inline task context. It is delivered with the task below system and role policy.",
     })
   ),
   model: Type.Optional(
@@ -331,7 +331,7 @@ const ChainItem = Type.Object({
   skillContext: Type.Optional(
     Type.String({
       description:
-        "Path to a skill prompt file to inject as \u003cskill_context\u003e in the system prompt, or inline content. Goes between agent body and \u003cagent_boundary\u003e.",
+        "Path to caller-supplied task context, or inline task context. It is delivered with the task below system and role policy.",
     })
   ),
   model: Type.Optional(
@@ -371,7 +371,7 @@ const SubagentParams = Type.Object({
   skillContext: Type.Optional(
     Type.String({
       description:
-        "Path to a skill prompt file to inject as \u003cskill_context\u003e in the system prompt, or inline content. Goes between agent body and \u003cagent_boundary\u003e. Used in single mode only; for parallel/chain, use per-task skillContext.",
+        "Path to caller-supplied task context, or inline task context. It is delivered with the task below system and role policy. Used in single mode only; for parallel/chain, use per-task skillContext.",
     })
   ),
   maxConcurrency: Type.Optional(
@@ -583,7 +583,7 @@ export default function (pi: ExtensionAPI) {
       "Agents are discovered from the project's .pi/agents/ directory.",
       'Use agentScope: "both" to include agents from parent directories.',
       "Pass sufficient context because agents cannot see the parent conversation.",
-      "Use skillContext to inject skill-specific prompt content (file path or inline) as <skill_context> in the system prompt.",
+      "Use skillContext for caller-supplied task context (file path or inline); it remains subordinate to system and role policy.",
       dynamicAgentCatalog,
     ].join(" "),
     promptSnippet: dynamicPromptSnippet,
