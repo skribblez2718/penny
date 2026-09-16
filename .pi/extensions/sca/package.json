@@ -1,0 +1,22 @@
+{
+  "name": "@penny/sca-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint index.ts src tests vitest.config.ts vitest.integration.config.ts --parser-options '{\"project\":[\".pi/extensions/sca/tsconfig.test.json\"]}' --max-warnings=0",
+    "format": "prettier --write README.md index.ts src tests package.json tsconfig.json tsconfig.test.json vitest.config.ts vitest.integration.config.ts",
+    "format:check": "prettier --check README.md index.ts src tests package.json tsconfig.json tsconfig.test.json vitest.config.ts vitest.integration.config.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:all": "bun run typecheck && bun run test:unit && bun run test:integration",
+    "build": "bun build index.ts --outdir dist --target node --format esm --packages external"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
