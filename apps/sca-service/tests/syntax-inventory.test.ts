@@ -104,7 +104,7 @@ describe("S-04-T1 syntax inventory normalization", () => {
     expect(validateScaSyntaxInventoryResultV1(result)).toEqual(result);
   });
 
-  it("classifies a complete clean index as succeeded", () => {
+  it("classifies a complete clean index as succeeded for Tree-sitter or the pinned Semgrep parser", () => {
     const input = availableInput();
     const files = input.files.map((file) => ({
       ...file,
@@ -113,9 +113,17 @@ describe("S-04-T1 syntax inventory normalization", () => {
       truncated: false,
       diagnostics: [],
     }));
-    const result = buildScaSyntaxInventoryV1({ ...input, files });
-    expect(result.status).toBe("succeeded");
-    expect(result.counts.parsed).toBe(3);
+    const treeSitter = buildScaSyntaxInventoryV1({ ...input, files });
+    expect(treeSitter.status).toBe("succeeded");
+    expect(treeSitter.counts.parsed).toBe(3);
+
+    const semgrep = buildScaSyntaxInventoryV1({
+      ...input,
+      tool: { ...input.tool, name: "semgrep-parser", version: "semgrep/1.168.0" },
+      files: files.map((file) => ({ ...file, named_nodes: 0, max_depth: 0 })),
+    });
+    expect(semgrep.status).toBe("succeeded");
+    expect(semgrep.tool.name).toBe("semgrep-parser");
   });
 
   it("returns typed unavailable for missing, unsupported, or incompatible tooling", () => {

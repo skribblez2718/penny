@@ -28,7 +28,6 @@ export const ScaDependencyInventoryInputV1Schema = Type.Object(
     schema_version: Type.Literal(1),
     source_snapshot_sha256: Sha256Schema,
     manifests: Type.Array(ScaDependencyManifestV1Schema, {
-      minItems: 1,
       maxItems: MAX_MANIFESTS,
     }),
   },
@@ -91,7 +90,6 @@ export const ScaDependencyInventoryResultV1Schema = Type.Object(
       Type.Literal("failed"),
     ]),
     manifests: Type.Array(ScaDependencyManifestResultV1Schema, {
-      minItems: 1,
       maxItems: MAX_MANIFESTS,
     }),
     coordinates: Type.Array(ScaDependencyCoordinateV1Schema, { maxItems: MAX_COORDINATES }),
@@ -349,6 +347,7 @@ function parseManifest(manifest: Manifest): {
 function inventoryStatus(
   manifests: readonly ManifestResult[]
 ): ScaDependencyInventoryResultV1["status"] {
+  if (manifests.length === 0) return "succeeded";
   if (manifests.every((manifest) => manifest.status === "unsupported")) return "unsupported";
   if (manifests.every((manifest) => manifest.status === "failed")) return "failed";
   if (manifests.every((manifest) => manifest.status === "succeeded")) return "succeeded";

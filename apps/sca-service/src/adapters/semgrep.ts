@@ -50,6 +50,7 @@ export const ScaSemgrepRequestV1Schema = Type.Object(
     schema_version: Type.Literal(1),
     source_snapshot_sha256: Sha256Schema,
     source_root: Type.String({ minLength: 1, maxLength: MAX_PATH_BYTES }),
+    scratch_root: Type.String({ minLength: 1, maxLength: MAX_PATH_BYTES }),
     rule_config: Type.String({ minLength: 1, maxLength: MAX_PATH_BYTES }),
     rule_config_sha256: Sha256Schema,
     runtime: ScaSemgrepRuntimeV1Schema,
@@ -205,6 +206,8 @@ export function semgrepArguments(value: unknown): readonly string[] {
     "--error",
     "--metrics=off",
     "--disable-version-check",
+    "--no-git-ignore",
+    "--x-ignore-semgrepignore-files",
     "--no-rewrite-rule-ids",
     "--config",
     request.rule_config,
@@ -226,8 +229,16 @@ export async function runScaSemgrepV1(
       error instanceof Error ? error.message : "Semgrep request is invalid"
     );
   }
-  if (!path.isAbsolute(request.source_root) || !path.isAbsolute(request.rule_config)) {
-    throw new ScaSemgrepError("unsafe_path", "Semgrep source and rule paths must be absolute");
+  if (
+    !path.isAbsolute(request.source_root) ||
+    !path.isAbsolute(request.scratch_root) ||
+    !path.isAbsolute(request.rule_config) ||
+    path.resolve(request.source_root) === path.resolve(request.scratch_root)
+  ) {
+    throw new ScaSemgrepError(
+      "unsafe_path",
+      "Semgrep source, scratch, and rule paths must be distinct absolute paths"
+    );
   }
   if (request.runtime.state === "unavailable")
     return unavailableResult(request, "service_unavailable");
@@ -244,7 +255,8 @@ export async function runScaSemgrepV1(
       arguments: semgrepArguments(request),
       cwd: request.source_root,
       environment: [
-        { name: "HOME", value: "/nonexistent" },
+        { name: "HOME", value: request.scratch_root },
+        { name: "PATH", value: "/usr/bin:/bin" },
         { name: "SEMGREP_ENABLE_VERSION_CHECK", value: "0" },
         { name: "SEMGREP_SEND_METRICS", value: "off" },
       ],

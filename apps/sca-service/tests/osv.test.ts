@@ -56,6 +56,22 @@ function response(url: string, body: unknown): ScaOsvTransportResponse {
 }
 
 describe("S-04-T3 fixed-destination OSV adapter", () => {
+  it("completes an empty ecosystem without network access", async () => {
+    const transport = new FixtureTransport([]);
+    const result = await queryScaOsvV1(
+      { ...request("disabled"), coordinates: [] },
+      { transport, now: () => NOW }
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      error_code: "none",
+      coordinates_queried: 0,
+      advisory_count: 0,
+      pagination_complete: true,
+    });
+    expect(transport.requests).toEqual([]);
+  });
+
   it("distinguishes a complete no-match response from unavailability", async () => {
     const transport = new FixtureTransport([
       response(SCA_OSV_QUERY_BATCH_URL, { results: [{}, {}] }),

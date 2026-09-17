@@ -34,7 +34,6 @@ export const ScaOsvRequestV1Schema = Type.Object(
     source_snapshot_sha256: Sha256Schema,
     dependency_inventory_sha256: Sha256Schema,
     coordinates: Type.Array(ScaOsvCoordinateV1Schema, {
-      minItems: 1,
       maxItems: MAX_COORDINATES,
     }),
     network_policy: Type.Union([
@@ -426,6 +425,9 @@ export async function queryScaOsvV1(
   if (!Number.isFinite(now.getTime()))
     throw new ScaOsvError("invalid_clock", "OSV clock is invalid");
   const queriedAt = now.toISOString();
+  if (request.coordinates.length === 0) {
+    return terminalResult(request, queriedAt, "succeeded", "none", [], [], true);
+  }
   if (request.network_policy === "disabled") {
     return terminalResult(request, queriedAt, "unavailable", "network_disabled", [], [], false);
   }

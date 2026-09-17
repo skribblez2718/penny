@@ -15,6 +15,8 @@ const MAX_TOOL_TEXT = 256;
 export const SCA_SYNTAX_INVENTORY_INPUT_SCHEMA = "penny.sca-syntax-inventory-input.v1";
 export const SCA_SYNTAX_INVENTORY_RESULT_SCHEMA = "penny.sca-syntax-inventory-result.v1";
 export const SCA_TREE_SITTER_INDEXER_NAME = "penny-tree-sitter-indexer";
+export const SCA_SEMGREP_PARSER_NAME = "semgrep-parser";
+const SCA_SUPPORTED_SYNTAX_TOOLS = new Set([SCA_TREE_SITTER_INDEXER_NAME, SCA_SEMGREP_PARSER_NAME]);
 
 const ScaSyntaxToolStateV1Schema = Type.Union([
   Type.Literal("available"),
@@ -211,7 +213,7 @@ export function buildScaSyntaxInventoryV1(value: unknown): ScaSyntaxInventoryRes
 
   const expectedAvailable = input.tool.state === "available";
   const completeIdentity =
-    input.tool.name === SCA_TREE_SITTER_INDEXER_NAME &&
+    SCA_SUPPORTED_SYNTAX_TOOLS.has(input.tool.name) &&
     input.tool.version !== null &&
     input.tool.implementation_sha256 !== null &&
     input.tool.grammar_bundle_sha256 !== null;

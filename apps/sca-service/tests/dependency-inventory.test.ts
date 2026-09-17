@@ -49,6 +49,17 @@ function expectInventoryError(run: () => unknown, code: ScaDependencyInventoryEr
 }
 
 describe("S-04-T3 dependency inventory", () => {
+  it("records a complete empty ecosystem inventory when no lockfile is present", () => {
+    const result = buildScaDependencyInventoryV1({
+      schema_id: "penny.sca-dependency-inventory-input.v1",
+      schema_version: 1,
+      source_snapshot_sha256: SNAPSHOT,
+      manifests: [],
+    });
+    expect(result).toMatchObject({ status: "succeeded", manifests: [], coordinates: [] });
+    expect(validateScaDependencyInventoryResultV1(result)).toEqual(result);
+  });
+
   it("extracts deterministic exact npm and Composer coordinates", () => {
     const input = inventoryInput();
     const before = JSON.stringify(input);

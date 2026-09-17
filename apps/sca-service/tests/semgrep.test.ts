@@ -27,7 +27,9 @@ async function fixture(script: string) {
   const root = await mkdtemp(path.join(tmpdir(), "penny-sca-semgrep-"));
   roots.add(root);
   const sourceRoot = path.join(root, "source;literal");
+  const scratchRoot = path.join(root, "scratch");
   await mkdir(sourceRoot);
+  await mkdir(scratchRoot);
   const ruleConfig = path.join(root, "rules.yml");
   const rules = "rules: []\n";
   await writeFile(ruleConfig, rules, { mode: 0o600 });
@@ -36,6 +38,7 @@ async function fixture(script: string) {
     schema_version: 1,
     source_snapshot_sha256: SNAPSHOT,
     source_root: sourceRoot,
+    scratch_root: scratchRoot,
     rule_config: ruleConfig,
     rule_config_sha256: createHash("sha256").update(rules).digest("hex"),
     runtime: {
@@ -65,6 +68,8 @@ describe("S-04-T2 Semgrep adapter", () => {
       "--error",
       "--metrics=off",
       "--disable-version-check",
+      "--no-git-ignore",
+      "--x-ignore-semgrepignore-files",
       "--no-rewrite-rule-ids",
       "--config",
       request.rule_config,
@@ -130,5 +135,8 @@ describe("S-04-T2 Semgrep adapter", () => {
     await expect(runScaSemgrepV1({ ...request, source_root: "relative" })).rejects.toMatchObject({
       code: "unsafe_path",
     });
+    await expect(
+      runScaSemgrepV1({ ...request, scratch_root: request.source_root })
+    ).rejects.toMatchObject({ code: "unsafe_path" });
   });
 });
