@@ -98,7 +98,7 @@ export const ScaStrongerExecutionRequestV1Schema = Type.Object(
   { additionalProperties: false }
 );
 
-const ScaStrongerExecutionAuthorizationV1Schema = Type.Object(
+export const ScaStrongerExecutionAuthorizationV1Schema = Type.Object(
   {
     schema_id: Type.Literal("penny.sca-stronger-execution-authorization.v1"),
     schema_version: Type.Literal(1),
@@ -304,6 +304,24 @@ function exactBinding(
     proposal.proposal_id === request.proposal_id &&
     proposal.proposal_sha256 === decision.proposal_sha256
   );
+}
+
+export function validateScaStrongerExecutionAuthorizationV1(
+  value: unknown
+): ScaStrongerExecutionAuthorizationV1 {
+  const authorization = validateContract(
+    ScaStrongerExecutionAuthorizationV1Schema,
+    value,
+    "SCA stronger-execution authorization"
+  );
+  const { authorization_sha256: observedDigest, ...unsigned } = authorization;
+  if (authorizationDigest(unsigned) !== observedDigest) {
+    throw new ScaHumanAuthorizationError(
+      "binding_mismatch",
+      "SCA stronger-execution authorization digest mismatch"
+    );
+  }
+  return authorization;
 }
 
 export function admitScaStrongerExecutionV1(
