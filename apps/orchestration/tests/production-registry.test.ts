@@ -12,6 +12,7 @@ describe("single executable registry", () => {
       "plan",
       "produce",
       "research",
+      "sca",
     ]);
     for (const registration of PLAYBOOK_REGISTRY.values()) {
       expect(validateRegistrationContract(registration)).toBe(registration.contract);

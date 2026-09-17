@@ -1,77 +1,149 @@
 ---
 name: sca
-description: "Run a durable, evidence-grounded secure code analysis campaign over an admitted immutable repository snapshot. Use when repository-scale vulnerability discovery needs host-owned scanners, bounded agent and universal-skill investigation, dynamic verification, coverage closure, and resumable terminal truth. Do not use for a quick code review, remediation, unauthorised target execution, or claims that an unverified repository is secure."
-disable-model-invocation: true
+description: Run a durable, evidence-grounded source-composition security analysis over one caller-admitted immutable repository snapshot. Use for repository-scale vulnerability discovery requiring independent analyses, explicit coverage limits, resumability, and human-gated report release. Do not use for remediation, quick review, unauthorised execution, or claims that a repository is secure.
 metadata:
+  version: "1.0.0"
   penny:
     engine: orchestration
     mempalace: false
-    subagents: [synthia, ida, demetri, annie, echo, piper, tabitha, vera, carren, skribble]
+    subagents: [annie, vera, skribble]
 ---
 
 ## When to Use
 
-- After its future implementation and runtime registration, use `sca` for repository-scale secure code analysis where durable hypotheses, exact evidence, bounded iteration, coverage accounting, and recovery earn orchestration overhead.
-- Use when external scanners or target execution must remain behind typed host-owned operator and isolation boundaries.
-- Use when one user-visible invocation may contain several agent, universal-skill, static-analysis, and dynamic-verification passes.
+- Analyze a repository-scale source snapshot for security weaknesses.
+- Preserve independent primary analyses, critic review, evidence lineage, and limitations.
+- Require explicit human approval before releasing the final report.
 
 ## When Not to Use
 
-- Do not use this design scaffold as an executable skill; the TypeScript playbook, child-skill dispatch primitive, closed contracts, and tests are not implemented yet.
-- Do not use for a small supplied-code review that one focused agent can complete.
-- Do not use to remediate or modify the audited target, run target code outside the admitted execution profile, or equate scanner silence with safety.
-- Do not use when the source snapshot, scope, authority, evidence requirements, or completion rule are open.
+- Small supplied-code reviews that one focused agent can handle.
+- Remediation or modification of the audited repository.
+- Target execution, network access, or stronger evidence without separate authorization.
+- Any request to certify that scanner silence means the repository is secure.
+
+<!-- PENNY:GENERATED-INVOCATION:START -->
 
 ## Invocation
 
-Planned invocation after implementation and runtime registration:
+This block is generated from the active runtime registration, its real caller constraints schema, and contract I/O. Do not edit it by hand.
 
+<!-- prettier-ignore -->
 ```ts
 skill({
   skill_name: "sca",
-  goal: "Assess the admitted repository snapshot for security vulnerabilities.",
-  constraints: {
-    schema_version: 1,
-    snapshot_ref: "<immutable-source-snapshot-ref>",
-    scope: { include: ["..."], exclude: ["..."] },
-    execution_profile: "static-safe",
-    rulepack: {
-      path: "<caller-supplied-external-rulepack>",
-      release_digest: "sha256:<immutable-release-digest>",
-      profile: "<named-profile>",
-      candidate_workspace: "<run-scoped-workspace>",
-      promotion_policy: "disabled | admitted",
-    },
-  },
+  goal: "Assess the admitted repository snapshot for source-composition security weaknesses.",
+  constraints: {"critic_model":"provider/model-c","execution_mode":"static_only","primary_a_model":"provider/model-a","primary_b_model":"provider/model-b","schema_version":1,"scope":{"exclude":["vendor"],"include":["src"]},"source_root":"/absolute/path/supplied/by/caller","source_snapshot_sha256":"0000000000000000000000000000000000000000000000000000000000000000"},
 });
 ```
 
-`threat_model_mode` is optional and defaults to `adaptive`; the caller need not supply a threat model or threat-context hints. A caller that has useful context may optionally provide bounded hints or one exact supplied model ref. `formal_required` is explicit opt-in.
+The request port is `penny.sca-request.v1` v1. The source root and immutable snapshot digest are caller-bound; release always pauses for an exact human approval response.
 
-The current package is a design-stage, model-disabled development package. Generic skill ingress must reject it until its registered playbook and required runtime dependencies exist.
+### Contract I/O
 
-## Proposed Orchestrated Flow
+- `sca_request` — input/inline_request; schema `penny.sca-request.v1` v1; 1..1 item(s).
+- `sca_report` — output/artifact; schema `penny.sca-report.v1` v1; 1..1 item(s); artifact kind semantic-core.
 
-The future engine-owned campaign admits one immutable request with optional caller threat context and an adaptive-or-formal modeling policy; admission never presumes a completed threat model. Host-owned baseline operators build the security evidence substrate and discover relevant repository documents as target-controlled evidence. Synthia then derives a versioned evidence-grounded security/threat model and refines it only for a material gap or explicit formal requirement. After that integration, an optional phase-two lane may materialize, validate, and scan bounded candidate Semgrep rules against the same frozen snapshot. The stronger phase-one lane mines rule variants after confirmed findings. Candidate matches enter the ordinary hypothesis and independent verification contract; they never confirm themselves. A verified true-positive generated rule may be persisted only by the separate host promotion operator under pre-admitted external-rulepack write authority, producing a successor immutable release for future campaigns without changing the current baseline.
+### Runtime constraints schema
 
-The controller may dispatch focused catalog agents, the closed `research | decide | plan` universal child set, safe graph/static operators, or a gated dynamic-verification path. Every result returns by exact artifact reference to the hypothesis ledger. Coverage closure, Synthia assessment synthesis, Vera verification, Skribble/Carren reporting, and the host completion gate—not an actor's claim—decide terminal success.
+<!-- prettier-ignore -->
+```json
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "source_root",
+    "source_snapshot_sha256",
+    "scope",
+    "execution_mode",
+    "primary_a_model",
+    "primary_b_model",
+    "critic_model"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "source_root": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "source_snapshot_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "required": [
+        "include",
+        "exclude"
+      ],
+      "properties": {
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "maxItems": 256
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "maxItems": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution_mode": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "static_only"
+        },
+        {
+          "type": "string",
+          "const": "propose_stronger_evidence"
+        }
+      ]
+    },
+    "primary_a_model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "primary_b_model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "critic_model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  },
+  "additionalProperties": false
+}
+```
 
-See `resources/flow.html` and `README.md`. They are a proposed design target, not yet a mirror of a registered TypeScript descriptor.
+<!-- PENNY:GENERATED-INVOCATION:END -->
 
-## Exact Artifact Handoff
+## Execution Contract
 
-Every future cognitive directive and child-skill dispatch must carry owner-selected exact `input_artifacts` refs and an `output_artifact` contract. Workers and child runs read every needed exact ref with `artifact_read` through `next_range`, return complete stage content, and keep routing fields separate from product bytes. The SCA owner persists and re-reads exact bytes before routing. Memory, previews, mutable files, repository search, and name-only pointers are never workflow handoff.
+The wrapper declares intent only. The orchestration engine owns admission, a zero-model host static inventory, durable state, exact artifact handoff, two model-pinned primary branches, critic review, report production, final verification, recovery, and the release-approval pause.
 
-Scanner output, source slices, versioned security/threat models, hypotheses, coverage, execution transcripts, reviews, and final products are immutable evidence artifacts with source-snapshot and tool provenance. Payload bytes do not enter checkpoint control state.
+The caller supplies an absolute source root, immutable snapshot digest, normalized repository-relative scope, execution mode, and three distinct pinned model identifiers. The skill does not modify the target. `propose_stronger_evidence` may identify evidence needs; it does not authorize execution.
 
-## Output and Terminal Truth
+## Terminal Truth
 
-The planned positive result exposes one exact canonical security-assessment product plus security/threat-model, evidence, findings, hypothesis, coverage, generated-rule/promotion, report, SARIF, and tool-manifest refs. `complete/met:true` requires the admitted snapshot and scope, the latest exact security-model revision with material unknowns resolved or impact-disclosed, required analysis-family accounting, terminal dispositions for every admitted high-priority hypothesis, typed evidence for confirmed findings, disclosed unsupported/limited coverage, exact compatible `research | decide | plan` child lineage where used, Vera PASS on the current assessment and final product, Carren-approved report content, and host CompletionGate admission.
+A positive result requires the complete registered state sequence, the exact current report, independent final PASS, and a human response bound to that report's artifact ID and digest. Rejection, drift, incomplete evidence, model/tool failure, cancellation, or liveness exhaustion terminates non-positively with the best exact report artifact available.
 
-Budget exhaustion, stall, denied required execution, unavailable required backend, missing exact input, or an unresolved required evidence/coverage gap terminates honestly as `incomplete/met:false` with the best exact artifacts. Completion never means the repository is vulnerability-free.
-
-## Recovery, Escalation, and Consequence Boundary
-
-The future playbook must checkpoint the campaign ledger, selected refs, child-run links, aggregate budgets, pending host operations, and gate challenges under one SCA `run_id`. Recovery must reissue or adopt idempotent operations from exact refs. Material scope or authority expansion, unadmitted execution, network access, external-rulepack mutation without admitted write authority, or another reversibility cliff pauses through `await_user` or records an explicit skipped promotion according to the admitted policy; denial cannot become success.
-
-Catalog workers do not receive scanner, compiler, fuzzer, container, or raw graph-interpreter authority. Host-owned operators run approved tools through typed, bounded interfaces. Dynamic target execution requires the admitted sandbox profile, read-only target input, isolated scratch output, no host credentials or Docker socket, network denied by default, command transcripts, and finite process/CPU/memory/time/output limits. A registration-bound tool subset does not itself provide OS or process isolation.
+Completion means this bounded analysis and release gate completed. It never means the repository is vulnerability-free.

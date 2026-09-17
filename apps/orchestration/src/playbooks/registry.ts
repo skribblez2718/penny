@@ -130,6 +130,7 @@ import { DECIDE_PLAYBOOK_REGISTRATION } from "./decide.js";
 import { DIAGNOSE_PLAYBOOK_REGISTRATION } from "./diagnose.js";
 import { PLAN_PLAYBOOK_REGISTRATION } from "./plan.js";
 import { PRODUCE_PLAYBOOK_REGISTRATION } from "./produce.js";
+import { SCA_PLAYBOOK_REGISTRATION } from "./sca.js";
 
 export interface PlaybookConstructionOptionsV1 {
   readonly artifactRevisions?: ArtifactRevisionLookup;
@@ -1236,6 +1237,7 @@ export const PLAYBOOK_REGISTRY: PlaybookRegistryV1 = new Map([
   ["plan", activeOrdinaryRegistration("plan")],
   ["produce", activeOrdinaryRegistration("produce")],
   [DEFAULT_PLAYBOOK_NAME, activeOrdinaryRegistration(DEFAULT_PLAYBOOK_NAME)],
+  [SCA_PLAYBOOK_REGISTRATION.name, SCA_PLAYBOOK_REGISTRATION],
 ]);
 
 export function skillContractSha256(contractValue: SkillContract): string {
@@ -1944,6 +1946,7 @@ export const AUTHORIZED_PLAYBOOK_NAMES: readonly string[] = [
   "plan",
   "produce",
   DEFAULT_PLAYBOOK_NAME,
+  "sca",
 ];
 
 /**

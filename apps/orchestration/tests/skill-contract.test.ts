@@ -128,6 +128,7 @@ describe("P2 contract fails closed", () => {
       "plan",
       "produce",
       "research",
+      "sca",
     ]);
   });
 });

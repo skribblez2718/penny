@@ -5,8 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { validateContract, type StartRequest } from "../src/contracts.js";
-import { generateSkillInvocationManifests } from "../src/skill-invocation-docs.js";
-import { GENERIC_CHILD_WORKFLOW_NAMES, resolvePlaybook } from "../src/playbooks/registry.js";
+import {
+  DOCUMENTED_SKILL_INGRESS_NAMES,
+  generateSkillInvocationManifests,
+} from "../src/skill-invocation-docs.js";
+import { resolvePlaybook } from "../src/playbooks/registry.js";
 
 const directories: string[] = [];
 const projectRoot = path.resolve(import.meta.dirname, "..", "..", "..");
@@ -36,10 +39,10 @@ function requestFor(skill: string): StartRequest {
   };
 }
 
-describe("generated generic skill Invocation contracts", () => {
-  it("is byte-current and contains one callable generated contract for every generic ingress", () => {
+describe("generated skill Invocation contracts", () => {
+  it("is byte-current and contains one callable generated contract for every documented ingress", () => {
     expect(() => generateSkillInvocationManifests({ projectRoot, check: true })).not.toThrow();
-    for (const skill of GENERIC_CHILD_WORKFLOW_NAMES) {
+    for (const skill of DOCUMENTED_SKILL_INGRESS_NAMES) {
       const registration = resolvePlaybook(skill);
       expect(registration?.ingress).toBe("skill");
       expect(registration?.caller_documentation).toBeDefined();
@@ -54,7 +57,7 @@ describe("generated generic skill Invocation contracts", () => {
   });
 
   it("validates every generated example through its runtime schema and real admission path", () => {
-    for (const skill of GENERIC_CHILD_WORKFLOW_NAMES) {
+    for (const skill of DOCUMENTED_SKILL_INGRESS_NAMES) {
       const registration = resolvePlaybook(skill);
       if (
         registration?.caller_documentation === undefined ||
@@ -74,7 +77,7 @@ describe("generated generic skill Invocation contracts", () => {
   it("detects stale generated content without writing in check mode", () => {
     const root = mkdtempSync(path.join(tmpdir(), "penny-invocation-docs-"));
     directories.push(root);
-    for (const skill of GENERIC_CHILD_WORKFLOW_NAMES) {
+    for (const skill of DOCUMENTED_SKILL_INGRESS_NAMES) {
       const target = path.join(root, ".pi", "skills", skill);
       cpSync(path.join(projectRoot, ".pi", "skills", skill), target, { recursive: true });
     }

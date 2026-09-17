@@ -111,9 +111,14 @@ function replaceInvocationBlock(source: string, rendered: string): string {
   return `${source.slice(0, insertAt)}${rendered}\n\n${source.slice(insertAt)}`;
 }
 
-/** Generate or check exactly the six generic skill invocation sections. */
+export const DOCUMENTED_SKILL_INGRESS_NAMES = Object.freeze([
+  ...GENERIC_CHILD_WORKFLOW_NAMES,
+  "sca",
+] as const);
+
+/** Generate or check every registered model-visible skill invocation section. */
 export function generateSkillInvocationManifests(options: InvocationManifestOptions): void {
-  for (const skill of GENERIC_CHILD_WORKFLOW_NAMES) {
+  for (const skill of DOCUMENTED_SKILL_INGRESS_NAMES) {
     const target = assertSafeManifestPath(options.projectRoot, skill);
     const current = readFileSync(target, "utf8");
     const next = replaceInvocationBlock(current, renderInvocation(skill));

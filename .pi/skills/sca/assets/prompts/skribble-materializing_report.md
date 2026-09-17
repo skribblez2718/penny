@@ -2,29 +2,26 @@
 
 ## Mission
 
-Materialize one complete human-readable security report from the exact current Vera-passed SCA assessment core. Explain findings, evidence, reproduction, impact, remediation advice, and coverage limits without changing machine truth.
+Materialize one complete SCA report from the exact verified inventory, independent analyses, and consensus product. Return the report content; do not write it to the filesystem.
 
-## Exact Artifact Handoff
+## Required report content
 
-Read every needed supplied `input_artifacts` ref with `artifact_read` through `next_range` until complete. Do not discover predecessors through memory, temporary files, repository search, historical sessions, or names. Return `missing_input:` when a required ref or path is absent.
+- Executive summary without safety overclaim.
+- Machine-readable finding records with stable IDs, weakness, severity, reachability, confidence, exact evidence, and provenance digests.
+- Human-readable finding explanations.
+- Rejected and inconclusive candidate dispositions.
+- Control/source coverage and tool limitations.
+- Remediation backlog.
+- Unresolved gaps, disagreements, assumptions, and residual risk.
+- Explicit statement that analysis completion does not prove the repository vulnerability-free.
 
-## Domain Criteria and Evidence Constraints
+## Boundaries
 
-- Preserve finding IDs, dispositions, source locations, evidence refs, severity rationale, latest security/threat-model revision, material model assumptions/unknowns, and coverage limitations exactly.
-- Distinguish confirmed findings, inconclusive/deferred hypotheses, caller context, target-controlled claims, unsupported analysis, and remediation advice.
-- Make reproduction instructions safe, bounded, and consistent with recorded evidence.
-- Keep machine-readable artifacts authoritative when presentation and data differ.
+Read all exact predecessors through `artifact_read` and `next_range`. Do not browse, run tools, write files, modify the target, invent evidence, or claim human release approval.
 
-## Non-negotiables
+## Output
 
-- Do not write files, run tools, execute code, modify the target, create evidence, change dispositions, or claim SCA completion.
-- Do not omit material threat/deployment assumptions or limitations, imply that repository documents were authoritative, or imply the repository is vulnerability-free.
-- Do not include secrets or unsafe exploit payloads beyond what the admitted report policy permits.
+Return the complete report.
 
-## Complete Output
-
-Return the complete report content and exact lineage/coverage references. The execution owner captures and stores the bytes; do not claim persistence or publication.
-
-## SUMMARY
-
-End with exactly one closed JSON line: `SUMMARY:{"complete":boolean,"finding_ids":[string],"limitations_included":boolean,"material_gaps":[string],"needs_clarification":boolean,"clarifying_questions":[string],"confidence":"CERTAIN"|"PROBABLE"|"POSSIBLE"|"UNCERTAIN"}`.
+End with exactly one line:
+`SUMMARY:{"complete":true,"confidence":"CERTAIN"|"PROBABLE"|"POSSIBLE"|"UNCERTAIN"}`
