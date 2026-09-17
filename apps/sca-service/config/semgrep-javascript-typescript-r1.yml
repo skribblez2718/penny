@@ -1,0 +1,58 @@
+rules:
+  - id: penny.javascript.dynamic-code-execution
+    languages: [javascript, typescript]
+    message: Dynamic code execution requires trust-boundary review.
+    severity: ERROR
+    metadata:
+      cwe: CWE-95
+      confidence: high
+    pattern-either:
+      - pattern: eval($EXPR)
+      - pattern: new Function(...)
+      - pattern: Function(...)
+
+  - id: penny.javascript.command-execution
+    languages: [javascript, typescript]
+    message: A value reaches a process execution API and requires injection review.
+    severity: ERROR
+    metadata:
+      cwe: CWE-78
+      confidence: medium
+    pattern-either:
+      - pattern: child_process.exec($COMMAND, ...)
+      - pattern: child_process.execSync($COMMAND, ...)
+      - pattern: $CP.exec($COMMAND, ...)
+      - pattern: $CP.execSync($COMMAND, ...)
+
+  - id: penny.javascript.dynamic-html
+    languages: [javascript, typescript]
+    message: Dynamic content reaches an HTML sink and requires output-encoding review.
+    severity: WARNING
+    metadata:
+      cwe: CWE-79
+      confidence: medium
+    pattern-either:
+      - pattern: $ELEMENT.innerHTML = $VALUE
+      - pattern: $ELEMENT.outerHTML = $VALUE
+      - pattern: document.write($VALUE, ...)
+
+  - id: penny.javascript.dynamic-sql-query
+    languages: [javascript, typescript]
+    message: A dynamic value reaches a database query API and requires parameterization review.
+    severity: WARNING
+    metadata:
+      cwe: CWE-89
+      confidence: low
+    pattern-either:
+      - pattern: $DB.query($QUERY, ...)
+      - pattern: $DB.execute($QUERY, ...)
+      - pattern: $DB.raw($QUERY, ...)
+
+  - id: penny.javascript.weak-random-token
+    languages: [javascript, typescript]
+    message: Math.random is not suitable for security-sensitive token generation.
+    severity: WARNING
+    metadata:
+      cwe: CWE-338
+      confidence: medium
+    pattern: Math.random()

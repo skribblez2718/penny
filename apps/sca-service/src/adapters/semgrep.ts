@@ -209,7 +209,7 @@ export function semgrepArguments(value: unknown): readonly string[] {
     "--config",
     request.rule_config,
     "--",
-    request.source_root,
+    ".",
   ];
 }
 

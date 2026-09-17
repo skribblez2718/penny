@@ -1,0 +1,52 @@
+rules:
+  - id: penny.php.dynamic-code-execution
+    languages: [php]
+    message: Dynamic code or command execution requires trust-boundary review.
+    severity: ERROR
+    metadata:
+      cwe: CWE-95
+      confidence: medium
+    pattern-either:
+      - pattern: eval($EXPR)
+      - pattern: assert($EXPR)
+      - pattern: system($EXPR)
+      - pattern: exec($EXPR, ...)
+      - pattern: shell_exec($EXPR)
+      - pattern: passthru($EXPR, ...)
+      - pattern: popen($EXPR, ...)
+      - pattern: proc_open($EXPR, ...)
+
+  - id: penny.php.unescaped-html-output
+    languages: [php]
+    message: Dynamic output reaches an HTML response and requires encoding review.
+    severity: WARNING
+    metadata:
+      cwe: CWE-79
+      confidence: low
+    pattern-either:
+      - pattern: echo $EXPR;
+      - pattern: print $EXPR;
+
+  - id: penny.php.dynamic-sql-query
+    languages: [php]
+    message: A dynamic value reaches a database query API and requires parameterization review.
+    severity: WARNING
+    metadata:
+      cwe: CWE-89
+      confidence: medium
+    pattern-either:
+      - pattern: $DB->query($QUERY, ...)
+      - pattern: $DB->exec($QUERY, ...)
+      - pattern: mysqli_query($DB, $QUERY, ...)
+      - pattern: pg_query($DB, $QUERY, ...)
+
+  - id: penny.php.weak-password-hash
+    languages: [php]
+    message: A general-purpose digest is used where a password hashing API may be required.
+    severity: WARNING
+    metadata:
+      cwe: CWE-916
+      confidence: medium
+    pattern-either:
+      - pattern: md5($VALUE)
+      - pattern: sha1($VALUE)

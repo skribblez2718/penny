@@ -69,7 +69,7 @@ describe("S-04-T2 Semgrep adapter", () => {
       "--config",
       request.rule_config,
       "--",
-      request.source_root,
+      ".",
     ]);
     const result = await runScaSemgrepV1(request);
     expect(result).toMatchObject({

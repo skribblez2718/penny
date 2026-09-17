@@ -9,6 +9,7 @@ import {
   ScaDependencyInventoryResultV1Schema,
   type ScaDependencyInventoryResultV1,
 } from "./adapters/dependency-inventory.js";
+import { ScaGitleaksResultV1Schema, type ScaGitleaksResultV1 } from "./adapters/gitleaks.js";
 import { ScaOsvResultV1Schema, type ScaOsvResultV1 } from "./adapters/osv.js";
 import { ScaSemgrepResultV1Schema, type ScaSemgrepResultV1 } from "./adapters/semgrep.js";
 import {
@@ -181,6 +182,75 @@ export function normalizeScaSemgrepRunV1(
     configuration_sha256: result.rule_config_sha256,
     raw_refs: [binding.raw_ref],
     observations: semgrepObservations(result, binding.raw_ref),
+    failure_code: status === "succeeded" ? null : result.error_code,
+  });
+}
+
+function gitleaksStatus(result: ScaGitleaksResultV1): ScaStaticAnalyzerRunInputV1["status"] {
+  if (result.status === "succeeded" || result.status === "findings") return "succeeded";
+  if (result.status === "unavailable") return "unavailable";
+  if (result.status === "timed_out") return "timed_out";
+  if (result.status === "cancelled") return "cancelled";
+  if (result.status === "output_limit") return "partial";
+  return "failed";
+}
+
+export function normalizeScaGitleaksRunV1(
+  value: unknown,
+  binding: ScaNormalizationBindingV1
+): ScaStaticAnalyzerRunInputV1 {
+  const result = validateContract(ScaGitleaksResultV1Schema, value, "SCA Gitleaks result");
+  const status = gitleaksStatus(result);
+  let findings: unknown[] = [];
+  if (status === "succeeded") {
+    try {
+      const parsed: unknown = JSON.parse(result.raw_stdout);
+      if (!isUnknownArray(parsed)) throw new Error("not an array");
+      findings = parsed;
+    } catch {
+      throw new ScaServiceNormalizationError(
+        "invalid_result",
+        "Gitleaks raw output is invalid JSON"
+      );
+    }
+  }
+  const observations = findings.map((finding): ScaStaticObservationInputV1 => {
+    if (!isRecord(finding) || typeof finding.RuleID !== "string") {
+      throw new ScaServiceNormalizationError("invalid_finding", "Gitleaks finding is invalid");
+    }
+    const startLine = positiveLine(finding.StartLine, "Gitleaks start line");
+    const endLine = positiveLine(finding.EndLine ?? finding.StartLine, "Gitleaks end line");
+    return {
+      observation_kind: "secret_candidate",
+      path: repositoryPath(finding.File),
+      start_line: startLine,
+      end_line: endLine,
+      rule_id: finding.RuleID,
+      weakness_id: null,
+      package_coordinate: null,
+      advisory_id: null,
+      message: boundedMessage(finding.Description, `secret candidate: ${finding.RuleID}`),
+      evidence_sha256: sha256(canonicalJson(finding)),
+      raw_refs: [binding.raw_ref],
+    };
+  });
+  return analyzerRun({
+    analyzer_id: binding.analyzer_id,
+    analyzer_kind: "secret_scanner",
+    status,
+    tool_sha256: result.runtime_sha256,
+    configuration_sha256: result.configuration_sha256,
+    raw_refs: [binding.raw_ref],
+    observations:
+      status === "succeeded"
+        ? observations
+        : [
+            failureObservation(
+              `Gitleaks ${result.error_code}`,
+              result.raw_stdout_sha256,
+              binding.raw_ref
+            ),
+          ],
     failure_code: status === "succeeded" ? null : result.error_code,
   });
 }

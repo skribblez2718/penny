@@ -7,6 +7,7 @@ import { buildScaSourceCensusV1 } from "../src/adapters/source-census.js";
 import { buildScaSyntaxInventoryV1 } from "../src/adapters/syntax-inventory.js";
 import {
   normalizeScaDependencyRunV1,
+  normalizeScaGitleaksRunV1,
   normalizeScaOsvRunV1,
   normalizeScaSemgrepRunV1,
   normalizeScaSourceCensusRunV1,
@@ -103,6 +104,55 @@ describe("S-04-T4 service normalization", () => {
         message: "unescaped output",
       }),
     ]);
+  });
+
+  it("normalizes redacted Gitleaks candidates without discarding location provenance", () => {
+    const raw = JSON.stringify([
+      {
+        RuleID: "generic-api-key",
+        Description: "Generic API key",
+        File: "src/config.ts",
+        StartLine: 8,
+        EndLine: 8,
+        Secret: "REDACTED",
+        Fingerprint: "fixture",
+      },
+    ]);
+    const run = normalizeScaGitleaksRunV1(
+      {
+        schema_id: "penny.sca-gitleaks-result.v1",
+        schema_version: 1,
+        source_snapshot_sha256: SNAPSHOT,
+        configuration_sha256: CONFIG,
+        status: "findings",
+        tool_version: "fixture/1",
+        runtime_identity: "fixture-runtime",
+        runtime_sha256: TOOL,
+        invocation_sha256: sha256("gitleaks-invocation"),
+        exit_code: 1,
+        finding_count: 1,
+        raw_stdout: raw,
+        raw_stderr: "",
+        raw_stdout_sha256: sha256(raw),
+        raw_stderr_sha256: sha256(""),
+        truncated: false,
+        error_code: "none",
+      },
+      binding("gitleaks")
+    );
+    expect(run).toMatchObject({
+      analyzer_id: "gitleaks",
+      analyzer_kind: "secret_scanner",
+      status: "succeeded",
+      failure_code: null,
+    });
+    expect(run.observations[0]).toMatchObject({
+      observation_kind: "secret_candidate",
+      path: "src/config.ts",
+      start_line: 8,
+      end_line: 8,
+      rule_id: "generic-api-key",
+    });
   });
 
   it("normalizes deterministic source and dependency coverage", () => {
