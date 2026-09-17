@@ -141,6 +141,7 @@ const ScaM2BlockerV1Schema = Type.Object(
       Type.Literal("duplicate_analysis"),
       Type.Literal("analysis_incomplete"),
       Type.Literal("analysis_coverage_mismatch"),
+      Type.Literal("critic_lineage_mismatch"),
       Type.Literal("quorum_unresolved"),
       Type.Literal("file_coverage_incomplete"),
       Type.Literal("calibration_missing"),
@@ -492,6 +493,22 @@ export function buildScaM2ManifestV1(value: unknown): ScaM2ManifestV1 {
           `${profileId} result does not cover the exact target`
         );
       }
+    }
+
+    const primaryDigests = targetResults
+      .filter((analysis) => analysis.profile_id !== "critic")
+      .map((analysis) => analysis.result_sha256);
+    const critic = targetResults.find((analysis) => analysis.profile_id === "critic");
+    if (
+      primaryDigests.length === 2 &&
+      (critic === undefined || !exactSet(critic.reviewed_result_sha256s, primaryDigests))
+    ) {
+      addBlocker(
+        blockers,
+        "critic_lineage_mismatch",
+        target.target_id,
+        "Critic did not bind the exact two primary result digests"
+      );
     }
 
     for (const candidateId of target.candidate_ids) {

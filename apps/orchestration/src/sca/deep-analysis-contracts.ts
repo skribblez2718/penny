@@ -162,6 +162,7 @@ export const ScaCandidateAnalysisResultV1Schema = Type.Object(
     target_id: Type.String({ pattern: "^scatarget_[a-f0-9]{64}$" }),
     profile_id: ScaModelProfileIdV1Schema,
     model_admission_sha256: Sha256Schema,
+    reviewed_result_sha256s: Type.Array(Sha256Schema, { maxItems: 2 }),
     status: Type.Union([
       Type.Literal("completed"),
       Type.Literal("partial"),
@@ -381,6 +382,17 @@ export function sealScaCandidateAnalysisResultV1(
     throw new ScaDeepAnalysisContractError(
       "invalid_result",
       "SCA candidate analysis status and failure code are inconsistent"
+    );
+  }
+  if (
+    (input.profile_id === "critic" &&
+      (input.reviewed_result_sha256s.length !== 2 ||
+        new Set(input.reviewed_result_sha256s).size !== 2)) ||
+    (input.profile_id !== "critic" && input.reviewed_result_sha256s.length !== 0)
+  ) {
+    throw new ScaDeepAnalysisContractError(
+      "invalid_result",
+      "SCA critic must bind exactly two distinct primary results and primaries must bind none"
     );
   }
   const candidateIds = input.candidate_verdicts.map((verdict) => verdict.candidate_id);

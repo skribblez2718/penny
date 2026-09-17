@@ -43,6 +43,7 @@ function resultInput() {
     target_id: target.target_id,
     profile_id: "primary_a" as const,
     model_admission_sha256: "d".repeat(64),
+    reviewed_result_sha256s: [],
     status: "completed" as const,
     candidate_verdicts: target.candidate_ids.map((candidate_id) => ({
       candidate_id,

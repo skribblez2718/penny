@@ -86,6 +86,7 @@ function outputFor(call: ScaAnalysisModelCallV1, profile: "primary_a" | "primary
     target_id: TARGET_ID,
     profile_id: profile,
     model_admission_sha256: call.admission.admission_sha256,
+    reviewed_result_sha256s: profile === "critic" ? ["1".repeat(64), "2".repeat(64)] : [],
     status: "completed",
     candidate_verdicts: [],
     file_assessments: [],

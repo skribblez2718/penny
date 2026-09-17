@@ -182,8 +182,11 @@ function analysesFixture(
     critic: { disposition: "confirmed", severity: "medium", reachability: "unknown" },
   }
 ): ScaCandidateAnalysisResultV1[] {
-  return plan.targets.flatMap((target) =>
-    target.required_profiles.map((profile_id) => {
+  return plan.targets.flatMap((target) => {
+    const makeResult = (
+      profile_id: "primary_a" | "primary_b" | "critic",
+      reviewed_result_sha256s: string[]
+    ) => {
       const choice = choices[profile_id];
       if (choice === undefined) throw new Error("verdict choice missing");
       return sealScaCandidateAnalysisResultV1({
@@ -198,6 +201,7 @@ function analysesFixture(
         target_id: target.target_id,
         profile_id,
         model_admission_sha256: sha256(`${target.target_id}:${profile_id}`),
+        reviewed_result_sha256s,
         status: "completed",
         candidate_verdicts: target.candidate_ids.map((candidate_id) => ({
           candidate_id,
@@ -225,8 +229,12 @@ function analysesFixture(
         })),
         failure_code: null,
       });
-    })
-  );
+    };
+    const primaryA = makeResult("primary_a", []);
+    const primaryB = makeResult("primary_b", []);
+    const critic = makeResult("critic", [primaryA.result_sha256, primaryB.result_sha256]);
+    return [primaryA, primaryB, critic];
+  });
 }
 
 function calibration(result: "passed" | "failed" = "passed") {
@@ -349,6 +357,25 @@ describe("S-05-T4 M2 deep-analysis proof gate", () => {
         "file_plan_mismatch",
         "calibration_failed",
       ])
+    );
+  });
+
+  it("blocks a critic that did not review the exact two primary results", () => {
+    const input = proofInput();
+    const criticIndex = input.analyses.findIndex((analysis) => analysis.profile_id === "critic");
+    const critic = input.analyses[criticIndex];
+    if (critic === undefined) throw new Error("critic fixture missing");
+    const { result_sha256: _digest, ...unsigned } = critic;
+    const wrongCritic = sealScaCandidateAnalysisResultV1({
+      ...unsigned,
+      reviewed_result_sha256s: ["8".repeat(64), "9".repeat(64)],
+    });
+    const analyses = [...input.analyses];
+    analyses[criticIndex] = wrongCritic;
+    const manifest = buildScaM2ManifestV1({ ...input, analyses });
+    expect(manifest.status).toBe("blocked");
+    expect(manifest.blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "critic_lineage_mismatch" })])
     );
   });
 
