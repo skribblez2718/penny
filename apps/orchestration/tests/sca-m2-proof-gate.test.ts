@@ -129,7 +129,7 @@ function registryFixture() {
       provider_id: `provider-${index}`,
       model_id: `model-${index}`,
       runtime_identity_sha256: String(index + 1).repeat(64),
-      output_schema_id: "penny.sca-candidate-analysis.v1",
+      output_schema_id: "penny.sca-candidate-analysis-result.v1",
       output_schema_version: 1,
       budget: {
         max_input_tokens: 40_000,

@@ -9,7 +9,7 @@ const MAX_PROFILES = 3;
 
 export const SCA_MODEL_REGISTRY_SCHEMA = "penny.sca-model-registry.v1";
 export const SCA_MODEL_EXECUTION_REQUEST_SCHEMA = "penny.sca-model-execution-request.v1";
-export const SCA_CANDIDATE_ANALYSIS_SCHEMA = "penny.sca-candidate-analysis.v1";
+export const SCA_CANDIDATE_ANALYSIS_SCHEMA = "penny.sca-candidate-analysis-result.v1";
 
 export const SCA_REQUIRED_MODEL_PROFILES = Object.freeze([
   "primary_a",
