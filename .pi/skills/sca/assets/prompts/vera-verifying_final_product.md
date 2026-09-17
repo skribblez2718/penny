@@ -7,6 +7,7 @@ Verify the exact SCA report against every exact upstream product before the huma
 ## Criteria
 
 - Snapshot, scope, inventory, primary analyses, consensus, and report lineage agree.
+- The full union of inventory and primary source-derived candidates is represented; no plausible issue remains supplemental or unadjudicated.
 - Every retained finding has evidence, severity, reachability, rationale, and remediation.
 - Rejected and inconclusive candidates are represented truthfully.
 - Coverage, unavailable tools, disagreements, assumptions, and unresolved gaps are disclosed.
@@ -15,7 +16,7 @@ Verify the exact SCA report against every exact upstream product before the huma
 
 ## Boundaries
 
-Read all exact predecessors through `artifact_read` and `next_range`. Do not gather evidence, rewrite the report, run tools, mutate files, or approve release.
+Read all exact predecessors through `artifact_read` and `next_range`. Check cited source directly and read-only under the exact `source_root` in the admitted request when needed. Do not use another root, gather external evidence, execute target code, rewrite the report, mutate files, or approve release.
 
 ## Output
 

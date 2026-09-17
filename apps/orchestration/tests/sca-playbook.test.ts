@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -13,15 +14,19 @@ import {
   type JsonValue,
   type ModelClient,
 } from "../src/index.js";
-import { SCA_PLAYBOOK_REGISTRATION } from "../src/playbooks/sca.js";
+import { computeScaSourceSnapshotSha256, SCA_PLAYBOOK_REGISTRATION } from "../src/playbooks/sca.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const roots: string[] = [];
+let sourceRoot = "";
 let sequence = 0;
 
 function environment(): NodeJS.ProcessEnv {
   const root = mkdtempSync(path.join(tmpdir(), "penny-sca-playbook-"));
   roots.push(root);
+  sourceRoot = path.join(root, "source");
+  mkdirSync(sourceRoot);
+  writeFileSync(path.join(sourceRoot, "fixture.ts"), "exec(userInput);\neval(userInput);\n");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PENNY_STATE_ROOT: path.join(root, "state"),
@@ -43,6 +48,18 @@ function identity(runId: string) {
 }
 
 function start(runId: string) {
+  const bytes = readFileSync(path.join(sourceRoot, "fixture.ts"));
+  const scope = { include: [] as string[], exclude: [] as string[] };
+  const sourceSnapshotSha256 = computeScaSourceSnapshotSha256({
+    scope,
+    files: [
+      {
+        path: "fixture.ts",
+        byte_length: bytes.byteLength,
+        content_sha256: createHash("sha256").update(bytes).digest("hex"),
+      },
+    ],
+  });
   return {
     schema_version: 2 as const,
     action: "start" as const,
@@ -50,9 +67,9 @@ function start(runId: string) {
     goal: "Assess the admitted repository snapshot for source-composition security weaknesses.",
     constraints: {
       schema_version: 1,
-      source_root: PROJECT_ROOT,
-      source_snapshot_sha256: "a".repeat(64),
-      scope: { include: ["apps"], exclude: ["node_modules"] },
+      source_root: sourceRoot,
+      source_snapshot_sha256: sourceSnapshotSha256,
+      scope,
       execution_mode: "static_only",
       primary_a_model: "provider/model-a",
       primary_b_model: "provider/model-b",
@@ -69,8 +86,12 @@ function summary(value: Record<string, JsonValue>, body = "Stage output."): stri
 
 class ScriptedScaClient implements ModelClient {
   readonly invocations: AgentInvocation[] = [];
+  private finalVerificationIndex = 0;
 
-  constructor(private readonly consensus: "PASS" | "GAP" = "PASS") {}
+  constructor(
+    private readonly consensus: "PASS" | "GAP" = "PASS",
+    private readonly finalVerification: readonly ("PASS" | "GAP")[] = ["PASS"]
+  ) {}
 
   runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
     this.invocations.push(invocation);
@@ -116,13 +137,24 @@ class ScriptedScaClient implements ModelClient {
       });
     }
     if (invocation.stateId === "verifying_final_product") {
-      return Promise.resolve({ text: summary({ verdict: "PASS", gaps: [] }, "Final PASS.") });
+      const verdict = this.finalVerification[this.finalVerificationIndex] ?? "PASS";
+      this.finalVerificationIndex += 1;
+      return Promise.resolve({
+        text: summary(
+          { verdict, gaps: verdict === "PASS" ? [] : ["Report count is inconsistent."] },
+          `Final ${verdict}.`
+        ),
+      });
     }
     throw new Error(`unexpected SCA state '${invocation.stateId}'`);
   }
 }
 
 type TerminalDirective = Extract<Directive, { result: Record<string, JsonValue> }>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 function terminal(value: Directive, action: "complete" | "incomplete"): TerminalDirective {
   if (value.action !== action) {
@@ -171,14 +203,32 @@ describe("S-09 SCA skill playbook", () => {
         )
         .map((invocation) => invocation.modelOverride)
     ).toEqual(["provider/model-c", "provider/model-c"]);
+    expect(
+      client.invocations.find((invocation) => invocation.stateId === "reviewing_consensus")?.task
+    ).toContain("concrete adverse security consequences");
+    expect(
+      client.invocations.find((invocation) => invocation.stateId === "analyzing_candidates")?.task
+    ).toContain("do not create a supplemental or unadjudicated tier");
     const run = service.checkpointer.loadRunById(runId);
     const inventory = run?.selectedArtifacts.find(
       (artifact) => artifact.phase === "inventorying_static"
     );
     if (inventory === undefined) throw new Error("SCA static inventory artifact is absent");
+    const inventoryContent: unknown = JSON.parse(
+      service.artifacts.readById(inventory.artifact_id).toString("utf8")
+    );
+    if (!isRecord(inventoryContent) || !Array.isArray(inventoryContent.candidates)) {
+      throw new Error("SCA static inventory content is malformed");
+    }
+    expect(inventoryContent).toMatchObject({
+      model_invocation_count: 0,
+      source_snapshot_sha256: inventoryContent.computed_source_snapshot_sha256,
+    });
     expect(
-      JSON.parse(service.artifacts.readById(inventory.artifact_id).toString("utf8"))
-    ).toMatchObject({ model_invocation_count: 0, source_snapshot_sha256: "a".repeat(64) });
+      inventoryContent.candidates.map((candidate) =>
+        isRecord(candidate) ? candidate.rule_id : undefined
+      )
+    ).toEqual(["javascript.child-process-exec", "javascript.dynamic-eval"]);
     const report = run?.selectedArtifacts.find(
       (artifact) => artifact.phase === "materializing_report"
     );
@@ -283,6 +333,53 @@ describe("S-09 SCA skill playbook", () => {
         "complete"
       ).met
     ).toBe(true);
+  });
+
+  it("revises a report once when final verification finds a correctable gap", async () => {
+    const client = new ScriptedScaClient("PASS", ["GAP", "PASS"]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: SCA_PLAYBOOK_REGISTRATION,
+    });
+    const awaiting = await service.execute(start(`run-sca-report-repair-${++sequence}`));
+    expect(awaiting.action).toBe("await_user");
+    expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
+      "analyzing_candidates",
+      "analyzing_candidates",
+      "reviewing_consensus",
+      "materializing_report",
+      "verifying_final_product",
+      "materializing_report",
+      "verifying_final_product",
+    ]);
+    const secondMaterialization = client.invocations.filter(
+      (invocation) => invocation.stateId === "materializing_report"
+    )[1];
+    expect(
+      secondMaterialization?.inputArtifacts.some(
+        (artifact) => artifact.phase === "verifying_final_product"
+      )
+    ).toBe(true);
+  });
+
+  it("rejects a source snapshot digest mismatch before model work", async () => {
+    const client = new ScriptedScaClient();
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: SCA_PLAYBOOK_REGISTRATION,
+    });
+    const request = start(`run-sca-digest-reject-${++sequence}`);
+    await expect(
+      service.execute({
+        ...request,
+        constraints: { ...request.constraints, source_snapshot_sha256: "0".repeat(64) },
+      })
+    ).rejects.toThrow(/source snapshot digest mismatch/u);
+    expect(client.invocations).toEqual([]);
   });
 
   it("rejects non-distinct model profiles before model work", async () => {

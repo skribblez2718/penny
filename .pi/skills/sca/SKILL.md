@@ -140,7 +140,9 @@ The request port is `penny.sca-request.v1` v1. The source root and immutable sna
 
 The wrapper declares intent only. The orchestration engine owns admission, a zero-model host static inventory, durable state, exact artifact handoff, two model-pinned primary branches, critic review, report production, final verification, recovery, and the release-approval pause.
 
-The caller supplies an absolute source root, immutable snapshot digest, normalized repository-relative scope, execution mode, and three distinct pinned model identifiers. The skill does not modify the target. `propose_stronger_evidence` may identify evidence needs; it does not authorize execution.
+The caller supplies an absolute source root, immutable snapshot digest, normalized repository-relative scope, execution mode, and three distinct pinned model identifiers. The host recomputes the digest before any model call and rejects partial or changed snapshots. The digest is SHA-256 over canonical JSON containing `schema_id: "penny.sca-source-snapshot.v1"`, `schema_version: 1`, the normalized scope, and the lexically sorted file records `{path, byte_length, content_sha256}`; it excludes the absolute root so the same bytes remain portable.
+
+The bounded profile rejects unreadable input, more than 100,000 files, files over 2 MiB, or total admitted bytes over 128 MiB rather than silently weakening snapshot identity. Models may read only the admitted root with read-only tools. The skill does not modify the target. `propose_stronger_evidence` may identify evidence needs; it does not authorize execution.
 
 ## Terminal Truth
 

@@ -2,7 +2,7 @@
 
 ## Mission
 
-Materialize one complete SCA report from the exact verified inventory, independent analyses, and consensus product. Return the report content; do not write it to the filesystem.
+Materialize one complete SCA report from the exact verified inventory, independent analyses, and consensus product. Preserve the consensus disposition of the full union of heuristic and source-derived candidates; do not create a supplemental or unadjudicated candidate tier. When an earlier report and final-verification artifact are supplied, revise the report to resolve every exact verifier gap without changing evidence-backed dispositions. Return the report content; do not write it to the filesystem.
 
 ## Required report content
 

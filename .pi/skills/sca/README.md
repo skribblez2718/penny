@@ -4,8 +4,8 @@
 
 ## Active flow
 
-1. Host admission validates the absolute source root, immutable snapshot digest, normalized scope, execution mode, and three distinct pinned model identifiers.
-2. The host creates a bounded read-only source census and heuristic static inventory with `model_invocation_count: 0`.
+1. Host admission validates the absolute source root, normalized scope, execution mode, and three distinct pinned model identifiers, then recomputes and verifies the portable canonical snapshot digest.
+2. The host creates a bounded read-only source census and language-scoped heuristic static inventory with `model_invocation_count: 0`; incomplete snapshot reads fail closed.
 3. Two independent Annie branches analyze the same exact inventory using distinct caller-pinned models.
 4. Vera reviews consensus and blocks unresolved evidence conflicts.
 5. Skribble materializes the report from exact predecessors without filesystem writes.

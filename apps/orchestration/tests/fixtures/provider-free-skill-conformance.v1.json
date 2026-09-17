@@ -461,6 +461,67 @@
           "full_name": "P3 semantic product activation rejects an empty semantic-draft turn before persistence or routing repair"
         }
       ]
+    },
+    {
+      "skill_name": "sca",
+      "checks": [
+        {
+          "check_id": "sca-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/sca-source-admission.test.ts",
+          "full_name": "admits exact declarations with stable replay, deterministic order, and no discovery"
+        },
+        {
+          "check_id": "sca-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/sca-config.test.ts",
+          "full_name": "S-00-T2 SCA configuration boundary rejects every all-zero config binding and target digest placeholder"
+        },
+        {
+          "check_id": "sca-boundary",
+          "category": "boundary",
+          "tier": 1,
+          "test_file": "tests/sca-static-normalization.test.ts",
+          "full_name": "S-04-T4 static normalization and M1 gate passes only the complete model-free R1 analyzer set and remains non-releasable"
+        },
+        {
+          "check_id": "sca-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/sca-config.test.ts",
+          "full_name": "S-00-T2 SCA configuration boundary normalizes set-like roots and capabilities before semantic hashing"
+        },
+        {
+          "check_id": "sca-input-mutation",
+          "category": "input_mutation",
+          "tier": 2,
+          "test_file": "tests/sca-playbook.test.ts",
+          "full_name": "S-09 SCA skill playbook rejects a source snapshot digest mismatch before model work"
+        },
+        {
+          "check_id": "sca-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/sca-release-gate.test.ts",
+          "full_name": "S-08 release package and M5 gate detects package, decision, and M5 digest tamper"
+        },
+        {
+          "check_id": "sca-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/sca-playbook.test.ts",
+          "full_name": "S-09 SCA skill playbook runs inventory, two pinned primary branches, critic review, report verification, and release gate"
+        },
+        {
+          "check_id": "sca-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/sca-playbook.test.ts",
+          "full_name": "S-09 SCA skill playbook terminates honestly when critic consensus has an unresolved gap"
+        }
+      ]
     }
   ]
 }
