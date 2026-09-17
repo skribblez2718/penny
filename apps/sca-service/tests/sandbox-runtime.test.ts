@@ -6,6 +6,7 @@ import {
   buildScaStrongerExecutionProposalV1,
   sealScaHumanAuthorizationDecisionV1,
 } from "../../orchestration/src/sca/human-authorization.js";
+import { attachScaExecutionEvidenceV1 } from "../src/evidence-tools.js";
 import {
   ScaSandboxRuntimeError,
   buildScaSandboxProfileV1,
@@ -200,6 +201,26 @@ describe("S-07-T1 qualified evidence sandbox runtime", () => {
       arguments: ["run", "--rm", "--network=none", "qualified-node-image", "test"],
     });
     expect(validateScaEvidenceExecutionReceiptV1(receipt)).toEqual(receipt);
+    const attached = attachScaExecutionEvidenceV1({
+      schema_id: "penny.sca-evidence-attachment-request.v1",
+      schema_version: 1,
+      tenant_id: "tenant-a",
+      project_id: "project-a",
+      finding_set_sha256: "6".repeat(64),
+      m3_manifest_sha256: "7".repeat(64),
+      authorization: source.authorization,
+      execution_receipt: receipt,
+      finding_ids: [`scafind_${"8".repeat(64)}`],
+      gap_ids: [],
+      effect: "supports_finding",
+      summary: "The qualified test command completed successfully.",
+    });
+    expect(attached).toMatchObject({
+      execution_receipt_sha256: receipt.evidence_sha256,
+      authorization_sha256: source.authorization.authorization_sha256,
+      execution_status: "succeeded",
+      effect: "supports_finding",
+    });
   });
 
   it("denies capability, argument, and action-plan drift before invoking an executor", async () => {
