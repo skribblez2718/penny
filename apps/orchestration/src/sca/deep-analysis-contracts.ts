@@ -361,20 +361,33 @@ export function validateScaDeepAnalysisPlanV1(value: unknown): ScaDeepAnalysisPl
 export function sealScaCandidateAnalysisResultV1(
   value: Omit<ScaCandidateAnalysisResultV1, "result_sha256">
 ): ScaCandidateAnalysisResultV1 {
+  let input: Omit<ScaCandidateAnalysisResultV1, "result_sha256">;
+  try {
+    input = validateContract(
+      Type.Omit(ScaCandidateAnalysisResultV1Schema, ["result_sha256"]),
+      value,
+      "SCA candidate analysis result input"
+    );
+  } catch (error) {
+    throw new ScaDeepAnalysisContractError(
+      "invalid_result",
+      error instanceof Error ? error.message : "SCA candidate analysis result input is invalid"
+    );
+  }
   if (
-    (value.status === "completed" && value.failure_code !== null) ||
-    (value.status !== "completed" && value.failure_code === null)
+    (input.status === "completed" && input.failure_code !== null) ||
+    (input.status !== "completed" && input.failure_code === null)
   ) {
     throw new ScaDeepAnalysisContractError(
       "invalid_result",
       "SCA candidate analysis status and failure code are inconsistent"
     );
   }
-  const candidateIds = value.candidate_verdicts.map((verdict) => verdict.candidate_id);
-  const filePaths = value.file_assessments.map((assessment) => assessment.path);
+  const candidateIds = input.candidate_verdicts.map((verdict) => verdict.candidate_id);
+  const filePaths = input.file_assessments.map((assessment) => assessment.path);
   uniqueSorted(candidateIds, "candidate_collision");
   uniqueSorted(filePaths, "file_collision");
-  for (const verdict of value.candidate_verdicts) {
+  for (const verdict of input.candidate_verdicts) {
     for (const evidence of verdict.evidence) {
       validatePath(evidence.path);
       if (evidence.end_line < evidence.start_line) {
@@ -385,8 +398,8 @@ export function sealScaCandidateAnalysisResultV1(
       }
     }
   }
-  for (const assessment of value.file_assessments) validatePath(assessment.path);
-  const unsigned: UnsignedResult = { ...value };
+  for (const assessment of input.file_assessments) validatePath(assessment.path);
+  const unsigned: UnsignedResult = { ...input };
   return validateContract(
     ScaCandidateAnalysisResultV1Schema,
     { ...unsigned, result_sha256: resultDigest(unsigned) },
