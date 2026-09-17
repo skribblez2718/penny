@@ -25,13 +25,13 @@ const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const temporaryRoots: string[] = [];
 
 const CURRENT_BOUND_REGISTRATION_DIGESTS = {
-  assess: "cb9c0500134d95d3e2562d00caf49f79decc502638475784b3a76c52291e7d7a",
-  decide: "8e6891dda8ed8337b77c04d53661d3186daebda5d7cf802af9ccca1b059fa90b",
-  diagnose: "5989322bcc78c2f09bf41f95bf14e86efc18716eb0e495d6db7de53bd5aeee21",
-  "knowledge-base": "a41be703cb88b021666355ebf287f821605370ca4017da1b6af03e7df7d9379c",
-  plan: "422ef9b935b5d8e9c2b2f934db387418c40d5d83086faad3c1894ac6c589a19b",
-  produce: "678136f99467d2c9853c4d36267cda41af0d7371da69f60c58bb988209e74155",
-  research: "784be35e65d6fa3bdaf07c03fbf24a8f4683c8939c3d1a32fcb46538f51d3cb4",
+  assess: "0e44d29a22f80f83b67c3767e091b85b732ccfa3c6876f1d9df177dd169ad713",
+  decide: "cba30d3ff954c6d8ae981483467311053b9a4f88c9621f406fb1b186c7660bbb",
+  diagnose: "63eec4f14475e8664dd9773fb9215cc50c4ac981a4ad68cbe4c5273564c406b6",
+  "knowledge-base": "1beebde1a43d39b41d1ef489c54157becc9674c81fe329c6e6e14cf15ee4c1e4",
+  plan: "012cc04b7f0d677f127818e5e85a80cc8b8c02c4bed8a6b32e9aa16e1622eebf",
+  produce: "7c9dff99606856244b4cbe36f24d1a27d3bd650958e955e40b201e7c3af0d0c9",
+  research: "49df32696f82b057eb2193c630bb6ea59d6a7ca73474fcbd4248b32252928d17",
 } as const;
 
 const WRITING_DOCUMENT_SOURCES = [

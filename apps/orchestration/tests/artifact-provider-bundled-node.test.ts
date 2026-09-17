@@ -26,6 +26,8 @@ interface BundledProbeRecord {
   readonly node_version: string;
   readonly artifact_extension_loaded: boolean;
   readonly artifact_extension_errors: readonly string[];
+  readonly sca_extension_loaded: boolean;
+  readonly sca_extension_errors: readonly string[];
   readonly yaml_tools: readonly string[];
   readonly requested_tools: readonly string[];
   readonly active_tools: readonly string[];
@@ -82,6 +84,7 @@ function requireBundledProbeRecord(value: unknown): BundledProbeRecord {
   if (
     typeof value.node_version !== "string" ||
     typeof value.artifact_extension_loaded !== "boolean" ||
+    typeof value.sca_extension_loaded !== "boolean" ||
     !Array.isArray(scenarios) ||
     !scenarios.every(isProbeScenario)
   ) {
@@ -91,6 +94,8 @@ function requireBundledProbeRecord(value: unknown): BundledProbeRecord {
     node_version: value.node_version,
     artifact_extension_loaded: value.artifact_extension_loaded,
     artifact_extension_errors: requireStringArray(value, "artifact_extension_errors"),
+    sca_extension_loaded: value.sca_extension_loaded,
+    sca_extension_errors: requireStringArray(value, "sca_extension_errors"),
     yaml_tools: requireStringArray(value, "yaml_tools"),
     requested_tools: requireStringArray(value, "requested_tools"),
     active_tools: requireStringArray(value, "active_tools"),
@@ -220,6 +225,11 @@ const artifactExtension = loaded.extensions.find((extension) => extension.resolv
 const artifactExtensionErrors = loaded.errors
   .filter((error) => path.resolve(error.path) === artifactPath)
   .map((error) => error.error);
+const scaPath = path.join(projectRoot, ".pi", "extensions", "sca", "index.ts");
+const scaExtension = loaded.extensions.find((extension) => extension.resolvedPath === scaPath);
+const scaExtensionErrors = loaded.errors
+  .filter((error) => path.resolve(error.path) === scaPath)
+  .map((error) => error.error);
 const created = await createAgentSession({
   cwd: projectRoot,
   sessionManager: SessionManager.inMemory(projectRoot),
@@ -289,6 +299,11 @@ process.stdout.write(JSON.stringify({
   artifact_extension_loaded:
     artifactExtension?.tools.has("artifact_read") === true,
   artifact_extension_errors: artifactExtensionErrors,
+  sca_extension_loaded:
+    scaExtension?.tools.has("sca_source_query") === true &&
+    scaExtension?.tools.has("sca_graph_query") === true &&
+    scaExtension?.tools.has("sca_application_test") === true,
+  sca_extension_errors: scaExtensionErrors,
   yaml_tools: requestedTools,
   requested_tools: requestedTools,
   active_tools: activeTools,
@@ -357,10 +372,12 @@ describe("bundled Node artifact provider", () => {
 
       expect(record.node_version).toBe(process.version);
       expect(record.artifact_extension_errors).toEqual([]);
+      expect(record.sca_extension_errors).toEqual([]);
       expect(record.yaml_tools).toContain("artifact_read");
       expect(record.requested_tools).toEqual(record.yaml_tools);
       expect(record.active_tools).toEqual(record.yaml_tools);
       expect(record.artifact_extension_loaded).toBe(true);
+      expect(record.sca_extension_loaded).toBe(true);
       expect(record.missing).toEqual([]);
       expect(record.added).toEqual([]);
       expect(record.scenarios).toEqual([

@@ -1,6 +1,5 @@
 import { Type, type Static, type TSchema } from "typebox";
 
-import { currentArtifactRef } from "../artifact-store.js";
 import { ArtifactRefSchema, type CurrentArtifactRef, validateContract } from "../contracts.js";
 import { canonicalJson, sha256 } from "../canonical-json.js";
 import {
@@ -17,6 +16,45 @@ const REPOSITORY_PATH_MAX_BYTES = 1_024;
 const SAFE_TEXT_MAX_BYTES = 1_024;
 const MAX_JSON_DEPTH = 16;
 const MAX_JSON_NODES = 4_096;
+
+/**
+ * Keep broker contract validation independent of the artifact store and its
+ * runtime state dependencies so extensions can load on bundled Node paths.
+ */
+function currentScaArtifactRef(value: unknown, label: string): CurrentArtifactRef {
+  const ref = validateContract(ArtifactRefSchema, value, label);
+  const normalized: CurrentArtifactRef = {
+    schema_version: 2,
+    artifact_id: ref.artifact_id,
+    run_id: ref.run_id,
+    phase: ref.phase,
+    branch_id: ref.branch_id,
+    kind: ref.kind,
+    operation_id: ref.operation_id,
+    version: ref.version,
+    producer: ref.producer,
+    media_type: ref.media_type,
+    ...(ref.content_schema === undefined ? {} : { content_schema: ref.content_schema }),
+    byte_length: ref.byte_length,
+    content_digest: ref.content_digest,
+    store_ref: ref.store_ref,
+  };
+  const identity = {
+    branch_id: normalized.branch_id,
+    kind: normalized.kind,
+    operation_id: normalized.operation_id,
+    phase: normalized.phase,
+    run_id: normalized.run_id,
+    version: normalized.version,
+  };
+  if (normalized.artifact_id !== `art_${sha256(canonicalJson(identity))}`) {
+    throw new Error(`${label}.artifact_id does not match its canonical identity`);
+  }
+  if (normalized.store_ref !== `artifact://sha256/${normalized.content_digest}`) {
+    throw new Error(`${label}.store_ref does not match content_digest`);
+  }
+  return normalized;
+}
 
 export const SCA_BROKER_CONTRACT_LIMITS_V1 = Object.freeze({
   max_request_bytes: 262_144,
@@ -1093,7 +1131,7 @@ function canonicalArtifactRef(
 ): CurrentArtifactRef {
   let ref: CurrentArtifactRef;
   try {
-    ref = currentArtifactRef(value, label);
+    ref = currentScaArtifactRef(value, label);
   } catch (error) {
     fail(label, error instanceof Error ? error.message : "artifact ref is not canonical");
   }
