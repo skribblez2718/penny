@@ -5,6 +5,7 @@ import type { ArtifactRef } from "../src/contracts.js";
 import { buildScaModelRegistryV1 } from "../src/sca/agent-models.js";
 import {
   buildScaDeepAnalysisPlanV1,
+  scaDiscoveredCandidateId,
   sealScaCandidateAnalysisResultV1,
   type ScaCandidateAnalysisResultV1,
   type ScaDeepAnalysisPlanV1,
@@ -209,6 +210,7 @@ function analysesFixture(
           confidence: "high",
           title: "Fixture finding",
           rationale: "Fixture source and sink support the disposition.",
+          remediation: "Use a non-shell API with fixed arguments and validated input.",
           evidence: [
             {
               path: "src/app.ts",
@@ -224,7 +226,7 @@ function analysesFixture(
         file_assessments: target.required_files.map((path) => ({
           path,
           coverage: "complete",
-          candidate_ids_created: [],
+          discovered_candidates: [],
           gaps: [],
         })),
         failure_code: null,
@@ -358,6 +360,88 @@ describe("S-05-T4 M2 deep-analysis proof gate", () => {
         "calibration_failed",
       ])
     );
+  });
+
+  it("admits a full-file discovery only when a second analysis concurs", () => {
+    const input = proofInput();
+    const fileTarget = input.plan.targets.find(
+      (target) => target.target_kind === "source_file_batch"
+    );
+    if (fileTarget === undefined) throw new Error("file target fixture missing");
+    const targetAnalyses = input.analyses.filter(
+      (analysis) => analysis.target_id === fileTarget.target_id
+    );
+    const primaryA = targetAnalyses.find((analysis) => analysis.profile_id === "primary_a");
+    const primaryB = targetAnalyses.find((analysis) => analysis.profile_id === "primary_b");
+    const critic = targetAnalyses.find((analysis) => analysis.profile_id === "critic");
+    if (primaryA === undefined || primaryB === undefined || critic === undefined) {
+      throw new Error("file analysis fixture missing");
+    }
+    const identity = {
+      path: "src/app.ts",
+      start_line: 20,
+      end_line: 24,
+      weakness_id: "CWE-918",
+    };
+    const discovered = {
+      candidate_id: scaDiscoveredCandidateId(identity),
+      ...identity,
+      disposition: "confirmed" as const,
+      severity: "high" as const,
+      reachability: "reachable" as const,
+      confidence: "high" as const,
+      title: "Server-side request forgery",
+      rationale: "An untrusted URL reaches the outbound client.",
+      remediation: "Allowlist destinations and block private address ranges after resolution.",
+      evidence: [
+        {
+          path: "src/app.ts",
+          start_line: 20,
+          end_line: 24,
+          evidence_sha256: sha256("ssrf-evidence"),
+          claim: "The request URL is attacker-controlled.",
+        },
+      ],
+      gaps: [],
+      requested_actions: [],
+    };
+    const withDiscovery = (
+      analysis: ScaCandidateAnalysisResultV1,
+      reviewed_result_sha256s: string[]
+    ) => {
+      const { result_sha256: _digest, ...unsigned } = analysis;
+      return sealScaCandidateAnalysisResultV1({
+        ...unsigned,
+        reviewed_result_sha256s,
+        file_assessments: unsigned.file_assessments.map((assessment) => ({
+          ...assessment,
+          discovered_candidates: [discovered],
+        })),
+      });
+    };
+    const revisedA = withDiscovery(primaryA, []);
+    const revisedCritic = withDiscovery(critic, [revisedA.result_sha256, primaryB.result_sha256]);
+    const analyses = input.analyses.map((analysis) =>
+      analysis.target_id !== fileTarget.target_id
+        ? analysis
+        : analysis.profile_id === "primary_a"
+          ? revisedA
+          : analysis.profile_id === "critic"
+            ? revisedCritic
+            : analysis
+    );
+    const manifest = buildScaM2ManifestV1({ ...input, analyses });
+    expect(manifest.status).toBe("passed");
+    expect(manifest.candidate_consensus).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          candidate_id: discovered.candidate_id,
+          status: "provisional",
+          agreeing_profiles: ["critic", "primary_a"],
+        }),
+      ])
+    );
+    expect(manifest.file_coverage[0]?.candidate_ids_created).toContain(discovered.candidate_id);
   });
 
   it("blocks a critic that did not review the exact two primary results", () => {

@@ -53,6 +53,7 @@ function resultInput() {
       confidence: "high" as const,
       title: "Validated injection path",
       rationale: "The source and sink are connected without a neutralizing control.",
+      remediation: "Replace dynamic execution with an allowlisted operation dispatcher.",
       evidence: [
         {
           path: "src/example.ts",

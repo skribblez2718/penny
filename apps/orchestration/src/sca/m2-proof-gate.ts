@@ -532,8 +532,8 @@ export function buildScaM2ManifestV1(value: unknown): ScaM2ManifestV1 {
         const assessment = analysis.file_assessments.find((entry) => entry.path === file);
         if (assessment?.coverage === "complete") completedProfiles.push(analysis.profile_id);
         else incompleteProfiles.push(analysis.profile_id);
-        for (const candidateId of assessment?.candidate_ids_created ?? []) {
-          candidateIds.add(candidateId);
+        for (const candidate of assessment?.discovered_candidates ?? []) {
+          candidateIds.add(candidate.candidate_id);
         }
       }
       const complete = completedProfiles.length === SCA_REQUIRED_MODEL_PROFILES.length;
@@ -552,6 +552,26 @@ export function buildScaM2ManifestV1(value: unknown): ScaM2ManifestV1 {
         incomplete_profiles: incompleteProfiles.sort(compareUtf8),
         candidate_ids_created: [...candidateIds].sort(compareUtf8),
       });
+    }
+
+    const discovered = new Map<
+      string,
+      { profile_id: ScaCandidateAnalysisResultV1["profile_id"]; verdict: Verdict }[]
+    >();
+    for (const analysis of targetResults) {
+      for (const assessment of analysis.file_assessments) {
+        for (const candidate of assessment.discovered_candidates) {
+          discovered.set(candidate.candidate_id, [
+            ...(discovered.get(candidate.candidate_id) ?? []),
+            { profile_id: analysis.profile_id, verdict: candidate },
+          ]);
+        }
+      }
+    }
+    for (const [candidateId, verdicts] of discovered) {
+      const resolved = consensusForCandidate(candidateId, verdicts, blockers);
+      candidateConsensus.push(resolved.consensus);
+      dissent.push(...resolved.dissent);
     }
   }
   calibrationBlockers(input.calibration_evidence, blockers);

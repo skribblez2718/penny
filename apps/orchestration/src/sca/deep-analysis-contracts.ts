@@ -124,11 +124,24 @@ const ScaCandidateVerdictV1Schema = Type.Object(
     confidence: Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
     title: Type.String({ minLength: 1, maxLength: 512 }),
     rationale: Type.String({ minLength: 1, maxLength: MAX_TEXT }),
+    remediation: Type.String({ minLength: 1, maxLength: MAX_TEXT }),
     evidence: Type.Array(ScaEvidenceClaimV1Schema, { maxItems: MAX_ITEMS }),
     gaps: Type.Array(Type.String({ minLength: 1, maxLength: MAX_TEXT }), {
       maxItems: MAX_ITEMS,
     }),
     requested_actions: Type.Array(ScaRequestedActionV1Schema, { maxItems: MAX_ITEMS }),
+  },
+  { additionalProperties: false }
+);
+
+const ScaDiscoveredCandidateV1Schema = Type.Object(
+  {
+    ...ScaCandidateVerdictV1Schema.properties,
+    candidate_id: Type.String({ pattern: "^scadisc_[a-f0-9]{64}$" }),
+    path: CanonicalSourcePathSchema,
+    start_line: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+    end_line: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+    weakness_id: Type.Union([Type.String({ minLength: 1, maxLength: 256 }), Type.Null()]),
   },
   { additionalProperties: false }
 );
@@ -141,7 +154,9 @@ const ScaFileAssessmentV1Schema = Type.Object(
       Type.Literal("partial"),
       Type.Literal("failed"),
     ]),
-    candidate_ids_created: Type.Array(OpaqueIdSchema, { maxItems: MAX_ITEMS }),
+    discovered_candidates: Type.Array(ScaDiscoveredCandidateV1Schema, {
+      maxItems: MAX_ITEMS,
+    }),
     gaps: Type.Array(Type.String({ minLength: 1, maxLength: MAX_TEXT }), {
       maxItems: MAX_ITEMS,
     }),
@@ -271,6 +286,22 @@ function planDigest(value: UnsignedPlan): string {
 
 function resultDigest(value: UnsignedResult): string {
   return sha256(canonicalJson(value));
+}
+
+export function scaDiscoveredCandidateId(value: {
+  readonly path: string;
+  readonly start_line: number;
+  readonly end_line: number;
+  readonly weakness_id: string | null;
+}): string {
+  return `scadisc_${sha256(
+    canonicalJson({
+      path: value.path,
+      start_line: value.start_line,
+      end_line: value.end_line,
+      weakness_id: value.weakness_id,
+    })
+  )}`;
 }
 
 export function buildScaDeepAnalysisPlanV1(value: unknown): ScaDeepAnalysisPlanV1 {
@@ -410,7 +441,25 @@ export function sealScaCandidateAnalysisResultV1(
       }
     }
   }
-  for (const assessment of input.file_assessments) validatePath(assessment.path);
+  for (const assessment of input.file_assessments) {
+    validatePath(assessment.path);
+    const discoveredIds = new Set<string>();
+    for (const discovered of assessment.discovered_candidates) {
+      validatePath(discovered.path);
+      if (
+        discovered.path !== assessment.path ||
+        discovered.end_line < discovered.start_line ||
+        discovered.candidate_id !== scaDiscoveredCandidateId(discovered) ||
+        discoveredIds.has(discovered.candidate_id)
+      ) {
+        throw new ScaDeepAnalysisContractError(
+          "invalid_result",
+          "SCA discovered candidate identity, location, or uniqueness is invalid"
+        );
+      }
+      discoveredIds.add(discovered.candidate_id);
+    }
+  }
   const unsigned: UnsignedResult = { ...input };
   return validateContract(
     ScaCandidateAnalysisResultV1Schema,
