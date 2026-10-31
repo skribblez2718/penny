@@ -4,50 +4,65 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { canonicalJson } from "../src/checkpointer.js";
+import { canonicalJson } from "../dist/checkpointer.js";
 import {
   validateChildProviderQualificationManifest,
   validateChildWorkflowCallRecord,
   validateInitialChildWorkflowDirective,
-} from "../src/child-workflows/contracts.js";
+} from "../dist/child-workflows/contracts.js";
 import {
   AUTHORIZED_PLAYBOOK_NAMES,
   bindGenericChildYamlAuthority,
   PLAYBOOK_REGISTRY,
   resolvePlaybook,
   runtimeRegistrationSha256,
-  type PlaybookRegistrationV1,
-} from "../src/playbooks/registry.js";
-import { OrchestrationService } from "../src/service.js";
-import { initializePennyState } from "../src/state/setup.js";
+  type PlaybookRegistration,
+} from "../dist/playbooks/registry.js";
+import { OrchestrationService } from "../dist/service.js";
+import { initializePennyState } from "../dist/state/setup.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const temporaryRoots: string[] = [];
 
+// Current pins include source-SUMMARY preservation, exact-fingerprint opt-ins, the closed
+// UNVERIFIABLE variant and changed review prompts. Produce retains its stronger review-core
+// policy; Knowledge Base is unchanged. These are not qualification or historical-state migration.
 const CURRENT_BOUND_REGISTRATION_DIGESTS = {
-  assess: "0e44d29a22f80f83b67c3767e091b85b732ccfa3c6876f1d9df177dd169ad713",
-  decide: "cba30d3ff954c6d8ae981483467311053b9a4f88c9621f406fb1b186c7660bbb",
-  diagnose: "63eec4f14475e8664dd9773fb9215cc50c4ac981a4ad68cbe4c5273564c406b6",
-  "knowledge-base": "1beebde1a43d39b41d1ef489c54157becc9674c81fe329c6e6e14cf15ee4c1e4",
-  plan: "012cc04b7f0d677f127818e5e85a80cc8b8c02c4bed8a6b32e9aa16e1622eebf",
-  produce: "7c9dff99606856244b4cbe36f24d1a27d3bd650958e955e40b201e7c3af0d0c9",
-  research: "49df32696f82b057eb2193c630bb6ea59d6a7ca73474fcbd4248b32252928d17",
+  assess: "d11684e4d7ab2852f0e5c10e77c647d8df5b20b0bc85deff3ba43c97e9f80868",
+  decide: "dc679ff08d0ee0ce0b9b37070f1041f20d8abf12b25915f8daeb5a87cc2128b9",
+  define: "8c2034bb2fe39524a6a3c19a9b896e58dae553761c232afeb3476c5b61174545",
+  diagnose: "49d5786bc474285ace7c1b4d7f6319b26a0431b9ea536a649eec4f3491791317",
+  "knowledge-base": "3eac9690352d2894c13c1763873f141a21551b6c20154bccf5f24d159973315c",
+  plan: "0379a875c84be0c5deb0a2844ec37940114daa60f95ae32ba19bcb40a33433e7",
+  produce: "23e62d408a10a4eb6a3ee0b4e7f8f43ba46201c02f7cd71afa126f28979f6b8b",
+  research: "93c94a2cedde719cb1a7158c843ea8cda975756b7f2c856d98d80d9db779be9a",
+} as const;
+
+const SOURCE_SUMMARY_PHASES = {
+  assess: ["verifying_assessment"],
+  decide: ["critiquing_decision", "verifying_decision"],
+  define: ["critiquing_specification", "verifying_specification"],
+  diagnose: ["verifying_diagnosis"],
+  "knowledge-base": [],
+  plan: ["critiquing_strategy", "verifying_strategy"],
+  produce: [],
+  research: ["critiquing_plan", "critiquing_report", "validating"],
 } as const;
 
 const WRITING_DOCUMENT_SOURCES = [
   {
     path: "docs/agents/writing/standard.md",
-    sha256: "f90cc943b9f9c0ef4a62f2882182ad5fdc85b5ca2ce92c8c13e38b5a49855ee9",
+    sha256: "827e647cf29cb75d25fc3be5a63a6fe331896d6db051e91689c8dd569661b290",
   },
   {
     path: "docs/agents/writing/review.md",
-    sha256: "9cd390eeb51f80832b33aa31a6dda45621f2d308980c11a13bbb7629fd848b25",
+    sha256: "ba52f6b665dda157fe7aa633bd74c3ec1dcdc2a9ba64415392776bf716c8d582",
   },
 ] as const;
 
 const RESEARCH_DOCUMENT_SOURCE = {
   path: "docs/agents/writing/genres/research.md",
-  sha256: "2fdc5ef8ec88dbcdc2fd7deb5fe1e96969c234c9f07e299e73f86e0597b7dfcb",
+  sha256: "5f0591994dd344f7e8dbe2c1f6d385314bdf4778716279d52a9f8caa70483e67",
 } as const;
 
 const FUTURE_REGISTRATION_INVALIDATIONS = {
@@ -58,6 +73,12 @@ const FUTURE_REGISTRATION_INVALIDATIONS = {
     "static_documentation_binding",
   ],
   decide: [
+    "parent_policy",
+    "provider_descriptor",
+    "qualification_binding",
+    "static_documentation_binding",
+  ],
+  define: [
     "parent_policy",
     "provider_descriptor",
     "qualification_binding",
@@ -504,9 +525,7 @@ function assessmentStart(runId: string) {
   };
 }
 
-function syntheticSuccessorRegistration(
-  registration: PlaybookRegistrationV1
-): PlaybookRegistrationV1 {
+function syntheticSuccessorRegistration(registration: PlaybookRegistration): PlaybookRegistration {
   const predicates = new Map(registration.completionReceiptPredicates);
   predicates.set("cw01_t3_synthetic_successor.v1", () => ({
     passed: false,
@@ -524,11 +543,30 @@ afterEach(() => {
 describe("CW-01-T3 rollout and registration-digest freeze", () => {
   it("pins the current bound registrations and every known future invalidation class", () => {
     expect([...PLAYBOOK_REGISTRY.keys()]).toEqual([...AUTHORIZED_PLAYBOOK_NAMES]);
+    const summaryPolicies = new Map(Object.entries(SOURCE_SUMMARY_PHASES));
     for (const [name, expectedDigest] of Object.entries(CURRENT_BOUND_REGISTRATION_DIGESTS)) {
+      const expectedSummaryPhases = summaryPolicies.get(name);
+      if (expectedSummaryPhases === undefined) throw new Error(`missing loop policy pin '${name}'`);
       const registration = resolvePlaybook(name);
       if (registration === undefined) throw new Error(`missing registration '${name}'`);
       const bound = bindGenericChildYamlAuthority(registration, PROJECT_ROOT);
       expect(runtimeRegistrationSha256(bound), name).toBe(expectedDigest);
+      expect(bound.repair_progress_policy, name).toBe(
+        name === "knowledge-base" ? undefined : "exact_fingerprint_v1"
+      );
+      expect(
+        [...bound.worker.phases]
+          .flatMap(([state, phase]) =>
+            "routing_repair_policy" in phase ? [{ state, policy: phase.routing_repair_policy }] : []
+          )
+          .sort((left, right) => left.state.localeCompare(right.state)),
+        name
+      ).toEqual(
+        expectedSummaryPhases.map((state) => ({
+          state,
+          policy: "preserve_source_summary_v1",
+        }))
+      );
       expect(FUTURE_REGISTRATION_INVALIDATIONS).toHaveProperty(name);
       const expectedDocumentation =
         name === "research"
@@ -537,13 +575,37 @@ describe("CW-01-T3 rollout and registration-digest freeze", () => {
       expect(bound.worker.documentation_sources, name).toEqual(expectedDocumentation);
     }
     expect(PLAYBOOK_REGISTRY.get("knowledge-base")?.generic_child).toBeUndefined();
-    for (const name of ["assess", "decide", "diagnose", "plan", "produce", "research"] as const) {
+    for (const name of [
+      "assess",
+      "decide",
+      "define",
+      "diagnose",
+      "plan",
+      "produce",
+      "research",
+    ] as const) {
       expect(PLAYBOOK_REGISTRY.get(name)?.generic_child?.provider.qualification).toEqual({
         gate_id: "gate_2_live_provider",
         status: "not_run",
         evidence: null,
       });
     }
+  });
+
+  it("binds scoped research-writing guidance without changing provider qualification", () => {
+    const registration = resolvePlaybook("research");
+    if (registration === undefined) throw new Error("missing research registration");
+    const bound = bindGenericChildYamlAuthority(registration, PROJECT_ROOT);
+    expect(bound.worker.documentation_sources).toEqual([
+      ...WRITING_DOCUMENT_SOURCES,
+      RESEARCH_DOCUMENT_SOURCE,
+    ]);
+    expect(runtimeRegistrationSha256(bound)).toBe(CURRENT_BOUND_REGISTRATION_DIGESTS.research);
+    expect(bound.generic_child?.provider.qualification).toEqual({
+      gate_id: "gate_2_live_provider",
+      status: "not_run",
+      evidence: null,
+    });
   });
 
   it("executes stop, exact-old-drain, new-writer, and rollback-drain policy rows", () => {
@@ -603,12 +665,13 @@ describe("CW-01-T3 rollout and registration-digest freeze", () => {
     expect(manifest.operator_decision_ref).toBeNull();
   });
 
-  it("refuses active and terminal old-digest checkpoints under a synthetic successor", () => {
+  it("refuses active old-digest checkpoints and exactly replays historical terminals", () => {
     const env = environment();
     const current = resolvePlaybook("assess");
     if (current === undefined) throw new Error("assess registration is unavailable");
     const activeRequest = assessmentStart("run-cw01-t3-active-old-digest");
     const terminalRequest = assessmentStart("run-cw01-t3-terminal-old-digest");
+    let historicalTerminal: ReturnType<OrchestrationService["handle"]>;
     {
       using oldBinary = new OrchestrationService({
         projectRoot: PROJECT_ROOT,
@@ -618,14 +681,13 @@ describe("CW-01-T3 rollout and registration-digest freeze", () => {
       });
       expect(oldBinary.handle(activeRequest).action).toBe("invoke_agent");
       expect(oldBinary.handle(terminalRequest).action).toBe("invoke_agent");
-      expect(
-        oldBinary.handle({
-          schema_version: 2,
-          action: "cancel",
-          identity: terminalRequest.identity,
-          reason: "freeze a terminal old-digest cohort",
-        }).action
-      ).toBe("cancelled");
+      historicalTerminal = oldBinary.handle({
+        schema_version: 2,
+        action: "cancel",
+        identity: terminalRequest.identity,
+        reason: "freeze a terminal old-digest cohort",
+      });
+      expect(historicalTerminal.action).toBe("cancelled");
     }
 
     const successor = syntheticSuccessorRegistration(current);
@@ -639,26 +701,37 @@ describe("CW-01-T3 rollout and registration-digest freeze", () => {
       playbookRegistration: successor,
       enableChildWorkflows: false,
     });
-    for (const request of [activeRequest, terminalRequest]) {
-      const before = canonicalJson(newBinary.checkpointer.loadRun(request.identity).snapshot());
-      for (const action of ["status", "recover", "cancel"] as const) {
-        const result = newBinary.handle({
+    const activeBefore = canonicalJson(
+      newBinary.checkpointer.loadRun(activeRequest.identity).snapshot()
+    );
+    const terminalBefore = canonicalJson(
+      newBinary.checkpointer.loadRun(terminalRequest.identity).snapshot()
+    );
+    for (const action of ["status", "recover", "cancel"] as const) {
+      const active = newBinary.handle({
+        schema_version: 2,
+        action,
+        identity: activeRequest.identity,
+        ...(action === "cancel" ? { reason: "must refuse registration drift" } : {}),
+      });
+      expect(active).toMatchObject({
+        action: "error",
+        result: { code: "REGISTRATION_CONTRACT_MISMATCH", checkpoint_unchanged: true },
+      });
+      expect(
+        newBinary.handle({
           schema_version: 2,
           action,
-          identity: request.identity,
-          ...(action === "cancel" ? { reason: "must refuse registration drift" } : {}),
-        });
-        expect(result).toMatchObject({
-          action: "error",
-          result: {
-            code: "REGISTRATION_CONTRACT_MISMATCH",
-            checkpoint_unchanged: true,
-          },
-        });
-        expect(canonicalJson(newBinary.checkpointer.loadRun(request.identity).snapshot())).toBe(
-          before
-        );
-      }
+          identity: terminalRequest.identity,
+          ...(action === "cancel" ? { reason: "must not rewrite history" } : {}),
+        })
+      ).toEqual(historicalTerminal);
+      expect(canonicalJson(newBinary.checkpointer.loadRun(activeRequest.identity).snapshot())).toBe(
+        activeBefore
+      );
+      expect(
+        canonicalJson(newBinary.checkpointer.loadRun(terminalRequest.identity).snapshot())
+      ).toBe(terminalBefore);
     }
   });
 

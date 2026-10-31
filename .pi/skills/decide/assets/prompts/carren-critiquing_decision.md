@@ -24,11 +24,15 @@ Do not repair, author, select anew, taskify, execute, or emit a target state.
 
 # Complete Output
 
-Emit a concise critique followed by exactly one compact final SUMMARY line:
+Emit a concise critique followed by exactly one compact final SUMMARY line.
 
-`SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","verdict":"APPROVE|NEEDS_REVISION","gap_kind":"none|evidence_gap|analysis_gap|product_gap","repair_owner":"none|echo|annie|demetri","findings":[{"severity":"minor|major|critical","message":"..."}],"evidence":["exact check or ref"],"strategy_delta":"..."}`
+`findings` is a JSON array of objects, never strings. Every entry has exactly `severity` and `message`, for example `{"severity":"minor","message":"One evidence-linked nonblocking issue."}`. APPROVE permits only `minor` entries. NEEDS_REVISION requires at least one entry and uses `major` or `critical` when the defect is blocking.
+
+SUMMARY:{"confidence":"PROBABLE","verdict":"APPROVE","gap_kind":"none","repair_owner":"none","findings":[],"evidence":["The Vera-passed decision is clear, defensible, and useful for its stated audience."],"strategy_delta":"Preserve this exact product for host admission."}
 
 APPROVE requires `none/none` and no major or critical finding. NEEDS_REVISION requires the matching closed gap and owner.
+
+The complete SUMMARY is structured source judgment. Routing-only correction must preserve every detail, ordered array and confidence; it cannot invent a missing judgment or strengthen a prior verdict. Repeated exact candidate/failure fingerprints end incomplete; changed `strategy_delta` prose alone is not measured progress. Post-review integrity/envelope artifacts are host deliverables, not missing author work, and host mechanical checks are neither semantic approval nor proof of effect absence.
 
 ## Editorial review
 

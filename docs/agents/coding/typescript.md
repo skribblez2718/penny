@@ -2,21 +2,20 @@
 
 ## Scope and authority
 
-This standard applies to every Penny-owned `.ts`, `.tsx`, and `.d.ts` file under
-`.pi/extensions/`, `.pi/lib/`, `apps/observability/`, `apps/orchestration/`, and
-`apps/platform-memory/`: runtime source, tests, fixtures, helpers, smoke tests, configuration
-source, and declarations.
+This standard applies to every Penny-owned `.ts`, `.tsx`, and `.d.ts` file under the roots
+configured by `typescript:inventory` in the root `package.json`: runtime source, tests, fixtures,
+helpers, smoke tests, configuration source, and declarations.
 
 The inventory is discovered from the live filesystem, including non-ignored untracked files; it is
-not a frozen allowlist or count assertion. The current tree reports **511 owned files**, all 511 with
-type-aware ESLint and strict-program coverage, plus 266/266 test or smoke files reachable from a
-package `test:all`. A new file must be discovered automatically and must acquire the same coverage.
+not a frozen allowlist or count assertion. Every owned file must have type-aware ESLint and
+strict-program coverage; every test or smoke file must be reachable from a package `test:all`.
+A new file must be discovered automatically and acquire the same coverage.
 
 ## Authoritative root commands
 
 | Command                           | Contract                                                                                                                                                                                                 |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bun run typescript:inventory`    | Discovers the five owned roots; verifies effective type-aware ESLint, strict-program membership, declaration checking, syntax, and runner mapping.                                                       |
+| `bun run typescript:inventory`    | Discovers the configured owned roots; verifies effective type-aware ESLint, strict-program membership, declaration checking, syntax, and runner mapping.                                                 |
 | `bun run typescript:architecture` | Applies the full AST, suppression, SDK, registration, package, and extension-runtime policy to that inventory.                                                                                           |
 | `bun run typescript:guard-tests`  | Runs generated positive and negative tests for every guard detector and verifies temporary-fixture cleanup.                                                                                              |
 | `bun run lint`                    | Runs inventory, architecture, then the sequential type-aware ESLint runner with zero warnings.                                                                                                           |
@@ -32,6 +31,19 @@ tsconfig partition and runs those partitions **sequentially** with `--max-warnin
 unmatched files, multiply matched files, and empty configured partitions fail before delivery. Use
 `bun run lint:fix` only when a requested code change authorizes edits; it runs the same sequential
 runner with `--fix`, then reruns inventory and architecture.
+
+The guard itself keeps type-aware suppression audits out of its architecture-checker process.
+Each file containing an ESLint suppression is checked by a fresh, sequential
+`scripts/system/checks/typescript-eslint-worker.mjs` child using the same effective configuration.
+Parser caches are released when that child exits; the parent retains live inventory and architecture
+coverage. Missing, malformed, fatal, timed-out, or signaled worker results fail the guard. Each audit
+has a two-minute timeout, a 16 MiB source envelope, and a 1 MiB diagnostic envelope; exceeding an
+envelope fails explicitly rather than truncating or skipping the check.
+
+`bun run pi:update` runs architecture once per baseline/candidate graph, followed by the
+compiler-only `typecheck:all`, runtime compatibility tests, and extension loading. Architecture
+includes the inventory findings, so this sequence preserves coverage without repeating the full
+guard through root `typecheck`. Normal root commands retain their documented interfaces.
 
 Normal root commands pass no migration baseline. Do not create, check in, or rely on a TypeScript debt
 baseline: any current finding fails the applicable command, and a baseline-aware migration pass is not
@@ -98,18 +110,36 @@ may emit only when a separate invoked strict/no-emit project covers the same own
   them. Never use optional chaining or defaults to turn an absent expected value into a false-green
   test.
 
+## Shared Pi test fixtures
+
+Use `createTestExtensionApi` and `createTestToolInfos` from
+`.pi/lib/tests/pi-test-host.ts` for Vitest extension fixtures. The host obtains API shape and tool
+metadata from the installed SDK through `vi.importActual`, so consuming tests can mock their own SDK
+boundaries without breaking fixture initialization. Only modeled behavior is usable; unmodeled SDK
+capabilities throw, including when accessed through property descriptors. Add a deliberate test
+behavior rather than delegating to the disposed template session.
+
+Template initialization uses disposable directories, in-memory settings and stores, disabled model
+network access, and a faux model without prompting or executing tools. It disposes the session and
+removes its directory before returning fixtures. Keep SDK initialization out of
+`.pi/lib/tests/test-narrowers.ts`: those plain narrowing helpers are also used by real subprocesses
+without Vitest. Do not copy complete SDK interfaces or tool metadata into individual tests.
+
+`bun run test:pi-harness` exercises these fixtures and the registration adapter. It is part of
+`test:pi-compat`, so the updater runs the harness against both baseline and candidate SDKs.
+
 ## Exact partial-host test seams
 
 There are exactly **five** centrally registered partial-host sites. This is a closed registry, not a
 pattern authors may copy:
 
-| Path                                                   | Exact asserted expression                          | Guard rule         |
-| ------------------------------------------------------ | -------------------------------------------------- | ------------------ |
-| `apps/orchestration/tests/kb-loader-policy.test.ts`    | `unusedContextHost as unknown as ExtensionContext` | `DOUBLE_ASSERTION` |
-| `.pi/extensions/powerpoint/tests/helpers/contracts.ts` | `guardedHost as ExtensionAPI`                      | `UNSAFE_ASSERTION` |
-| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedHost as ExtensionAPI`                      | `UNSAFE_ASSERTION` |
-| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedTui as TUI`                                | `UNSAFE_ASSERTION` |
-| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedTheme as Theme`                            | `UNSAFE_ASSERTION` |
+| Path                                                   | Exact asserted expression                           | Guard rule         |
+| ------------------------------------------------------ | --------------------------------------------------- | ------------------ |
+| `apps/orchestration/tests/kb-loader-policy.test.ts`    | `unusedContextHost as unknown as UnusedToolContext` | `DOUBLE_ASSERTION` |
+| `.pi/extensions/powerpoint/tests/helpers/contracts.ts` | `guardedHost as ExtensionAPI`                       | `UNSAFE_ASSERTION` |
+| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedHost as ExtensionAPI`                       | `UNSAFE_ASSERTION` |
+| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedTui as TUI`                                 | `UNSAFE_ASSERTION` |
+| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedTheme as Theme`                             | `UNSAFE_ASSERTION` |
 
 Each record binds one path, exact AST site, guard rule, immediately preceding
 `eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion`, rationale, removal condition,
@@ -152,7 +182,31 @@ and live YouTube transcript checks are also explicitly external: set
 `PENNY_PLAYWRIGHT_BROWSER_TESTS=1` or `PENNY_YOUTUBE_NETWORK_TESTS=1` only when their
 Chromium/network dependencies are deliberately authorized.
 
+### External CPU runner enrollment
+
+`apps/orchestration/vitest.videogen-media-cpu.config.ts` maps to
+`test:videogen-media-cpu:aggregate`; `apps/orchestration/vitest.videogen-native-cpu.config.ts`
+maps to `test:videogen-native-cpu:aggregate`. Both are permanent entries in
+`scripts/system/checks/typescript-tests.mjs`'s `EXTERNAL_CPU_CONFIG_GATES`, not live-model
+configs. Keep each aggregate reachable from package `test:all`, its actual cohort excluded
+from the default config at both repository and package roots, and its direct runner gated.
+Offline aggregates explicitly report qualification **NOT RUN**. Exact opt-in delegates to
+the direct command and propagates missing-binding or cohort failures; it must not silently skip.
+
+The native route requires `PENNY_VIDEOGEN_NATIVE_CPU=1` plus both private
+`VIDEOGEN_NATIVE_TEST_BINDINGS` and `VIDEOGEN_MEDIA_TEST_BINDINGS`. Media-only authorization
+uses `PENNY_VIDEOGEN_MEDIA_CPU=1`; neither opt-in authorizes the other cohort.
+`tests/videogen-native-cpu-routing.test.ts` and `tests/videogen-media-cpu-routing.test.ts`
+under `apps/orchestration/` verify discovery, exclusions, offline reporting and fail-closed
+routing. Their stub-runner assertions are routing evidence, never qualification results.
+Use `node scripts/system/checks/typescript-tests.mjs --check` to inspect enrollment without
+launching the full aggregate.
+
 ## Delivery checklist
+
+For implementation in the owned scope above. Review/diagnosis assesses available
+evidence and gaps; planning specifies required evidence under
+[Coding Conventions task modes](conventions.md#task-modes). Do not claim unrun gates passed.
 
 - [ ] Focused tests prove the changed behavior.
 - [ ] `bun run format:check` passes for the changed files.

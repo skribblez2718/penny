@@ -1,8 +1,8 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
 import {
-  createTestExtensionApi,
   isRecord,
   parseJson,
   requireArray,

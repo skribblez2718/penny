@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 
-import { PennyStateResolutionError, resolvePennyRuntimeState } from "@penny/orchestration/source";
+import { PennyStateResolutionError, resolvePennyRuntimeState } from "@penny/orchestration";
 
 import { createLogger } from "../../lib/logger/logger.js";
 import {

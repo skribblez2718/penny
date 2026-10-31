@@ -36,6 +36,7 @@ export function createMockCompactionPi(defaultContext?: CompactionContext) {
     on: (event, handler) => {
       calls.push({ event, handler });
       handlers.push(handler);
+      return () => {};
     },
   };
 

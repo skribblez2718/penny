@@ -4,9 +4,9 @@ import {
   PLAYBOOK_REGISTRY,
   skillContractSha256,
   validateRegistrationContract,
-  type PlaybookRegistrationV1,
-  type PlaybookRegistryV1,
-} from "@penny/orchestration/source";
+  type PlaybookRegistration,
+  type PlaybookRegistry,
+} from "@penny/orchestration";
 
 import {
   checkSkillPackage,
@@ -22,7 +22,7 @@ export type SkillIngressRefusalCode =
 export type SkillIngressResolution =
   | {
       readonly ok: true;
-      readonly registration: PlaybookRegistrationV1;
+      readonly registration: PlaybookRegistration;
       readonly contract_sha256: string;
     }
   | {
@@ -38,16 +38,15 @@ function refusal(code: SkillIngressRefusalCode, message: string): SkillIngressRe
 /**
  * Resolve one user-facing skill against the sole executable registry.
  *
- * `disable-model-invocation` affects discovery visibility only. An unregistered disabled package
- * such as a development scaffold remains inspectable but cannot reach the engine through this
- * generic entrypoint.
+ * `disable-model-invocation` controls model advertising only. Neither package presence
+ * nor visibility authorizes execution through this generic entrypoint.
  */
 export function resolveSkillIngress(input: {
   readonly projectRoot: string;
   readonly skillsDir?: string;
   readonly discoveredSkills?: readonly SkillDiscovery[];
   readonly name: string;
-  readonly registry?: PlaybookRegistryV1;
+  readonly registry?: PlaybookRegistry;
 }): SkillIngressResolution {
   const skillsDir = input.skillsDir ?? path.join(input.projectRoot, ".pi", "skills");
   const discoveredSkills = input.discoveredSkills ?? discoverSkillsFromDirectory(skillsDir);

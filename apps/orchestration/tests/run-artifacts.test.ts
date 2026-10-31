@@ -16,10 +16,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { canonicalJson, sha256Hex } from "../src/kb/contracts.js";
-import { materializeRunInput } from "../src/private-inputs.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { canonicalJson, sha256Hex } from "../dist/kb/contracts.js";
+import { materializeRunInput } from "../dist/private-inputs.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 import {
   ArtifactStoreError,
@@ -29,7 +29,7 @@ import {
   type ArtifactIndexRecord,
   type RunArtifactFaultBoundary,
   type RunArtifactStoreTestOptions,
-} from "../src/kb/run-artifacts.js";
+} from "../dist/kb/run-artifacts.js";
 
 const dirs: string[] = [];
 const controls = new Map<string, Checkpointer>();

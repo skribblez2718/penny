@@ -1,10 +1,10 @@
-import type { ArtifactHostStore } from "../../src/artifact-store.js";
-import { canonicalJson } from "../../src/checkpointer.js";
+import type { ArtifactHostStore } from "../../dist/artifact-store.js";
+import { canonicalJson } from "../../dist/checkpointer.js";
 import {
   validateEvidenceContext,
   type EvidenceContextV1,
-} from "../../src/child-workflows/contracts.js";
-import type { ArtifactRef } from "../../src/contracts.js";
+} from "../../dist/child-workflows/contracts.js";
+import type { ArtifactRef } from "../../dist/contracts.js";
 
 let sequence = 0;
 

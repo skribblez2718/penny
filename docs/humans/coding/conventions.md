@@ -21,7 +21,7 @@ Not every code-affecting task writes code:
 ## Security is invariant-first
 
 Every code-affecting task begins with the security baseline and then reads the guides
-triggered by its trust boundaries. The key outcomes are server-enforced authority,
+triggered by its trust boundaries. The key outcomes are authority enforced at the authoritative execution boundary (server-side in client/server systems),
 code/data separation, bounded input and resources, secure identity/session handling,
 egress and client confinement, secret and supply-chain protection, fail-closed behavior,
 and evidence-backed completion.
@@ -37,6 +37,23 @@ come from the caller or the existing project; when a selected stack includes Lit
 Tailwind, use the matching agent guidance. Browser, XSS, API, session, and service-worker
 security are loaded when their features are present, not because one UI framework is
 universally required.
+
+## Task-focused engineering guidance
+
+The agent reference organizes practical advice by engineering concern: design,
+construction, testing and diagnosis, refactoring, data systems, and reliability. A compact
+baseline remains mandatory; concrete task facets select the relevant complete guides,
+including more than one concern when needed. Agents do not need to load the entire
+library for a small change.
+
+The guides give agents decision criteria, behavior to preserve and evidence to seek.
+Methods follow the actual code, workload and failure risk rather than a fixed treatment
+catalog or reasoning script. They do not authorize unrelated cleanup, prescribe a
+framework for every problem, or replace security and delivery evidence. Cross-cutting engineering practice
+covers requirements, reversible choices, learning experiments, tools and communication.
+
+Navigation: [agent coding index](../../agents/coding/AGENTS.md). The detailed guidance
+lives there rather than being duplicated in the human documentation.
 
 ## Related documents
 

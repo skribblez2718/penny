@@ -6,7 +6,7 @@ Adjudicate and rank the complete competing-hypothesis set into one closed `Diagn
 
 - `artifact_read` is mandatory for every needed exact workflow predecessor in `input_artifacts`; repeat through `next_range` until `truncated` is false.
 - Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not enlarge the closed supplied-evidence boundary, execute tests or probes, begin remediation, or mutate anything.
-- The exact diagnosis request, latest Annie decomposition, and latest Ida hypotheses are authoritative. A prior draft, sealed diagnosis, Vera report, or host seal feedback may be present for bounded repair; correct all applicable issues in one complete replacement.
+- The exact diagnosis request, latest Annie decomposition, and latest Ida hypotheses are authoritative. A prior draft, sealed diagnosis, Vera report, or a current-epoch host seal diagnostic may be present for scoped repair; correct all applicable issues in one complete replacement.
 - Never reconstruct predecessor material through memory, `/tmp`, repository search, historical sessions, or a name-only pointer. If a required exact input is absent, return `missing_input:` with its slot.
 - The owner captures and re-reads complete bytes. Do not claim persistence.
 
@@ -24,11 +24,13 @@ The invocation supplies `MECHANICALLY_PROJECTED_DIAGNOSIS_DRAFT_CONTRACT:` with 
 
 # Complete Output
 
-Emit exactly two adjacent single lines and nothing else: no prose, code fence, blank line, or trailing text. Use the mechanically projected contract for the complete core shape.
+Emit exactly two adjacent single lines and nothing else: no prose, code fence, blank line, or trailing text. Use the mechanically projected contract for the complete core shape. This schema-valid `not_applicable` example demonstrates the transport shape only; use the actual request to choose every semantic value and cover all of its indexes:
 
-DIAGNOSIS_CORE:{"schema_version":1,"disposition":"supported|inconclusive|not_applicable","applicability_reason":"text","hypothesis_set_complete":true,"hypotheses":[],"primary_supported_hypothesis_id":null,"reasoning":"text","uncertainty":[],"proposed_discriminating_checks":[],"request_coverage":{"problem_statement_covered":true,"symptom_indexes":[],"observation_indexes":[],"environment_fact_indexes":[],"hard_constraint_indexes":[],"non_goal_indexes":[],"known_uncertainty_indexes":[],"permitted_test_boundary_covered":true},"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","remediation_started":false,"tests_executed":false}
-SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","complete":true}
+DIAGNOSIS_CORE:{"schema_version":1,"disposition":"not_applicable","applicability_reason":"The supplied symptoms do not describe a causal-diagnosis target.","hypothesis_set_complete":true,"hypotheses":[],"primary_supported_hypothesis_id":null,"reasoning":"No causal adjudication applies to the supplied target.","uncertainty":[],"proposed_discriminating_checks":[],"request_coverage":{"problem_statement_covered":true,"symptom_indexes":[0],"observation_indexes":[],"environment_fact_indexes":[],"hard_constraint_indexes":[],"non_goal_indexes":[],"known_uncertainty_indexes":[],"permitted_test_boundary_covered":true},"confidence":"PROBABLE","remediation_started":false,"tests_executed":false}
+SUMMARY:{"confidence":"PROBABLE","complete":true}
 
 ## Reader-facing writing
 
 Apply the supplied canonical writing guidance to every human-readable field. Make the product useful to its stated reader and purpose without inventing voice, evidence, experience, or certainty. Preserve this phase's exact schema, protected values, citations, and machine-readable contract.
+
+If a seal diagnostic is supplied, read its exact ref and correct the rejected draft. A diagnostic from before the latest successfully sealed product is not current feedback; reviewer findings still need independent repair.

@@ -38,23 +38,33 @@ const MAX_RESEARCH_CONTEXT_ADMISSION_RESOLUTIONS = 9;
 const MAX_RESEARCH_CONTEXT_RESOLUTION_BYTES = 32_768;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-/** Host-owned wall-clock boundary passed to every use-time resolver. */
+export interface ResearchContextProgressV2 {
+  readonly activity_class: "provider_activity" | "source_resolved";
+  readonly observed_units: number;
+}
+
+/** Host-owned renewable inactivity boundary passed to every use-time resolver. */
 export interface ResearchContextUseBoundaryV2 {
   readonly signal: AbortSignal;
-  /** Exclusive Unix-millisecond deadline for the complete use-time resolution. */
-  readonly deadline_ms: number;
+  readonly inactivity_interval_ms: number;
+  /** Content-free trusted progress projection; listener failures remain observational. */
+  readonly on_progress?: (progress: ResearchContextProgressV2) => void;
 }
 
 /** Cooperative controls delivered to one trusted in-process provider adapter. */
-export interface ResearchContextResolverControlV2 extends ResearchContextUseBoundaryV2 {
+export interface ResearchContextResolverControlV2 {
   readonly purpose: "use_time";
+  readonly signal: AbortSignal;
+  readonly inactivity_interval_ms: number;
+  /** Renew only for real provider progress; repeated timer heartbeats are not progress. */
+  reportProgress(observedUnits?: number): void;
 }
 
 export class ResearchContextResolutionTimeoutError extends Error {
   readonly code = "research_context_resolution_timeout" as const;
 
   constructor() {
-    super("research context resolution exceeded its host-owned deadline before model execution");
+    super("research context resolution inactivity lease expired before model execution");
     this.name = "ResearchContextResolutionTimeoutError";
   }
 }
@@ -138,11 +148,12 @@ export interface ResearchContextProviderHandlersV1 {
 /**
  * Complete current-resolution contract required for every external use.
  *
- * Handlers are explicitly trusted in-process adapters, not sandboxed plugin code. The
- * host defers invocation so cancellation can win before start and races the returned
- * Promise against cancellation/deadline. JavaScript cannot preempt CPU-infinite
- * synchronous work after a trusted adapter starts; untrusted implementations require
- * an interruptible worker/process boundary behind this adapter.
+ * Handlers are explicitly trusted in-process adapters, not sandboxed plugin code. The host
+ * defers invocation so cancellation can win before start and races the returned Promise against
+ * cancellation or renewable inactivity expiry. Productive long-running adapters must call
+ * `control.reportProgress()` from trusted observed work. JavaScript cannot preempt CPU-infinite
+ * synchronous work after a trusted adapter starts; untrusted implementations require an
+ * interruptible worker/process boundary behind this adapter.
  */
 export interface ResearchContextProviderHandlersV2 {
   readonly resolver_contract_version: 2;
@@ -299,23 +310,19 @@ function throwIfResolutionAborted(signal: AbortSignal): void {
   if (signal.aborted) throw resolutionBoundaryError(signal);
 }
 
-function throwIfUseBoundaryClosed(control: ResearchContextUseBoundaryV2): void {
+function throwIfUseBoundaryClosed(control: { readonly signal: AbortSignal }): void {
   throwIfResolutionAborted(control.signal);
-  if (Date.now() >= control.deadline_ms) throw new ResearchContextResolutionTimeoutError();
 }
 
-function validateUseBoundary(boundary: ResearchContextUseBoundaryV2): number {
-  const now = Date.now();
+function validateUseBoundary(boundary: ResearchContextUseBoundaryV2): void {
   if (
-    !Number.isSafeInteger(boundary.deadline_ms) ||
-    boundary.deadline_ms <= 0 ||
-    boundary.deadline_ms - now > MAX_TIMER_DELAY_MS
+    !Number.isSafeInteger(boundary.inactivity_interval_ms) ||
+    boundary.inactivity_interval_ms <= 0 ||
+    boundary.inactivity_interval_ms > MAX_TIMER_DELAY_MS
   ) {
-    throw new Error("research context deadline_ms must be a bounded Unix-millisecond instant");
+    throw new Error("research context inactivity_interval_ms must be a bounded positive integer");
   }
   if (boundary.signal.aborted) throw resolutionBoundaryError(boundary.signal);
-  if (boundary.deadline_ms <= now) throw new ResearchContextResolutionTimeoutError();
-  return now;
 }
 
 /** One event-loop turn ensures already-requested cancellation can prevent adapter start. */
@@ -342,15 +349,36 @@ async function runWithinUseBoundary<T>(
   boundary: ResearchContextUseBoundaryV2,
   operation: (control: ResearchContextResolverControlV2) => Promise<T>
 ): Promise<T> {
-  const now = validateUseBoundary(boundary);
+  validateUseBoundary(boundary);
   const controller = new AbortController();
   const cancelFromParent = (): void => {
     controller.abort(new ResearchContextResolutionCancelledError());
   };
   boundary.signal.addEventListener("abort", cancelFromParent, { once: true });
-  const timer = setTimeout(() => {
-    controller.abort(new ResearchContextResolutionTimeoutError());
-  }, boundary.deadline_ms - now);
+  let timer: NodeJS.Timeout | undefined;
+  const scheduleExpiry = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      controller.abort(new ResearchContextResolutionTimeoutError());
+    }, boundary.inactivity_interval_ms);
+  };
+  const renew = (progress: ResearchContextProgressV2): void => {
+    if (controller.signal.aborted) throw resolutionBoundaryError(controller.signal);
+    if (
+      !Number.isSafeInteger(progress.observed_units) ||
+      progress.observed_units <= 0 ||
+      progress.observed_units > 16_777_216
+    ) {
+      throw new Error("research context progress units must be a bounded positive integer");
+    }
+    scheduleExpiry();
+    try {
+      boundary.on_progress?.(progress);
+    } catch {
+      // Progress delivery is observational and cannot replace resolver truth.
+    }
+  };
+  scheduleExpiry();
   const aborted = new Promise<never>((_resolve, reject) => {
     const rejectAbort = (): void => reject(resolutionBoundaryError(controller.signal));
     if (controller.signal.aborted) rejectAbort();
@@ -361,13 +389,15 @@ async function runWithinUseBoundary<T>(
     const work = operation({
       purpose: "use_time",
       signal: controller.signal,
-      deadline_ms: boundary.deadline_ms,
+      inactivity_interval_ms: boundary.inactivity_interval_ms,
+      reportProgress: (observedUnits = 1) =>
+        renew({ activity_class: "provider_activity", observed_units: observedUnits }),
     });
     const result = await Promise.race([work, aborted]);
     completed = true;
     return result;
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
     boundary.signal.removeEventListener("abort", cancelFromParent);
     if (!completed && !controller.signal.aborted) {
       controller.abort(new ResearchContextResolutionCancelledError());
@@ -443,12 +473,14 @@ export class ResearchContextOwnerV2 {
     }
     return runWithinUseBoundary(boundary, async (control) =>
       Promise.all(
-        sources.map((source, index) => {
+        sources.map(async (source, index) => {
           const ref = contextRefs[index];
           if (ref === undefined) {
             throw new Error("research context ref/source projection diverged");
           }
-          return this.resolveExisting(ref, source, boundSourceIds, control);
+          const overlay = await this.resolveExisting(ref, source, boundSourceIds, control);
+          control.reportProgress(Math.max(1, Math.min(ref.byte_length, 16_777_216)));
+          return overlay;
         })
       )
     );

@@ -15,10 +15,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer } from "../src/checkpointer.js";
-import { initializePennyState, resolvePennyRuntimeState } from "../src/state/setup.js";
-import { upgradePennyState } from "../src/state/upgrade.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { initializePennyState, resolvePennyRuntimeState } from "../dist/state/setup.js";
+import { upgradePennyState } from "../dist/state/upgrade.js";
 import { parseJson, requireNumber, requireRecord, requireSqlite } from "./helpers/narrowing.js";
 
 const roots: string[] = [];
@@ -71,6 +71,7 @@ function downgradeToV10(file: string): void {
       'retained-run', 'retained-session', 'research', 'typescript', 2, 'running',
       'observing', '{"goal":"retained"}', 't0', 't1'
     );
+    DROP TABLE host_operation_calls;
     DROP TABLE child_workflow_calls;
     PRAGMA user_version=10;
   `);
@@ -131,7 +132,7 @@ describe("active-project state upgrade", () => {
     expect(result).toMatchObject({
       projectId: state.projectId,
       sourceVersion: 10,
-      targetVersion: 12,
+      targetVersion: 13,
       changed: true,
     });
     expect(result.backupRoot).not.toBeNull();
@@ -155,7 +156,7 @@ describe("active-project state upgrade", () => {
       phase: "upgraded",
       project_id: state.projectId,
       source_schema_version: 10,
-      target_schema_version: 12,
+      target_schema_version: 13,
       database_file: "orchestration-before-upgrade.db",
     });
     expect(requireRecord(backupManifest, "upgrade backup manifest")["database_sha256"]).toBe(
@@ -167,7 +168,7 @@ describe("active-project state upgrade", () => {
     chmodSync(recoveryCopy, 0o600);
     expect(retainedRunCount(recoveryCopy)).toBe(1);
     await Checkpointer.upgradeExisting(recoveryCopy, state.projectId, async () => undefined);
-    expect(userVersion(recoveryCopy)).toBe(12);
+    expect(userVersion(recoveryCopy)).toBe(13);
     expect(retainedRunCount(recoveryCopy)).toBe(1);
     using recoveredCheckpointer = new Checkpointer(recoveryCopy, undefined, {
       projectId: state.projectId,
@@ -190,9 +191,48 @@ describe("active-project state upgrade", () => {
       backupDirectory: backupParent,
       rootOptions: { env },
     });
-    expect(repeated).toMatchObject({ changed: false, sourceVersion: 12, targetVersion: 12 });
+    expect(repeated).toMatchObject({ changed: false, sourceVersion: 13, targetVersion: 13 });
     expect(repeated.backupRoot).toBeNull();
     expect(readdirSync(backupParent)).toHaveLength(backupCount);
+  });
+
+  it("upgrades a retained v12 store by adding an empty host-operation journal", async () => {
+    const { projectRoot, backupParent, env, state } = fixture("v12-to-v13");
+    {
+      using db = database(state.paths.orchestration.database);
+      db.exec("DROP TABLE host_operation_calls; PRAGMA user_version=12;");
+    }
+    {
+      using db = database(state.state.catalogDatabase);
+      db.exec(`
+        DROP TABLE host_capacity_snapshots;
+        DROP TABLE host_capacity_records;
+        DROP TABLE host_capacity_policy;
+        DROP TABLE host_backend_quarantine_resets;
+        DROP TABLE host_backend_dispositions;
+        DROP TABLE host_backend_lease_events;
+        DROP TABLE host_backend_leases;
+        DROP TABLE host_operation_queue;
+        PRAGMA user_version=2;
+      `);
+    }
+
+    const result = await upgradePennyState({
+      projectRoot,
+      backupDirectory: backupParent,
+      rootOptions: { env },
+    });
+    expect(result).toMatchObject({
+      sourceVersion: 12,
+      targetVersion: 13,
+      changed: true,
+    });
+    using db = database(state.paths.orchestration.database);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM host_operation_calls").get()).toMatchObject({
+      count: 0,
+    });
+    using catalog = database(state.state.catalogDatabase);
+    expect(catalog.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 4 });
   });
 
   it("retains a verified backup and rolls back schema v10 after a mid-upgrade failure", async () => {
@@ -224,7 +264,7 @@ describe("active-project state upgrade", () => {
     ).toMatchObject({
       phase: "prepared",
       source_schema_version: 10,
-      target_schema_version: 12,
+      target_schema_version: 13,
     });
   });
 

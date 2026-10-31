@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
+import { Checkpointer } from "../dist/checkpointer.js";
 
 const roots: string[] = [];
 
@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe("project-bound orchestration stores", () => {
-  it("binds orchestration.db to one opaque project ID at schema v12", () => {
+  it("binds orchestration.db to one opaque project ID at schema v13", () => {
     const root = mkdtempSync(path.join(tmpdir(), "penny-orchestration-binding-test-"));
     roots.push(root);
     const databasePath = path.join(root, "orchestration.db");
@@ -41,7 +41,7 @@ describe("project-bound orchestration stores", () => {
       "orchestration project binding row"
     );
     database.close();
-    expect(requireNumber(version["user_version"], "schema user_version")).toBe(12);
+    expect(requireNumber(version["user_version"], "schema user_version")).toBe(13);
     expect(requireString(binding["project_id"], "store project_id")).toBe(firstProject);
   });
 });

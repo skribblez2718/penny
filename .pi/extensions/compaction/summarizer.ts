@@ -1,3 +1,4 @@
+import { compactionDeltaProgress, type CompactionProgress } from "../../lib/compaction-policy.mjs";
 /**
  * Model-owned summarization (the leverage path).
  *
@@ -8,9 +9,9 @@
  * and a GROUNDED STATE digest containing exact run/artifact refs. The
  * deterministic pointer appendix and the LOAN fallback live in index.ts.
  *
- * The `complete` / `serializeConversation` calls sit behind `_summaryInternals`
- * (dynamic imports) so importing this module never resolves the pi runtime —
- * unit tests mock the seam and never touch a model or the pi package.
+ * The streamed summary / `serializeConversation` calls sit behind `_summaryInternals`
+ * (dynamic imports) so unit tests can mock the seam without model calls.
+ * Content-free event decoding uses the shared installed Pi stream adapter.
  */
 
 import type { ArtifactRef, EngineRunRef, PendingState } from "./schema.js";
@@ -212,12 +213,16 @@ interface CodingAgentRuntimeModule {
   convertToLlm(messages: SessionMessage[]): unknown;
 }
 
+interface SummaryStream extends AsyncIterable<unknown> {
+  result(): Promise<CompleteResult>;
+}
+
 interface CompatRuntimeModule {
-  complete(
+  stream(
     model: SummarizerModel,
     context: { messages: SummarizerMessage[] },
     options: Record<string, unknown>
-  ): Promise<CompleteResult>;
+  ): SummaryStream;
 }
 
 interface UnknownModuleRecord {
@@ -237,7 +242,7 @@ function isCodingAgentRuntimeModule(value: unknown): value is CodingAgentRuntime
 }
 
 function isCompatRuntimeModule(value: unknown): value is CompatRuntimeModule {
-  return isUnknownModuleRecord(value) && typeof value.complete === "function";
+  return isUnknownModuleRecord(value) && typeof value.stream === "function";
 }
 
 function isCompleteContentPart(value: unknown): value is { type: string; text?: string } {
@@ -261,7 +266,8 @@ export const _summaryInternals: {
   complete: (
     model: SummarizerModel,
     context: { messages: SummarizerMessage[] },
-    options: Record<string, unknown>
+    options: Record<string, unknown>,
+    onProgress?: (progress: CompactionProgress) => void
   ) => Promise<CompleteResult>;
 } = {
   serialize: async (messages) => {
@@ -282,13 +288,18 @@ export const _summaryInternals: {
     }
     return serialized;
   },
-  complete: async (model, context, options) => {
+  complete: async (model, context, options, onProgress) => {
     const spec = "@earendil-works/pi-ai/compat";
     const imported: unknown = await import(spec);
     if (!isCompatRuntimeModule(imported)) {
-      throw new TypeError("pi-ai compat module has no callable complete export");
+      throw new TypeError("pi-ai compat module has no callable stream export");
     }
-    const result: unknown = await imported.complete(model, context, options);
+    const stream = imported.stream(model, context, options);
+    for await (const event of stream) {
+      const progress = compactionDeltaProgress(event);
+      if (progress !== undefined) onProgress?.(progress);
+    }
+    const result: unknown = await stream.result();
     if (!isCompleteResult(result)) {
       throw new TypeError("pi-ai compat complete returned an invalid result");
     }
@@ -307,6 +318,7 @@ export interface GenerateModelSummaryInput {
   customInstructions?: string;
   proseTokenTarget: number;
   signal?: AbortSignal;
+  onProgress?: (progress: CompactionProgress) => void;
 }
 
 function resolveSummaryModel(ctx: SummarizerCtx): SummarizerModel | undefined {
@@ -321,14 +333,9 @@ function resolveSummaryModel(ctx: SummarizerCtx): SummarizerModel | undefined {
   return ctx.model;
 }
 
-function summaryTimeoutMs(): number {
-  const raw = parseInt(process.env.PI_COMPACTION_SUMMARY_TIMEOUT_MS || "", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
-}
-
 /**
  * Run the model summarization. Returns `{ prose, model }`, or `null` on ANY
- * failure (no model/auth, timeout, abort, empty output, error) so the caller
+ * failure (no model/auth, explicit abort, empty output, error) so the caller
  * falls back to the deterministic LOAN path. Never throws.
  */
 export async function generateModelSummary(
@@ -336,6 +343,7 @@ export async function generateModelSummary(
   ctx: SummarizerCtx
 ): Promise<{ prose: string; model: string } | null> {
   try {
+    if (input.signal?.aborted) return null;
     const model = resolveSummaryModel(ctx);
     if (!model) return null;
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
@@ -351,10 +359,11 @@ export async function generateModelSummary(
     });
 
     const controller = new AbortController();
-    const onAbort = () => controller.abort();
-    if (input.signal) input.signal.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(), summaryTimeoutMs());
+    const onAbort = () => controller.abort(input.signal?.reason);
+    if (input.signal?.aborted) onAbort();
+    else input.signal?.addEventListener("abort", onAbort, { once: true });
     try {
+      if (controller.signal.aborted) return null;
       const resp = await _summaryInternals.complete(
         model,
         { messages },
@@ -364,8 +373,12 @@ export async function generateModelSummary(
           env: auth.env,
           maxTokens: 4096,
           signal: controller.signal,
+        },
+        (progress) => {
+          if (!controller.signal.aborted) input.onProgress?.(progress);
         }
       );
+      if (controller.signal.aborted) return null;
       const text = (resp.content || [])
         .filter((c): c is { type: "text"; text: string } => c.type === "text" && !!c.text)
         .map((c) => c.text)
@@ -374,7 +387,6 @@ export async function generateModelSummary(
       if (!prose) return null;
       return { prose, model: `${model.provider}/${model.id}` };
     } finally {
-      clearTimeout(timer);
       if (input.signal) input.signal.removeEventListener("abort", onAbort);
     }
   } catch {

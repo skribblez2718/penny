@@ -30,20 +30,20 @@ import {
   StartAdmissionMismatchError,
   canonicalJson,
   sha256,
-} from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationEngine } from "../src/engine.js";
+} from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import { OrchestrationService } from "../src/service.js";
-import { initializePennyState } from "../src/state/index.js";
+import { OrchestrationService } from "../dist/service.js";
+import { initializePennyState } from "../dist/state/index.js";
 import {
   materializeRunInput,
   privateInputRoot,
   readRunInput,
   settleRunInput,
-} from "../src/private-inputs.js";
-import type { Directive } from "../src/contracts.js";
-import { initKb, queryKb } from "../src/kb/workflows.js";
+} from "../dist/private-inputs.js";
+import type { Directive } from "../dist/contracts.js";
+import { initKb, queryKb } from "../dist/kb/workflows.js";
 import {
   pageClaimsPath,
   pageMarkdownPath,
@@ -52,19 +52,19 @@ import {
   writePageRevision,
   writeSourceObject,
   writeSourceRecord,
-} from "../src/kb/filesystem.js";
+} from "../dist/kb/filesystem.js";
 import {
   buildCatalog,
   buildGenerationIndex,
   newGenerationId,
   publishGeneration,
-} from "../src/kb/generations.js";
-import { SaveQueryClaimStore, saveClaimStoreDir } from "../src/kb/save-claim.js";
-import { RunArtifactStore } from "../src/kb/run-artifacts.js";
-import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
-import { KbQueryReader } from "../src/kb/query-reader.js";
-import { createTestOnlyArtifactBodyRunner, kbSessionSpec } from "../src/kb/session-tools.js";
-import { computeRequestSha256, validateQueryRequest } from "../src/kb/parent-delivery.js";
+} from "../dist/kb/generations.js";
+import { SaveQueryClaimStore, saveClaimStoreDir } from "../dist/kb/save-claim.js";
+import { RunArtifactStore } from "../dist/kb/run-artifacts.js";
+import { KbWorkerClient } from "../dist/kb/kb-worker-client.js";
+import { KbQueryReader } from "../dist/kb/query-reader.js";
+import { createTestOnlyArtifactBodyRunner, kbSessionSpec } from "../dist/kb/session-tools.js";
+import { computeRequestSha256, validateQueryRequest } from "../dist/kb/parent-delivery.js";
 import {
   ReadPhaseBriefResultSchema,
   ReadRunArtifactResultSchema,
@@ -74,7 +74,7 @@ import {
   type KbManifest,
   type PageRevisionFrontmatter,
   type QueryKbRequest,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 import { kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 

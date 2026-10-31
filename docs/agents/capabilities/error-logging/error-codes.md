@@ -2,7 +2,7 @@
 
 ## What
 
-Every structured log entry includes an `error.code` from a centralized taxonomy. Codes are `SCREAMING_SNAKE_CASE`, prefixed by subsystem. Source of truth: `.pi/lib/logger/logger.ts` `ErrorCode` union type.
+The [`ErrorCode` union](../../../../.pi/lib/logger/logger.ts) owns the exact registered taxonomy. Codes are `SCREAMING_SNAKE_CASE`, prefixed by subsystem. `LogEntry.error` and its `code` are structurally optional; the logger API accepts uncoded entries and does not validate taxonomy membership at runtime. That optional wire shape is distinct from the emission policy below.
 
 ## Why
 
@@ -10,11 +10,13 @@ Without a shared taxonomy, error logs are inconsistent strings. With it, observa
 
 ## Rules
 
-1. **All error logs must include a code from the taxonomy.** No ad-hoc error strings.
-2. **New codes must be added to the `ErrorCode` union type first**, then documented here.
+1. **Emission policy: all error logs must include a code from the taxonomy.** Do not invent an ad-hoc code. A free-form diagnostic message does not replace a registered identifier; code presence alone does not establish the cause or outcome.
+2. **New codes must be added to the `ErrorCode` union type first.** Reconcile any affected diagnostic guidance here; this selective reference does not redefine the union.
 3. **Severity follows the logger convention:** DEBUG, INFO, WARN, ERROR, CRITICAL.
 
-## Code Reference
+## Selected Diagnostic Reference
+
+This table is not exhaustive. The union owns membership; severity shown here is diagnostic guidance, not a fixed per-code mapping enforced by the type. Compatibility names such as `BRIDGE_*` and `PYTHON_*` remain valid identifiers, not evidence that those transports are active. Do not rename compatibility codes or infer successful recovery from a logged code.
 
 | Code                                 | Severity | Extension     | Description                                                 |
 | ------------------------------------ | -------- | ------------- | ----------------------------------------------------------- |
@@ -43,13 +45,13 @@ Without a shared taxonomy, error logs are inconsistent strings. With it, observa
 ## Adding a Code
 
 1. Add to `ErrorCode` union in `.pi/lib/logger/logger.ts`
-2. Add row to table above
-3. Update `scripts/system/checks/check_error_logging.py` if needed
+2. Update affected selected diagnostics above when needed; preserve compatibility identifiers and failure dispositions.
+3. Update `scripts/system/checks/check_error_logging.py` if needed. It is a source-pattern policy check, not proof of runtime membership or universal coded emission.
 
 ## Verification
 
 - [ ] All `logger.error()` calls use a code from the taxonomy
-- [ ] New codes added to both logger.ts and this document
+- [ ] New codes exist in the logger union; affected selected diagnostics agree with it
 - [ ] Severity matches logger convention
 
 ## Files

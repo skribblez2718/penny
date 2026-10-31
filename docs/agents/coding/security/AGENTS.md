@@ -2,8 +2,8 @@
 
 - [Security Invariants](security-invariants.md): MUST READ FOR every code-affecting task — secure-by-construction properties, completion evidence, and exception discipline.
 - [Threat Modeling](threat-model.md): READ WHEN adding or changing assets, identities, sensitive data, privileged actions, trust boundaries, external systems, or attacker-accessible capabilities — task/application threat model and evidence.
-- [Web and PWA Invariants](web-pwa-invariants.md): MUST READ FOR browser-delivered, Internet-facing, API-backed, offline-capable, or service-worker-enabled application work — conditional web/PWA baseline and detailed-guide routing.
-- [Authorization](authorization.md): READ WHEN code decides whether a subject may perform an action or access an object, field, relationship, tenant, or administrative capability — server-side authority and ownership.
+- [Web and PWA Invariants](web-pwa-invariants.md): MUST READ FOR work affecting browser-delivered UI, browser state, offline web behavior, or service workers — conditional web/PWA baseline and detailed-guide routing.
+- [Authorization](authorization.md): READ WHEN code decides whether a subject may perform an action or access an object, field, relationship, tenant, or administrative capability — authoritative-boundary enforcement and ownership, server-side in client/server systems.
 - [Authentication](authentication.md): READ WHEN code establishes, restores, or strengthens identity — authenticators, credential verification, recovery, MFA, and identity proof.
 - [Session Security](session-security.md): READ WHEN code creates, stores, transports, rotates, expires, or revokes authenticated state — session lifecycle and integrity.
 - [CSRF and Browser State Transitions](csrf.md): READ WHEN browser requests use ambient credentials or trigger state changes across origins — origin, replay, and mutation integrity.

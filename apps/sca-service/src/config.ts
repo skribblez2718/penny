@@ -22,7 +22,9 @@ const MAX_AUTHENTICATION_TOKEN_BYTES = 512;
 export interface ScaServiceConfigInput {
   readonly socketPath: string;
   readonly authenticationToken: string;
+  /** Backward-compatible name for socket request inactivity. */
   readonly requestTimeoutMs?: number;
+  /** Finite shutdown/cancellation grace, not an execution ceiling. */
   readonly shutdownTimeoutMs?: number;
   readonly maxFrameBytes?: number;
   readonly maxConnections?: number;
@@ -31,7 +33,9 @@ export interface ScaServiceConfigInput {
 export interface ScaServiceConfig {
   readonly socketPath: string;
   readonly authenticationToken: string;
+  /** Renewable socket request inactivity interval. */
   readonly requestTimeoutMs: number;
+  /** Finite shutdown/cancellation grace, not an execution ceiling. */
   readonly shutdownTimeoutMs: number;
   readonly maxFrameBytes: number;
   readonly maxConnections: number;

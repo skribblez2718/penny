@@ -3,15 +3,15 @@
 import { requireValue } from "./helpers/narrowing.js";
 import { describe, expect, it } from "vitest";
 
-import { SkillContractSchema, validateContract, type SkillContract } from "../src/contracts.js";
+import { SkillContractSchema, validateContract, type SkillContract } from "../dist/contracts.js";
 import {
   DEFAULT_PLAYBOOK_NAME,
   PLAYBOOK_REGISTRY,
   resolvePlaybook,
   validateRegistrationContract,
-  type PlaybookRegistrationV1,
-} from "../src/playbooks/registry.js";
-import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
+  type PlaybookRegistration,
+} from "../dist/playbooks/registry.js";
+import { RESEARCH_SKILL_CONTRACT } from "../dist/playbooks/research.js";
 
 function clone(): SkillContract {
   return structuredClone(RESEARCH_SKILL_CONTRACT);
@@ -102,7 +102,7 @@ describe("P2 contract fails closed", () => {
 
   it("rejects a contract whose name disagrees with its registration", () => {
     const shipped = requireValue(resolvePlaybook(DEFAULT_PLAYBOOK_NAME), "research registration");
-    const mismatched: PlaybookRegistrationV1 = {
+    const mismatched: PlaybookRegistration = {
       name: "research",
       contract: { ...clone(), name: "knowledge-base" },
       ingress: shipped.ingress,
@@ -123,12 +123,15 @@ describe("P2 contract fails closed", () => {
     expect([...PLAYBOOK_REGISTRY.keys()].sort()).toEqual([
       "assess",
       "decide",
+      "define",
       "diagnose",
+      "imagegen",
       "knowledge-base",
       "plan",
       "produce",
       "research",
       "sca",
+      "videogen",
     ]);
   });
 });

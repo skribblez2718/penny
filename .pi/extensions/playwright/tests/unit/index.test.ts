@@ -4,11 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import playwrightExtension from "../../index.js";
-import {
-  createTestExtensionApi,
-  isRecord,
-  requireFunction,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord, requireFunction } from "../../../../lib/tests/test-narrowers.js";
 import { BrowserManager } from "../../browser.js";
 
 type SessionStartHandler = (

@@ -250,7 +250,7 @@ const scenarios = [];
 for (const trustProfile of ["trusted-interactive", "hardened-untrusted"]) {
   for (const contextAndInputPresent of [false, true]) {
     const controller = new AbortController();
-    controller.abort();
+    controller.abort(new Error("agent invocation aborted before prompt"));
     let errorMessage = null;
     try {
       await new PiAgentClient({
@@ -345,7 +345,17 @@ describe("bundled Node artifact provider", () => {
       });
       run(
         "bun",
-        ["build", "--target=node", "--format=esm", `--outfile=${bundle}`, source],
+        [
+          "build",
+          "--target=node",
+          "--format=esm",
+          "--external",
+          "@earendil-works/pi-coding-agent",
+          "--external",
+          modelClient,
+          `--outfile=${bundle}`,
+          source,
+        ],
         PROJECT_ROOT,
         environmentWithProjectDependencies(PROJECT_ROOT, PROBE_PROJECT_DEPENDENCIES)
       );

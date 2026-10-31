@@ -46,8 +46,8 @@ import {
   StartAdmissionMismatchError,
   canonicalJson,
   sha256,
-} from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
+} from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
 import {
   PrivateInputError,
   materializeRunInput,
@@ -55,13 +55,13 @@ import {
   readRunInput,
   settleRunInput,
   verifyAndSettleTerminalStart,
-} from "../src/private-inputs.js";
-import { computeRequestSha256, validateQueryRequest } from "../src/kb/parent-delivery.js";
+} from "../dist/private-inputs.js";
+import { computeRequestSha256, validateQueryRequest } from "../dist/kb/parent-delivery.js";
 import {
   canonicalJson as kbCanonicalJson,
   sha256Hex,
   type QueryKbRequest,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const PROFILE = "kbp_custody";

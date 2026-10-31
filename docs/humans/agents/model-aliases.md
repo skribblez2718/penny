@@ -1,6 +1,6 @@
 # Agent Model Aliases (capability-tier, upgrade-proof)
 
-Penny's 10 agents reference their model by a **capability-tier alias** (`sol`, `terra`)
+Penny's 11 agents reference their model by a **capability-tier alias** (`sol`, `terra`)
 instead of a pinned version string. This removes the per-upgrade edit tax: on a model
 upgrade you change **one** line in one file instead of editing every agent.
 
@@ -22,9 +22,9 @@ will not resolve.
     },
     "openai-codex": {
       "modelOverrides": {
-        "gpt-5.6-sol": { "name": "sol", "contextWindow": 272000, "maxTokens": 128000 },
+        "gpt-6.1-sol": { "name": "sol", "contextWindow": 272000, "maxTokens": 128000 },
         "gpt-5.6-terra": { "name": "terra", "contextWindow": 272000, "maxTokens": 128000 },
-        "gpt-5.6-luna": { "name": "luna", "contextWindow": 272000, "maxTokens": 128000 }
+        "gpt-6-luna": { "name": "luna", "contextWindow": 272000, "maxTokens": 128000 }
       }
     }
   }
@@ -33,7 +33,7 @@ will not resolve.
 
 ### Why the context/token overrides are there
 
-The values explicitly keep every GPT-5.6 tier at Pi's short-context defaults:
+The values explicitly keep every current OpenAI tier target at Pi's short-context defaults:
 `contextWindow: 272000` with a `128000` maximum output. This prevents an alias-only config
 from silently changing the fleet's context limit if the built-in catalog changes later.
 Values are decimal, matching the catalog's convention.
@@ -55,20 +55,20 @@ frontmatter alone.
 
 | Tier  | OpenAI (current fleet)    | Anthropic (dormant) |
 | ----- | ------------------------- | ------------------- |
-| Heavy | `sol` → `gpt-5.6-sol`     | `opus`              |
+| Heavy | `sol` → `gpt-6.1-sol`     | `opus`              |
 | Mid   | `terra` → `gpt-5.6-terra` | `sonnet`            |
-| Light | `luna` → `gpt-5.6-luna`   | `haiku`             |
+| Light | `luna` → `gpt-6-luna`     | `haiku`             |
 
 `luna` is defined but **no agent currently uses it** — it exists so a light tier is one
 frontmatter edit away.
 
 ### Current tier assignment
 
-| Tier           | Agents                                                    |
-| -------------- | --------------------------------------------------------- |
-| `sol` (heavy)  | `annie`, `carren`, `demetri`, `echo`, `piper`, `skribble` |
-| `terra` (mid)  | `ida`, `synthia`, `tabitha`, `vera`                       |
-| `luna` (light) | — none                                                    |
+| Tier           | Agents                                                            |
+| -------------- | ----------------------------------------------------------------- |
+| `sol` (heavy)  | `annie`, `carren`, `demetri`, `echo`, `piper`, `rhea`, `skribble` |
+| `terra` (mid)  | `ida`, `synthia`, `tabitha`, `vera`                               |
+| `luna` (light) | — none                                                            |
 
 Tiers are chosen by the **reasoning demand of the capability contract**, never by
 convenience or by which tier avoids a test failure. `demetri` is `sol` because selection
@@ -127,18 +127,21 @@ the runner is: explicit `provider/model` override → agent frontmatter `provide
 
 ## Thinking levels
 
-All 10 agents run `thinking: xhigh`. The `gpt-5.6-*` models declare
-`thinkingLevelMap: {"xhigh": "xhigh", "max": "max", "minimal": "low"}`, so `xhigh` passes
-through unchanged. A higher `max` level is available and currently unused.
+All 11 agents run `thinking: xhigh`. The current OpenAI alias targets declare `xhigh` as
+an unchanged thinking level and also expose the higher `max` level, which remains unused.
 
 ## Upgrading a model (the whole point)
 
-To move the fleet from `gpt-5.6-sol` to `gpt-5.7-sol`: change the one `modelOverrides` key
-in `~/.pi/agent/models.json`. The 10 agent files never change.
+To retarget the fleet's heavy tier, change the one `modelOverrides` key in
+`~/.pi/agent/models.json` while preserving the alias and verified context limits. The
+current entry is:
 
 ```json
-"modelOverrides": { "gpt-5.7-sol": { "name": "sol" } }   // was gpt-5.6-sol
+"modelOverrides": { "gpt-6.1-sol": { "name": "sol", "contextWindow": 272000, "maxTokens": 128000 } }
 ```
+
+On the next upgrade, replace only the concrete model key after verifying the target. The
+11 agent files never change.
 
 **Caveat:** upgrading the concrete model behind an unchanged alias is intentionally
 invisible to agent frontmatter. `check_tool_profiles.py` verifies the declared SSOT tool/model

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../../orchestration/src/canonical-json.js";
-import type { ArtifactRef } from "../../orchestration/src/contracts.js";
+import { canonicalJson, sha256 } from "../../orchestration/dist/canonical-json.js";
+import type { ArtifactRef } from "../../orchestration/dist/contracts.js";
 import { buildScaDependencyInventoryV1 } from "../src/adapters/dependency-inventory.js";
 import { buildScaSourceCensusV1 } from "../src/adapters/source-census.js";
 import { buildScaSyntaxInventoryV1 } from "../src/adapters/syntax-inventory.js";

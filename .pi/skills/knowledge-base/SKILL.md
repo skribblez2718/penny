@@ -26,6 +26,12 @@ metadata:
       - resume
 ---
 
+## Liveness
+
+Derive values from actual operator policy, not test constants or model guesses. Do not invent finite step, agent-call, phase-cycle, semantic-repair or correction-attempt caps.
+
+Ordinary permitted work has no fixed wall-clock deadline at any layer. Productive execution may continue indefinitely while trusted activity or durable convergence renews its inactivity lease. A stall ends on inactivity expiry; explicit cancellation, errors, actual operator limits, and independent input/output/resource/containment limits remain enforceable.
+
 ## When to Use
 
 - The operator explicitly asks to initialize a configured private KB.

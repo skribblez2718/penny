@@ -1,28 +1,11 @@
-# Workflows
+# KB Host Workflows
 
 Every public call is a **request**, never an authority grant. The host validates a closed schema,
 resolves authority itself, and returns a bounded safe result.
 
-## Request and result shape
+## Public contract boundary
 
-No request carries a root, path, locator, canonical target, approval decision, receipt body, start
-`run_id`, or idempotency key. Requests name an opaque `kb_profile_id` and, where applicable, opaque
-capability IDs the host already minted.
-
-A result carries the action, host-generated `run_id`, optional `kb_id`, status, `met`, opaque IDs
-and counts, path-free artifact handles, safe evidence references, bounded warnings and unresolved
-items, and a `next` step. Cross-fields are closed:
-
-| Status                          | `met`                                                                         | `next`   |
-| ------------------------------- | ----------------------------------------------------------------------------- | -------- |
-| `running`                       | false                                                                         | `resume` |
-| `awaiting_user`                 | false                                                                         | `review` |
-| `refused`, `error`, `exhausted` | false                                                                         | `none`   |
-| `complete`                      | true for a satisfied action, false for a completed deny or unsupported answer | `none`   |
-
-An **artifact handle is path-free**: an ID, kind, digest, media type, and byte length. It has no
-path, relative path, logical filename, root, or locator. `answer_delivery: "artifact_ref"` means the
-result carries that handle — it is not a second reference schema.
+[Operator Entry](overview.md#requests-results-and-retries) owns public request/result semantics and safe retry behavior. This guide owns host implementation ordering; it does not add public actions or approval authority.
 
 ## Idempotency and durable identity
 
@@ -76,8 +59,7 @@ same-run Vera report creates exactly one claim, and the claim ratchets one way:
        (only while the sealed answer is still valid)
 ```
 
-- Claiming is the **first** side effect of a save, before any compose, read, or write, so a
-  drifted, consumed, cross-profile, or concurrently-claimed answer stops the run at the door.
+- After generic start admission and private-request materialization above, the host loads the existing claim and re-reads the sealed answer to validate its current digest, then attempts the single-use claim. Only a successful claim permits composition, consumer use of the answer, or content writes. A drifted, consumed, cross-profile, or concurrently claimed answer stops before those operations, not before the digest-validation read. This does not move claiming ahead of the control-DB admission transaction.
 - The claim binds the answer's digest. If the sealed answer is not the one the claim was minted
   over, the claim is invalidated rather than published.
 - `commit_reserved` is the point of no return: it can never return to `available` and never
@@ -100,55 +82,7 @@ rather than replacing the knowledge base.
 
 ## Query delivery
 
-`answer_delivery` is a closed field with exactly one bounded parent-facing outcome per outcome class:
-
-- **`artifact_ref`** (default) — the result carries the answer artifact handle only. The tool
-  result itself never carries derived content.
-- **`parent_tool_result`** — the result may carry one bounded derived answer, and only when the
-  policy permits it and exactly one host-minted grant matches.
-
-The grant rule is closed and fails closed. A parent-delivery grant is owner-only and binds one
-exact Pi session, host tool invocation ID, profile, closed-request digest, current policy digest,
-and runtime-reported parent provider/model, with a single-use byte cap and expiry. The host grant
-authority enforces one issuance per session/invocation transactionally; a byte-identical retry of
-the same grant ID is idempotent, while a competing issuance loses before delivery can become
-ambiguous. The delivered run consumes the grant atomically; an exact run retry observes the same
-consumption but never redelivers, and another run loses. A grant refused for any other reason
-(policy/model drift, byte cap, malformed answer, mismatch) is retained in its original state.
-
-The grant is not the only condition. Delivery re-hashes the current policy and requires both the
-grant's exact provider/model binding and an **exact parent allowlist match**: the provider and model
-the runtime reports for the active parent context must appear in `allowed_parent_models`, and under
-`local_only` the matched rule must itself declare `locality: "local"`. The host never guesses
-locality. An empty allowlist, policy drift, or an identity the host cannot establish denies.
-
-Delivery also requires the answer to be what the request asked for. `verify_grounding` defaults
-true: deterministic retrieval binds one selected generation and candidate set, Synthia synthesizes
-through the no-argument private-request and selected-generation readers, and Vera independently
-checks every answer citation through the same closed page/source posture. The host requires exact
-citation/finding equality, all findings supported, a passing report, and a durably created save
-claim before the run can be `complete`/`met:true` or parent-deliverable. A request flag or boolean
-report by itself has no authority.
-
-An explicit `verify_grounding: false` request retains the deterministic answer path, records
-`grounding_not_verified`, creates no save claim, and is not parent-deliverable. `page_ids` and
-`source_ids` are honored as retrieval filters (page set, and pages whose claim evidence cites an
-allowed source).
-
-The delivered answer is closed: advisory-only, non-empty text, one or more opaque
-page/claim/source citations (never locators), a contradictions array, an unknowns array, and
-`canonical_verification_required: true`. It may never present itself as canonical current state,
-and no raw private body may ever appear in the tool result.
-
-On any miss the parent sees its safe handle result plus exactly one bounded warning code,
-`refused_parent_delivery` — never the answer, the diagnostic reason, or grant internals. The host
-logs a bounded reason for the operator (missing/mismatched/expired/consumed/ambiguous grant,
-policy denial, byte-cap miss, malformed answer) and never returns one to the model.
-
-The decision core and its fail-closed behavior live in the KB modules of the orchestration app
-(`kb/parent-delivery`; the adapter only builds the closed request and surfaces the decision), and
-the shape, sealed-answer extraction, and every refusal reason are pinned by the
-`test:kb-answer-quality` suite alongside the parent-delivery suite.
+[Retrieval and Lint](retrieval-and-lint.md#query-results) owns the complete delivery contract: artifact-default results, exact single-use host grants, current-policy and runtime-identity checks, same-run grounding/save-claim admission, and safe refusal projection. Host implementations must apply that contract; request flags and child reports never grant delivery authority.
 
 ## Execution architecture (TypeScript path)
 

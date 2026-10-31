@@ -5,18 +5,18 @@ import type { DatabaseSync as SqliteDatabase } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
 import {
   Checkpointer,
   ReceiptConflictError,
   canonicalJson,
   sha256,
   type KbPhaseOperands,
-} from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { KbWorkerClient, KbWorkerPostureError } from "../src/kb/kb-worker-client.js";
-import type { ActiveWorkerRegistrationMetadataV1, AgentInvocation } from "../src/model-client.js";
-import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../src/playbooks/knowledge-base.js";
+} from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { KbWorkerClient, KbWorkerPostureError } from "../dist/kb/kb-worker-client.js";
+import type { ActiveWorkerRegistrationMetadataV1, AgentInvocation } from "../dist/model-client.js";
+import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../dist/playbooks/knowledge-base.js";
 
 const roots: string[] = [];
 const KB_WORKER_METADATA: ActiveWorkerRegistrationMetadataV1 = {

@@ -31,11 +31,17 @@ export const PI_PACKAGES = Object.freeze([
 ]);
 
 const CODING_AGENT_PACKAGE = "@earendil-works/pi-coding-agent";
+const TYPEBOX_PACKAGE = "typebox";
 const ROOT_MANIFEST = "package.json";
 const ORCHESTRATION_MANIFEST = "apps/orchestration/package.json";
+const SCA_SERVICE_MANIFEST = "apps/sca-service/package.json";
 const LOCKFILE = "bun.lock";
-const README = "README.md";
-const SNAPSHOT_FILES = Object.freeze([ROOT_MANIFEST, ORCHESTRATION_MANIFEST, LOCKFILE, README]);
+const SNAPSHOT_FILES = Object.freeze([
+  ROOT_MANIFEST,
+  ORCHESTRATION_MANIFEST,
+  SCA_SERVICE_MANIFEST,
+  LOCKFILE,
+]);
 const VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
 const PI_LATEST_RELEASE_URL = "https://pi.dev/api/latest-version";
@@ -63,20 +69,24 @@ export const PI_UPDATE_ERROR_CODES = Object.freeze({
   PI_UPDATE_FAILED: "PI_UPDATE_FAILED",
 });
 
+// Architecture includes inventory findings; follow it with the compiler-only script.
 const COMPATIBILITY_COMMANDS = Object.freeze([
   Object.freeze({
     command: "bun",
     args: ["run", "typescript:architecture"],
+    phase: "typescript:architecture",
     candidateErrorCode: PI_UPDATE_ERROR_CODES.PENNY_ARCHITECTURE_FAILED,
   }),
   Object.freeze({
     command: "bun",
-    args: ["run", "typecheck"],
+    args: ["run", "typecheck:all"],
+    phase: "typecheck",
     candidateErrorCode: PI_UPDATE_ERROR_CODES.PENNY_TYPE_COMPATIBILITY_FAILED,
   }),
   Object.freeze({
     command: "bun",
     args: ["run", "test:pi-compat"],
+    phase: "test:pi-compat",
     candidateErrorCode: PI_UPDATE_ERROR_CODES.PENNY_RUNTIME_COMPATIBILITY_FAILED,
   }),
 ]);
@@ -248,37 +258,45 @@ function writeJsonFile(filePath, value) {
   atomicWrite(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function replaceReadmeVersion(content, oldVersion, newVersion) {
-  const oldMarker = `**Pi ${oldVersion}**`;
-  const occurrences = content.split(oldMarker).length - 1;
-  if (occurrences !== 1) {
-    throw new PiUpdateError(
-      `${README} must contain exactly one ${JSON.stringify(oldMarker)} marker; found ${occurrences}`
-    );
-  }
-  return content.replace(oldMarker, `**Pi ${newVersion}**`);
-}
-
-export function updatePinnedFiles(projectRoot, candidateVersion) {
+export function updatePinnedFiles(projectRoot, candidateVersion, candidateTypeboxVersion) {
   const candidate = parseExactVersion(candidateVersion, "candidate version");
-  const pins = readPinnedVersions(projectRoot);
-  const currentVersion = pins.root[CODING_AGENT_PACKAGE];
+  const candidateTypebox = parseExactVersion(candidateTypeboxVersion, "candidate TypeBox version");
   const rootPath = path.join(projectRoot, ROOT_MANIFEST);
   const orchestrationPath = path.join(projectRoot, ORCHESTRATION_MANIFEST);
-  const readmePath = path.join(projectRoot, README);
+  const scaServicePath = path.join(projectRoot, SCA_SERVICE_MANIFEST);
   const rootManifest = parseJsonFile(rootPath);
   const orchestrationManifest = parseJsonFile(orchestrationPath);
+  const scaServiceManifest = parseJsonFile(scaServicePath);
   const developmentDependencies = rootManifest.devDependencies;
   const orchestrationDependencies = orchestrationManifest.dependencies;
-  if (!isRecord(developmentDependencies) || !isRecord(orchestrationDependencies)) {
-    throw new PiUpdateError("Pi dependency objects disappeared while preparing the update");
+  const scaServiceDependencies = scaServiceManifest.dependencies;
+  if (
+    !isRecord(developmentDependencies) ||
+    !isRecord(orchestrationDependencies) ||
+    !isRecord(scaServiceDependencies)
+  ) {
+    throw new PiUpdateError(
+      "Pi or TypeBox dependency objects disappeared while preparing the update"
+    );
+  }
+  for (const [dependencies, manifestPath] of [
+    [developmentDependencies, `${ROOT_MANIFEST}.devDependencies`],
+    [orchestrationDependencies, `${ORCHESTRATION_MANIFEST}.dependencies`],
+    [scaServiceDependencies, `${SCA_SERVICE_MANIFEST}.dependencies`],
+  ]) {
+    parseExactVersion(
+      stringField(dependencies, TYPEBOX_PACKAGE, manifestPath),
+      `${manifestPath} ${TYPEBOX_PACKAGE}`
+    );
   }
   for (const packageName of PI_PACKAGES) developmentDependencies[packageName] = candidate;
   orchestrationDependencies[CODING_AGENT_PACKAGE] = candidate;
-  const readme = replaceReadmeVersion(readFileSync(readmePath, "utf8"), currentVersion, candidate);
+  developmentDependencies[TYPEBOX_PACKAGE] = candidateTypebox;
+  orchestrationDependencies[TYPEBOX_PACKAGE] = candidateTypebox;
+  scaServiceDependencies[TYPEBOX_PACKAGE] = candidateTypebox;
   writeJsonFile(rootPath, rootManifest);
   writeJsonFile(orchestrationPath, orchestrationManifest);
-  atomicWrite(readmePath, readme);
+  writeJsonFile(scaServicePath, scaServiceManifest);
 }
 
 function captureSnapshots(projectRoot) {
@@ -311,18 +329,25 @@ export function createCommandRunner(environment = process.env) {
       timeout: timeoutMs,
       windowsHide: true,
     });
+    const description = formatCommand(command, args);
+    const detail = capture ? (result.stderr || result.stdout || "").trim() : "";
+    const outputSuffix = detail ? `: ${detail}` : "";
     if (result.error) {
+      const signalSuffix = result.signal ? ` (signal ${result.signal})` : "";
+      const message =
+        result.error.code === "ETIMEDOUT"
+          ? `${description} timed out after ${timeoutMs} ms${signalSuffix}`
+          : `failed to run ${description}${signalSuffix}: ${result.error.message}`;
+      throw new PiUpdateError(`${message}${outputSuffix}`, { cause: result.error });
+    }
+    if (result.signal) {
       throw new PiUpdateError(
-        `failed to run ${formatCommand(command, args)}: ${result.error.message}`,
-        {
-          cause: result.error,
-        }
+        `${description} terminated by signal ${result.signal}${outputSuffix}`
       );
     }
     if (result.status !== 0) {
-      const detail = capture ? (result.stderr || result.stdout).trim() : "";
       throw new PiUpdateError(
-        `${formatCommand(command, args)} exited with status ${String(result.status)}${detail ? `: ${detail}` : ""}`
+        `${description} exited with status ${String(result.status)}${outputSuffix}`
       );
     }
     return { stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -384,23 +409,36 @@ function capturedVersion(runCommand, command, args, cwd, label) {
   return parseExactVersion(result.stdout.trim(), label);
 }
 
-function registryVersion(runCommand, packageSpecifier, cwd) {
+function registryProperty(runCommand, packageSpecifier, property, cwd) {
   const result = runCommand({
     command: "bun",
-    args: ["pm", "view", packageSpecifier, "version", "--json"],
+    args: ["pm", "view", packageSpecifier, property, "--json"],
     cwd,
     capture: true,
     timeoutMs: REGISTRY_TIMEOUT_MS,
   });
-  let value;
   try {
-    value = JSON.parse(result.stdout);
+    return JSON.parse(result.stdout);
   } catch (error) {
-    throw new PiUpdateError(`registry returned invalid JSON for ${packageSpecifier}`, {
-      cause: error,
-    });
+    throw new PiUpdateError(
+      `registry returned invalid JSON for ${packageSpecifier} property ${property}`,
+      { cause: error }
+    );
   }
-  return parseExactVersion(value, `registry version for ${packageSpecifier}`);
+}
+
+function registryVersion(runCommand, packageSpecifier, cwd) {
+  return parseExactVersion(
+    registryProperty(runCommand, packageSpecifier, "version", cwd),
+    `registry version for ${packageSpecifier}`
+  );
+}
+
+function registryDependencyVersion(runCommand, packageSpecifier, dependencyName, cwd) {
+  return parseExactVersion(
+    registryProperty(runCommand, packageSpecifier, `dependencies.${dependencyName}`, cwd),
+    `${packageSpecifier} dependency ${dependencyName}`
+  );
 }
 
 function piLatestRelease(runCommand, projectRoot) {
@@ -467,6 +505,25 @@ function verifyCandidatePackageFamily(runCommand, projectRoot, candidateVersion)
       );
     }
   }
+
+  const codingAgentSpecifier = `${CODING_AGENT_PACKAGE}@${candidateVersion}`;
+  const typeboxVersion = registryDependencyVersion(
+    runCommand,
+    codingAgentSpecifier,
+    TYPEBOX_PACKAGE,
+    projectRoot
+  );
+  const publishedTypeboxVersion = registryVersion(
+    runCommand,
+    `${TYPEBOX_PACKAGE}@${typeboxVersion}`,
+    projectRoot
+  );
+  if (publishedTypeboxVersion !== typeboxVersion) {
+    throw new PiUpdateError(
+      `${TYPEBOX_PACKAGE}@${typeboxVersion} resolved to ${publishedTypeboxVersion}; refusing an incoherent Pi SDK update`
+    );
+  }
+  return { typeboxVersion };
 }
 
 function installedPackageVersion(projectRoot, packageName) {
@@ -480,12 +537,15 @@ function installedPackageVersion(projectRoot, packageName) {
   return parseExactVersion(stringField(manifest, "version", manifestPath), manifestPath);
 }
 
-function verifyInstalledVersions(projectRoot, candidateVersion) {
-  for (const packageName of PI_PACKAGES) {
+function verifyInstalledVersions(projectRoot, candidateVersion, candidateTypeboxVersion) {
+  for (const [packageName, expectedVersion] of [
+    ...PI_PACKAGES.map((packageName) => [packageName, candidateVersion]),
+    [TYPEBOX_PACKAGE, candidateTypeboxVersion],
+  ]) {
     const installedVersion = installedPackageVersion(projectRoot, packageName);
-    if (installedVersion !== candidateVersion) {
+    if (installedVersion !== expectedVersion) {
       throw new PiUpdateError(
-        `${packageName} installed as ${installedVersion}; expected ${candidateVersion}`
+        `${packageName} installed as ${installedVersion}; expected ${expectedVersion}`
       );
     }
   }
@@ -599,19 +659,27 @@ export function runCandidateConsumerPreflight(runCommand, candidateVersion, log 
   }
 }
 
+function checkoutValidationEnvironment(projectRoot) {
+  return {
+    PI_OFFLINE: "1",
+    PROJECT_ROOT: projectRoot,
+    PENNY_SKILLS_DIR: path.join(projectRoot, ".pi", "skills"),
+  };
+}
+
 function runLocalPiSmoke(runCommand, projectRoot) {
   runCommand({
     command: process.execPath,
     args: [localPiCli(projectRoot), "--approve", "--no-session", "--list-models"],
     cwd: projectRoot,
     timeoutMs: CHECK_TIMEOUT_MS,
-    extraEnvironment: { PI_OFFLINE: "1" },
+    extraEnvironment: checkoutValidationEnvironment(projectRoot),
   });
 }
 
 function runCompatibilityGate(runCommand, projectRoot, label, log, classifyCandidate = false) {
   log(`\n==> ${label}`);
-  const offlineEnvironment = { PI_OFFLINE: "1" };
+  const validationEnvironment = checkoutValidationEnvironment(projectRoot);
   for (const item of COMPATIBILITY_COMMANDS) {
     log(`--> ${formatCommand(item.command, item.args)}`);
     try {
@@ -620,7 +688,7 @@ function runCompatibilityGate(runCommand, projectRoot, label, log, classifyCandi
         args: item.args,
         cwd: projectRoot,
         timeoutMs: CHECK_TIMEOUT_MS,
-        extraEnvironment: offlineEnvironment,
+        extraEnvironment: validationEnvironment,
       });
     } catch (error) {
       if (!classifyCandidate) throw error;
@@ -628,13 +696,13 @@ function runCompatibilityGate(runCommand, projectRoot, label, log, classifyCandi
         `Penny compatibility command failed: ${formatCommand(item.command, item.args)}`,
         {
           code: item.candidateErrorCode,
-          phase: item.args[1],
+          phase: item.phase,
           cause: error,
         }
       );
     }
   }
-  log("--> local candidate Pi extension-load smoke");
+  log("--> local Pi extension-load smoke");
   try {
     runLocalPiSmoke(runCommand, projectRoot);
   } catch (error) {
@@ -722,7 +790,7 @@ function rollbackLocalState(runCommand, projectRoot, snapshots, log) {
     args: ["run", "build:orchestration"],
     cwd: projectRoot,
     timeoutMs: CHECK_TIMEOUT_MS,
-    extraEnvironment: { PI_OFFLINE: "1" },
+    extraEnvironment: checkoutValidationEnvironment(projectRoot),
   });
 }
 
@@ -763,8 +831,13 @@ export function runPiUpdate(options = {}) {
       return { status: "already_aligned", version: originalGlobalVersion };
     }
 
+    let candidateTypeboxVersion;
     try {
-      verifyCandidatePackageFamily(runCommand, projectRoot, candidateVersion);
+      ({ typeboxVersion: candidateTypeboxVersion } = verifyCandidatePackageFamily(
+        runCommand,
+        projectRoot,
+        candidateVersion
+      ));
     } catch (error) {
       throw new PiUpdateError(
         `the coordinated Pi ${candidateVersion} package family is unavailable or incoherent`,
@@ -808,9 +881,9 @@ export function runPiUpdate(options = {}) {
     }
     let candidateInstalled = false;
     try {
-      log(`\n==> Staging Penny SDK ${candidateVersion}`);
+      log(`\n==> Staging Penny SDK ${candidateVersion} with TypeBox ${candidateTypeboxVersion}`);
       try {
-        updatePinnedFiles(projectRoot, candidateVersion);
+        updatePinnedFiles(projectRoot, candidateVersion, candidateTypeboxVersion);
       } catch (error) {
         throw new PiUpdateError("could not stage Penny's candidate Pi declarations", {
           code: PI_UPDATE_ERROR_CODES.CANDIDATE_STAGE_FAILED,
@@ -820,7 +893,7 @@ export function runPiUpdate(options = {}) {
       }
       try {
         installProject(runCommand, projectRoot, false);
-        verifyInstalledVersions(projectRoot, candidateVersion);
+        verifyInstalledVersions(projectRoot, candidateVersion, candidateTypeboxVersion);
         candidateInstalled = true;
       } catch (error) {
         throw new PiUpdateError("Penny's candidate Pi dependency graph did not install correctly", {
@@ -969,7 +1042,7 @@ export function runPiUpdate(options = {}) {
         args: ["--approve", "--no-session", "--list-models"],
         cwd: projectRoot,
         timeoutMs: CHECK_TIMEOUT_MS,
-        extraEnvironment: { PI_OFFLINE: "1" },
+        extraEnvironment: checkoutValidationEnvironment(projectRoot),
       });
     } catch (error) {
       throw new PiUpdateError("updated global Pi could not load Penny", {
@@ -1006,7 +1079,7 @@ export function parseArguments(argv) {
 
 function printHelp() {
   console.log(
-    `Usage: bun run pi:update [--target VERSION]\n\nValidates the latest published coding-agent in a clean consumer, then stages and tests Penny before updating global Pi.\nThe updater classifies release/package failures separately from Penny compatibility failures and never adds missing dependencies automatically.\n--target asserts the expected latest exact version; non-latest targets are rejected.`
+    `Usage: bun run pi:update [--target VERSION]\n\nValidates the latest published coding-agent in a clean consumer, then stages its coordinated Pi packages and exact declared TypeBox version before testing Penny and updating global Pi.\nThe updater classifies release/package failures separately from Penny compatibility failures and never adds missing dependencies automatically.\n--target asserts the expected latest exact version; non-latest targets are rejected.`
   );
 }
 

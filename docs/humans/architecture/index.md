@@ -1,12 +1,20 @@
 # Architecture Documentation
 
-This section explains how Penny is designed. It focuses on what each part of the system is, why it works the way it does, and what those choices mean for people who use or contribute to Penny. For operational instructions aimed at agents, see `docs/agents/architecture/`.
+This is the human-facing hub for Penny's architecture. Start with the
+[overview](overview.md) for the whole path from a request to a durable result. Use
+the [Penny glossary](../glossary.md) for unfamiliar terms and the
+[human-documentation hub](../index.md) to browse other domains. For broader
+project orientation, see the [Penny README](../../../README.md).
 
-| Document                                            | Description                                                                                                                          |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| [Overview](overview.md)                             | Prompt layers, local worker catalog, exact artifact handoff, checkpoints, and primary durable memory                                 |
-| [Project Standards](project-standards.md)           | Why Penny has canonical implementations and how the ten-check task completion protocol works                                         |
-| [Bitter-Lesson Doctrine](bitter-lesson.md)          | Why Penny protects capabilities and prunes hand-coded scaffolding as models improve — "ratchet on capabilities, not implementations" |
-| [Atomic Loop Components](atomic-loop-components.md) | Why Penny builds loops from reusable parts instead of one universal loop, and how that keeps them working as models improve          |
-| [Tiered Memory](tiered-memory.md)                   | Primary-owned durable writes with bounded owner-granted worker read, supervised hub, legacy retention, and data preservation         |
-| [Skill Tool Modes](skill-tool-modes.md)             | Single, parallel, chain, and resume with verified artifact-ref handoff and durable checkpoints                                       |
+| Document                                            | What it explains                                                                                             |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| [Overview](overview.md)                             | How guidance, routing, artifacts, checkpoints, and optional memory fit together                              |
+| [Project Standards](project-standards.md)           | How one current canonical implementation is maintained, challenged, and replaced with evidence               |
+| [Bitter-Lesson Doctrine](bitter-lesson.md)          | Why Penny protects capabilities and safety outcomes while treating model-limiting scaffolding as replaceable |
+| [Atomic Loop Components](atomic-loop-components.md) | Optional concepts for composing policy-led, verifiable loops without imposing one universal procedure        |
+| [Tiered Memory](tiered-memory.md)                   | The conceptual T0–T4 memory model and the boundary between memory, artifacts, and checkpoints                |
+| [Binary Image Artifacts](binary-artifacts.md)       | Exact-ID PNG delivery, canonicalization, bounded decoding, and model capability checks                       |
+| [Asynchronous Host Operations](host-operations.md)  | Registered host adapters, durable operation journals, global leases, fencing, and quarantine                 |
+| [Safe Image Generation](image-generation.md)        | Private profiles, typed admission, deterministic candidates, conservative retry, PNG validation, and export  |
+| [Video Generation Foundation](video-generation.md)  | What provider-free checks establish, and why finished video/native delivery remains blocked                  |
+| [Skill Tool Modes](skill-tool-modes.md)             | A compatibility pointer to the canonical skill capability and orchestration documentation                    |

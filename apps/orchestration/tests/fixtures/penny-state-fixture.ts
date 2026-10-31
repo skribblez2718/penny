@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { initializePennyState, type ResolvedProjectState } from "../../src/state/index.js";
+import { initializePennyState, type ResolvedProjectState } from "../../dist/state/index.js";
 
 const TEST_STATE_ROOT = path.join(tmpdir(), `penny-orchestration-state-${process.pid}`);
 

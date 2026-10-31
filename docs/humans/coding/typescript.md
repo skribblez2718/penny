@@ -6,20 +6,14 @@ means the whole owned surface is covered—not merely the easiest subset.
 
 ## What the repository covers
 
-The owned roots are:
+The root `package.json` configures the owned roots in `typescript:inventory`. Run
+`bun run typescript:inventory` to inspect the current scope and coverage rather than relying on a
+copied root list.
 
-- `.pi/extensions/`
-- `.pi/lib/`
-- `apps/observability/`
-- `apps/orchestration/`
-- `apps/platform-memory/`
-
-The inventory walks those roots dynamically, including non-ignored untracked TypeScript. There is no
-frozen file allowlist and no hardcoded pass count. In the current tree,
-`bun run typescript:inventory` reports **426 owned files**, with type-aware ESLint and strict-program
-coverage for all 426, and 210/210 test or smoke files reachable from package `test:all` scripts. Those
-numbers are a live report, not a target embedded in the checker; adding a file must increase the
-inventory and acquire the same coverage automatically.
+The inventory walks the configured roots dynamically, including non-ignored untracked TypeScript. There is no
+frozen file allowlist and no hardcoded pass count. Every owned file must have type-aware ESLint
+and strict-program coverage; every test or smoke file must be reachable from package `test:all`.
+Adding a file must increase the inventory and acquire the same coverage automatically.
 
 ## The command surface
 
@@ -40,6 +34,18 @@ one configured tsconfig partition, then launches ESLint once per partition with
 TypeScript program while preserving fully type-aware lint. Unmatched files, multiply matched files,
 missing projects, and empty configured partitions fail before lint can claim success. JavaScript runs
 as a final partition.
+
+The architecture guard also isolates its type-aware suppression audits: it starts a fresh,
+sequential child for each file containing an ESLint suppression, using the same effective
+configuration. This releases parser caches without losing unused-disable detection or retaining
+several project graphs beside the architecture checker. A crashed, timed-out, malformed, missing,
+or fatal worker result fails the guard. Each audit allows two minutes, up to 16 MiB of source, and
+up to 1 MiB of diagnostics; excess input or output is an explicit error, not a skipped check.
+
+Pi upgrades run the complete architecture guard once for each baseline/candidate dependency graph,
+then `typecheck:all`, runtime compatibility tests, and extension loading. Architecture includes the
+inventory checks, so the updater does not repeat the full analysis through root `typecheck`.
+Normal root commands keep the interfaces listed above.
 
 The normal commands do **not** pass a migration baseline. Penny has no accepted TypeScript debt
 baseline: a current violation fails, and a baseline-aware migration result must never be presented as
@@ -171,13 +177,13 @@ fail unless they are one of the five exact partial-host test seams.
 Penny has exactly five central exceptions for Pi host types that are much larger than the surface a
 focused test exercises:
 
-| Path                                                   | Exact asserted expression                          |
-| ------------------------------------------------------ | -------------------------------------------------- |
-| `apps/orchestration/tests/kb-loader-policy.test.ts`    | `unusedContextHost as unknown as ExtensionContext` |
-| `.pi/extensions/powerpoint/tests/helpers/contracts.ts` | `guardedHost as ExtensionAPI`                      |
-| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedHost as ExtensionAPI`                      |
-| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedTui as TUI`                                |
-| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedTheme as Theme`                            |
+| Path                                                   | Exact asserted expression                           |
+| ------------------------------------------------------ | --------------------------------------------------- |
+| `apps/orchestration/tests/kb-loader-policy.test.ts`    | `unusedContextHost as unknown as UnusedToolContext` |
+| `.pi/extensions/powerpoint/tests/helpers/contracts.ts` | `guardedHost as ExtensionAPI`                       |
+| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedHost as ExtensionAPI`                       |
+| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedTui as TUI`                                 |
+| `.pi/extensions/questionnaire/tests/helpers.ts`        | `guardedTheme as Theme`                             |
 
 This is a closed registry, not a general permission to cast partial fakes. Each entry binds an exact
 path and AST expression to one immediately preceding
@@ -228,7 +234,7 @@ network dependency is deliberately authorized.
 
 ## Delivery checklist
 
-For TypeScript changes:
+For implementation in Penny-owned TypeScript. Reviews assess available evidence and gaps; plans identify required checks without claiming they ran:
 
 1. Run focused tests that prove the behavior.
 2. Run `bun run format:check`.

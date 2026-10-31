@@ -2,17 +2,17 @@ import path from "node:path";
 
 import { Type, type Static } from "typebox";
 
-import { canonicalJson, sha256 } from "../../orchestration/src/canonical-json.js";
-import { validateContract } from "../../orchestration/src/contracts.js";
+import { canonicalJson, sha256 } from "../../orchestration/dist/canonical-json.js";
+import { validateContract } from "../../orchestration/dist/contracts.js";
 import {
   ScaStrongerExecutionAuthorizationV1Schema,
   validateScaStrongerExecutionAuthorizationV1,
-} from "../../orchestration/src/sca/human-authorization.js";
+} from "../../orchestration/dist/sca/human-authorization.js";
 import {
   OpaqueIdSchema,
   Rfc3339UtcSchema,
   Sha256Schema,
-} from "../../orchestration/src/skill-contracts/common.js";
+} from "../../orchestration/dist/skill-contracts/common.js";
 import { ScaProcessResultV1Schema, type ScaProcessResultV1 } from "./process.js";
 
 const MAX_TEXT = 8_192;

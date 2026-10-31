@@ -9,3 +9,4 @@ export * from "./paths.js";
 export * from "./reconciliation.js";
 export * from "./setup.js";
 export * from "./upgrade.js";
+export * from "./sqlite-health.js";

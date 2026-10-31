@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "smoke/sca-p05-deepseek-smoke.test.ts",
+    "vitest.sca-p05-model-smoke.config.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

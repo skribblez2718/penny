@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { ArtifactStore } from "../src/artifact-store.js";
-import type { ArtifactRef, ExecutionReceipt, RunIdentity } from "../src/contracts.js";
-import { ReceiptAuthority, type UnsignedExecutionReceipt } from "../src/receipts.js";
+import type { ArtifactStore } from "../dist/artifact-store.js";
+import {
+  ContractValidationError,
+  type ArtifactRef,
+  type ExecutionReceipt,
+  type RunIdentity,
+} from "../dist/contracts.js";
+import { ReceiptAuthority, type UnsignedExecutionReceipt } from "../dist/receipts.js";
 import {
   SCA_MANDATORY_OBLIGATION_TYPES,
   SCA_PRODUCER_CONSUMER_TABLE,
@@ -24,7 +29,7 @@ import {
   type ScaRequestV1,
   type ScaRunModelV1,
   type ScaSourceInventoryV1,
-} from "../src/skill-contracts/sca.js";
+} from "../dist/skill-contracts/sca.js";
 import {
   SCA_PHASE_ID,
   SCA_PROJECT_ID,
@@ -33,6 +38,16 @@ import {
   createValidScaDomainFixture,
   type ValidScaDomainFixture,
 } from "./helpers/sca-domain-fixtures.js";
+
+function schemaIssues(validate: () => unknown): readonly string[] {
+  try {
+    validate();
+  } catch (error) {
+    if (error instanceof ContractValidationError) return error.issues;
+    throw error;
+  }
+  throw new Error("expected malformed SCA input to fail schema validation");
+}
 
 function persistContractArtifact(store: ArtifactStore, operationId: string): ArtifactRef {
   return store.persist({
@@ -362,12 +377,14 @@ describe("S-01 TypeBox SCA skill contract families", () => {
   it("requires every mandatory lane exactly once as required_result and pending", () => {
     using fixture = createValidScaDomainFixture();
     const values = createContractFixture(fixture);
-    expect(() =>
-      validateScaRequest(
-        { ...values.request, obligations: values.request.obligations.slice(1) },
-        values.context
+    expect(
+      schemaIssues(() =>
+        validateScaRequest(
+          { ...values.request, obligations: values.request.obligations.slice(1) },
+          values.context
+        )
       )
-    ).toThrow(/mandatory obligation|at least|fewer than/u);
+    ).toContain("/obligations: minItems constraint failed");
     expect(() =>
       validateScaRequest(
         {
@@ -399,18 +416,22 @@ describe("S-01 TypeBox SCA skill contract families", () => {
   it("rejects unknown, unsupported-version, oversized, wrong-ref, and cross-project requests", () => {
     using fixture = createValidScaDomainFixture();
     const values = createContractFixture(fixture);
-    expect(() => validateScaRequest({ ...values.request, rogue: true }, values.context)).toThrow(
-      /additional properties/u
-    );
-    expect(() =>
-      validateScaRequest({ ...values.request, schema_version: 2 }, values.context)
-    ).toThrow(/constant/u);
-    expect(() =>
-      validateScaRequest(
-        { ...values.request, test_artifacts_dir: "x".repeat(4_097) },
-        values.context
+    expect(
+      schemaIssues(() => validateScaRequest({ ...values.request, rogue: true }, values.context))
+    ).toContain("/: must not have additional properties: rogue");
+    expect(
+      schemaIssues(() =>
+        validateScaRequest({ ...values.request, schema_version: 2 }, values.context)
       )
-    ).toThrow(/length|4096/u);
+    ).toContain("/schema_version: const constraint failed");
+    expect(
+      schemaIssues(() =>
+        validateScaRequest(
+          { ...values.request, test_artifacts_dir: "x".repeat(4_097) },
+          values.context
+        )
+      )
+    ).toContain("/test_artifacts_dir: maxLength constraint failed");
     expect(() =>
       validateScaRequest(
         { ...values.request, source_snapshot_ref: fixture.configRef },

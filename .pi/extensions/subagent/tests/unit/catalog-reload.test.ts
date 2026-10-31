@@ -1,191 +1,160 @@
-/**
- * Catalog reload and drift regression tests.
- *
- * A temporary .pi/agents catalog stands in for Pi's project resources. Module
- * cache reset + re-registration models /reload without involving memory.
- */
-
+/** Fresh per-invocation catalog admission; no provider calls or retained-state mutations. */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestExtensionApi, createTestToolInfos } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 
-import {
-  createTestExtensionApi,
-  createTestToolInfos,
-  isRecord,
-} from "../../../../lib/tests/test-narrowers.js";
-
-const { mockSpawn } = vi.hoisted(() => ({
-  mockSpawn: vi.fn(),
+type RunSingleAgent = typeof import("../../agent-runner.js").runSingleAgent;
+const { mockRunSingleAgent } = vi.hoisted(() => ({
+  mockRunSingleAgent: vi.fn<RunSingleAgent>(),
+}));
+vi.mock("../../agent-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agent-runner.js")>()),
+  runSingleAgent: mockRunSingleAgent,
 }));
 
-vi.mock("node:child_process", () => ({
-  spawn: mockSpawn,
-}));
-
-vi.mock("@earendil-works/pi-ai", () => ({
-  StringEnum: (values: readonly string[], options?: Record<string, unknown>) => ({
-    anyOf: values.map((value) => ({ type: "string", const: value })),
-    ...options,
-  }),
-}));
-
-vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@earendil-works/pi-coding-agent")>()),
-  getMarkdownTheme: () => ({}),
-  withFileMutationQueue: vi.fn((_path: string, fn: () => unknown) => fn()),
-}));
-
-vi.mock("@earendil-works/pi-tui", () => ({
-  Container: class ContainerMock {
-    addChild() {}
-  },
-  Markdown: class MarkdownMock {},
-  Spacer: class SpacerMock {},
-  Text: class TextMock {
-    constructor(_text: string, _x: number, _y: number) {}
-  },
-}));
-
-interface CatalogToolResult {
-  isError: boolean;
-  content: Array<{ type: string; text: string }>;
-  details: {
-    error: {
-      code: string;
-      kind: string;
-      retryable: boolean;
-      registeredCatalogDigest: string;
-      executionCatalogDigest: string;
-    };
-    results: unknown[];
-  };
-}
-
-type RegisteredTool = {
+interface RegisteredTool {
   description: string;
-  promptSnippet: string;
-  parameters: unknown;
-  execute: (...args: unknown[]) => Promise<CatalogToolResult>;
-};
-
+  parameters: { properties: Record<string, unknown> };
+  execute: (...args: unknown[]) => Promise<unknown>;
+}
 let projectRoot: string;
 let cwdSpy: ReturnType<typeof vi.spyOn>;
-
-function writeAgent(name: string, description: string): void {
+function writeAgent(name: string, description: string, tools = "read,grep"): void {
   fs.writeFileSync(
     path.join(projectRoot, ".pi", "agents", `${name}.md`),
     [
       "---",
       `name: ${name}`,
       `description: ${description}`,
-      "tools: read,grep",
+      `tools: ${tools}`,
       "model: fixture-model",
+      "thinking: high",
       "---",
       `# ${name}`,
-      "Fixture agent prompt.",
+      description,
     ].join("\n")
   );
 }
-
 function isRegisteredTool(value: unknown): value is RegisteredTool {
   return (
     isRecord(value) &&
     typeof value.description === "string" &&
-    typeof value.promptSnippet === "string" &&
-    value.parameters !== undefined &&
+    isRecord(value.parameters) &&
+    isRecord(value.parameters.properties) &&
     typeof value.execute === "function"
   );
 }
-
-async function reloadAndRegister(): Promise<RegisteredTool> {
-  vi.resetModules();
-  let registered: RegisteredTool | undefined;
+async function register(): Promise<RegisteredTool> {
+  let tool: RegisteredTool | undefined;
   const extension = await import("../../index.js");
   extension.default(
     createTestExtensionApi({
-      getAllTools: () => createTestToolInfos(["read", "grep"]),
-      onRegisterTool(tool) {
-        if (!isRegisteredTool(tool)) throw new Error("subagent registered an invalid tool");
-        registered = tool;
+      getAllTools: () => createTestToolInfos(["read", "grep", "bash"]),
+      onRegisterTool(value) {
+        if (!isRegisteredTool(value)) throw new Error("Invalid registered subagent tool");
+        tool = value;
       },
     })
   );
-  if (!registered) throw new Error("subagent tool was not registered");
-  return registered;
+  if (tool === undefined) throw new Error("Missing subagent tool");
+  return tool;
 }
-
-function schemaText(tool: RegisteredTool): string {
-  return JSON.stringify(tool.parameters);
+function invoke(tool: RegisteredTool, params: Record<string, unknown>): Promise<unknown> {
+  return tool.execute("fresh-catalog", params, undefined, undefined, {
+    cwd: projectRoot,
+    hasUI: false,
+  });
 }
-
 beforeEach(() => {
-  mockSpawn.mockReset();
+  vi.resetModules();
+  mockRunSingleAgent.mockReset();
+  // Stop exactly at the dispatch boundary: assert fresh config without claiming model/output success.
+  mockRunSingleAgent.mockRejectedValue(new Error("FRESH_DISPATCH_OBSERVED"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "penny-agent-catalog-"));
   fs.mkdirSync(path.join(projectRoot, ".pi", "agents"), { recursive: true });
   writeAgent("alpha", "Initial alpha specialty");
   cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(projectRoot);
 });
-
 afterEach(() => {
   cwdSpy.mockRestore();
   fs.rmSync(projectRoot, { recursive: true, force: true });
   vi.resetModules();
 });
 
-describe("catalog reload and re-registration", () => {
-  it("refreshes the enum, provider description, and snippet from a mutated catalog", async () => {
-    const before = await reloadAndRegister();
-
-    expect(schemaText(before)).toContain("alpha");
-    expect(schemaText(before)).not.toContain("beta");
-    expect(before.description).toContain("alpha: Initial alpha specialty");
-    expect(before.promptSnippet).toContain("alpha");
-
-    writeAgent("alpha", "Reloaded alpha specialty");
+describe("current catalog without reload blocking", () => {
+  it("accepts a newly added name without re-registering a stale provider enum", async () => {
+    const tool = await register();
+    expect(tool.description).not.toContain("beta:");
+    expect(tool.parameters.properties.agent).toMatchObject({ type: "string", minLength: 1 });
     writeAgent("beta", "New beta specialty");
-
-    const after = await reloadAndRegister();
-
-    expect(schemaText(after)).toContain("alpha");
-    expect(schemaText(after)).toContain("beta");
-    expect(after.description).toContain("alpha: Reloaded alpha specialty");
-    expect(after.description).toContain("beta: New beta specialty");
-    expect(after.description).not.toContain("Initial alpha specialty");
-    expect(after.promptSnippet).toContain("alpha");
-    expect(after.promptSnippet).toContain("beta");
+    await expect(invoke(tool, { agent: "beta", task: "Use the current role" })).rejects.toThrow(
+      "FRESH_DISPATCH_OBSERVED"
+    );
+    expect(mockRunSingleAgent.mock.calls[0]?.[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "beta", description: "New beta specialty" }),
+      ])
+    );
+    expect(mockRunSingleAgent.mock.calls[0]?.[2]).toBe("beta");
   });
 
-  it("returns a typed reload-required catalog-drift error before executing a newly added schema-rejected agent", async () => {
-    const registered = await reloadAndRegister();
-    expect(schemaText(registered)).not.toContain("beta");
-
-    writeAgent("beta", "Added after registration");
-
-    const result = await registered.execute(
-      "tool-call-1",
-      { agent: "beta", task: "Must not execute before reload" },
-      undefined,
-      undefined,
-      {
-        cwd: projectRoot,
-        hasUI: false,
-        ui: { confirm: vi.fn() },
-      }
+  it.each([
+    { agent: "alpha", task: "current role" },
+    { tasks: [{ agent: "alpha", task: "current role" }] },
+    { chain: [{ agent: "alpha", task: "current role" }] },
+  ])("uses fresh prompt/model/thinking/tools in each public mode: %j", async (params) => {
+    const tool = await register();
+    writeAgent("alpha", "Updated role body", "read,bash");
+    const file = path.join(projectRoot, ".pi", "agents", "alpha.md");
+    fs.writeFileSync(
+      file,
+      fs
+        .readFileSync(file, "utf8")
+        .replace("fixture-model", "updated-model")
+        .replace("thinking: high", "thinking: low")
     );
+    await expect(invoke(tool, params)).rejects.toThrow("FRESH_DISPATCH_OBSERVED");
+    expect(mockRunSingleAgent.mock.calls[0]?.[1]).toEqual([
+      expect.objectContaining({
+        name: "alpha",
+        model: "updated-model",
+        thinking: "low",
+        tools: ["read", "bash"],
+      }),
+    ]);
+    expect(mockRunSingleAgent.mock.calls[0]?.[1][0]?.systemPrompt).toContain("Updated role body");
+  });
 
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Run /reload");
-    expect(result.details.error).toMatchObject({
-      code: "SUBAGENT_RELOAD_REQUIRED",
-      kind: "catalog_drift",
-      retryable: true,
-    });
-    expect(result.details.error.registeredCatalogDigest).not.toBe(
-      result.details.error.executionCatalogDigest
+  it("does not block unchanged requested agents because an unrelated agent was added", async () => {
+    const tool = await register();
+    writeAgent("beta", "Unrelated role");
+    await expect(invoke(tool, { agent: "alpha", task: "current role" })).rejects.toThrow(
+      "FRESH_DISPATCH_OBSERVED"
     );
-    expect(result.details.results).toEqual([]);
-    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockRunSingleAgent).toHaveBeenCalledOnce();
+  });
+
+  it("refuses removed/unknown names before dispatch, even though strings pass the provider schema", async () => {
+    const tool = await register();
+    fs.unlinkSync(path.join(projectRoot, ".pi", "agents", "alpha.md"));
+    const result = await invoke(tool, { agent: "alpha", task: "missing role" });
+    expect(result).toMatchObject({ isError: true });
+    expect(result).toHaveProperty("content.0.text", expect.stringContaining("AGENT_NOT_FOUND"));
+    expect(mockRunSingleAgent).not.toHaveBeenCalled();
+  });
+
+  it("still refuses an unavailable tool in freshly edited YAML before dispatch", async () => {
+    const tool = await register();
+    writeAgent("alpha", "Edited tools", "read,unregistered_tool");
+    const result = await invoke(tool, { agent: "alpha", task: "must not dispatch" });
+    expect(result).toMatchObject({ isError: true });
+    expect(result).toHaveProperty(
+      "content.0.text",
+      expect.stringContaining("TOOL_PROVIDER_MISSING")
+    );
+    expect(mockRunSingleAgent).not.toHaveBeenCalled();
   });
 });

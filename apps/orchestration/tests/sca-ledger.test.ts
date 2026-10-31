@@ -6,7 +6,7 @@ import {
   type ManifestV1,
   type ScaDomainRecordV1,
   type TaskRecordV1,
-} from "../src/sca/contracts.js";
+} from "../dist/sca/contracts.js";
 import {
   SCA_EMPTY_LEDGER_SHA256,
   appendScaLedgerRecord,
@@ -19,7 +19,7 @@ import {
   readCompleteScaLedger,
   replayScaLedgerEvents,
   type ScaLedgerAppendRequestV1,
-} from "../src/sca/ledger.js";
+} from "../dist/sca/ledger.js";
 import { requireValue } from "./helpers/narrowing.js";
 import {
   SCA_PROJECT_ID,

@@ -6,7 +6,7 @@ Code decides whether a subject may perform an action or access an object, field,
 
 ## Security properties
 
-- Every protected decision uses server-side subject, action, object, and contextual authorization.
+- Every protected decision uses subject, action, object, and contextual authorization at the authoritative execution boundary. In client/server systems this is server-side, never delegated to client claims.
 - Object and property access is denied by default and cannot be granted by client-supplied identity or ownership claims.
 
 ## Requirements
@@ -30,8 +30,3 @@ Code decides whether a subject may perform an action or access an object, field,
 
 - [Authentication](authentication.md) establishes identity.
 - [API security](api-security.md) owns interface composition; [session security](session-security.md) owns state lifecycle.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

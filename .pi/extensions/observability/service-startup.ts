@@ -74,6 +74,7 @@ export interface ObservabilityServiceStarterOptions {
   readonly baseUrl: string;
   readonly entryPath?: string;
   readonly env?: NodeJS.ProcessEnv;
+  /** Backward-compatible name for the renewable startup inactivity interval. */
   readonly startupTimeoutMs?: number;
   readonly pollIntervalMs?: number;
   readonly stderrMaxBytes?: number;
@@ -209,7 +210,8 @@ function unrefReadable(stream: Readable | null): void {
 function captureStartupStderr(
   stream: Readable | null,
   maximumBytes: number,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  reportActivity: () => void = () => undefined
 ): { readonly stop: () => CapturedStderr } {
   const chunks: Buffer[] = [];
   let capturedBytes = 0;
@@ -219,6 +221,7 @@ function captureStartupStderr(
   const onData = (value: unknown): void => {
     if (stopped) return;
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+    if (chunk.byteLength > 0) reportActivity();
     const remaining = maximumBytes - capturedBytes;
     if (remaining <= 0) {
       truncated = true;
@@ -260,17 +263,59 @@ function isHealthPayload(value: unknown): boolean {
   );
 }
 
+async function fetchHealthWithInactivity(
+  url: string,
+  fetchImplementation: typeof fetch
+): Promise<{ readonly response: Response; readonly text: string }> {
+  const controller = new AbortController();
+  let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+  const renewInactivity = (): void => {
+    if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => controller.abort(), 800);
+    inactivityTimer.unref?.();
+  };
+  renewInactivity();
+  try {
+    const response = await fetchImplementation(url, { signal: controller.signal });
+    renewInactivity();
+    if (!response.body) return { response, text: await response.text() };
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let total = 0;
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        const chunk = Buffer.from(next.value);
+        total += chunk.length;
+        if (total > 64 * 1024) {
+          await reader.cancel().catch(() => undefined);
+          throw new Error("observability health response exceeded its byte bound");
+        }
+        if (chunk.length > 0) renewInactivity();
+        chunks.push(chunk);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return { response, text: Buffer.concat(chunks, total).toString("utf8") };
+  } finally {
+    if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+  }
+}
+
 export async function observabilityServiceAlive(
   baseUrl: string,
   fetchImplementation: typeof fetch = globalThis.fetch
 ): Promise<boolean> {
   try {
     const endpoint = loopbackEndpoint(baseUrl);
-    const response = await fetchImplementation(`${endpoint.baseUrl}/health`, {
-      signal: AbortSignal.timeout(800),
-    });
-    if (!response.ok) return false;
-    const payload: unknown = await response.json();
+    const result = await fetchHealthWithInactivity(
+      `${endpoint.baseUrl}/health`,
+      fetchImplementation
+    );
+    if (!result.response.ok) return false;
+    const payload: unknown = JSON.parse(result.text);
     return isHealthPayload(payload);
   } catch {
     return false;
@@ -380,11 +425,13 @@ export class ObservabilityServiceStarter {
       if (code !== null) exitCode = code;
       if (signal !== null) exitSignal = signal;
     });
-    const stderrCapture = captureStartupStderr(child.stderr, this.stderrMaxBytes, this.env);
+    let inactivityExpiresAt = Date.now() + this.startupTimeoutMs;
+    const stderrCapture = captureStartupStderr(child.stderr, this.stderrMaxBytes, this.env, () => {
+      inactivityExpiresAt = Date.now() + this.startupTimeoutMs;
+    });
     child.unref();
 
-    const deadline = Date.now() + this.startupTimeoutMs;
-    while (Date.now() < deadline) {
+    while (Date.now() < inactivityExpiresAt) {
       if (await this.serviceAlive()) {
         this.serviceStarted = true;
         stderrCapture.stop();
@@ -406,7 +453,7 @@ export class ObservabilityServiceStarter {
         ? ` with exit code ${exitCode}`
         : exitSignal !== undefined
           ? ` from signal ${exitSignal}`
-          : ` within ${this.startupTimeoutMs}ms`;
+          : ` after ${this.startupTimeoutMs}ms without startup activity`;
     return {
       ready: false,
       spawned: true,

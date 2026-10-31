@@ -14,6 +14,12 @@ metadata:
       - vera
 ---
 
+## Liveness
+
+Derive values from actual operator policy, not test constants or model guesses. Do not invent finite step, agent-call, phase-cycle, semantic-repair or correction-attempt caps.
+
+Ordinary permitted work has no fixed wall-clock deadline at any layer. Productive execution may continue indefinitely while trusted activity or durable convergence renews its inactivity lease. A stall ends on inactivity expiry; explicit cancellation, errors, actual operator limits, and independent input/output/resource/containment limits remain enforceable.
+
 ## When to Use
 
 - Investigate an unfamiliar technical topic or concept.
@@ -51,6 +57,7 @@ The request port is `penny.research-request.v1` v1. Caller artifacts must be exa
 - `request` — input/inline_request; schema `penny.research-request.v1` v1; 1..1 item(s).
 - `prior_grounded_synthesis` — input/artifact; schema `penny.grounded-synthesis.v1` v1; 0..8 item(s); artifact kind semantic-core.
 - `legacy_context` — input/artifact; schema `penny.research-legacy-agent-output.v1` v1; 0..64 item(s); artifact kind agent-output.
+- `evidence_context` — input/artifact; schema `penny.evidence-context.v1` v1; 0..1 item(s); artifact kind evidence-context.
 - `grounded_synthesis` — output/artifact; schema `penny.grounded-synthesis.v1` v1; 1..1 item(s); artifact kind semantic-core.
 
 ### Runtime constraints schema
@@ -135,12 +142,12 @@ The request port is `penny.research-request.v1` v1. Caller artifacts must be exa
         "total_research_rounds": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 16
+          "maximum": 9007199254740991
         },
         "max_evaluator_attempts_per_loop": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 16
+          "maximum": 9007199254740991
         },
         "critique_passes": {
           "type": "integer",
@@ -163,22 +170,22 @@ The request port is `penny.research-request.v1` v1. Caller artifacts must be exa
     "total_research_rounds": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 16
+      "maximum": 9007199254740991
     },
     "max_research_rounds": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 16
+      "maximum": 9007199254740991
     },
     "max_evaluator_attempts_per_loop": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 16
+      "maximum": 9007199254740991
     },
     "max_iterations": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 16
+      "maximum": 9007199254740991
     },
     "critique_passes": {
       "type": "integer",
@@ -379,7 +386,7 @@ The request port is `penny.research-request.v1` v1. Caller artifacts must be exa
 
 <!-- PENNY:GENERATED-INVOCATION:END -->
 
-New V3 runs use host-enforced renewable inactivity leases rather than ordinary model-turn, phase-admission, tool-call, external-call, or total elapsed-work quotas. Trusted non-empty Pi generation/tool activity and durable workflow convergence renew the lease; independent host-operation deadlines, routing repair, malformed/protocol protections, cancellation, and exact V1/V2 continuation remain bounded. Deterministic offline liveness and cancellation behavior are locally certified. The live-model PG4 Quick gate passed in verified run `p4-qr-live-20260827-009`; no provider rerun is required.
+New V3 runs use host-enforced renewable inactivity leases rather than ordinary model-turn, phase-admission, tool-call, external-call, or total elapsed-work quotas. Trusted non-empty Pi generation/tool activity and durable workflow convergence renew the lease; host-operation inactivity leases renew on trusted progress; routing repair and malformed/protocol handling retain their separate measured-error/inactivity and actual operator controls. Historical fields are not finite defaults for new runs. Exact V1/V2 duration fields remain telemetry and do not abort live work. Current liveness/cancellation qualification requires separate runtime evidence; this guidance change does not certify it. See [Qualification evidence](resources/reference.md#qualification-evidence) for the historical result and evidence limits; it is not fresh or current qualification.
 
 ## Exact Artifact Handoff
 
@@ -402,7 +409,7 @@ intake → optional planning → optional plan critique → Echo evidence fan
 → optional report Carren → host rendering/product checks → completion admission
 ```
 
-- Every Synthia revision passes through deterministic host projection/core sealing and Vera.
+- Every Synthia revision passes through deterministic host projection/core sealing and Vera. Seal corrections follow actual operator policy, with no invented finite allowance when unspecified. Each rejected draft gets its own exact diagnostic before another attempt or honest negative terminal; previous-epoch diagnostics are not current instructions. Every rejected draft, including the last, gets its own `SealDiagnosticV1`. Product and diagnostic refs are separate draft-addressed version-1 operations; recovery adopts exact bytes. A negative terminal exposes `seal_diagnostics` and labels the rejected draft separately from any earlier accepted best partial core and semantic `repair_diagnostics`.
 - Vera evidence gaps route to Echo; synthesis defects route to Synthia.
 - Carren quality defects route to Synthia, then a new core, Vera, and Carren again.
 - No changed core can proceed directly to Carren, rendering, or completion.

@@ -34,12 +34,13 @@ vi.mock("node:fs", async () => {
     statSync: vi.fn((p: unknown) =>
       String(p).endsWith("/extensions") ? directoryStats : fileStats
     ),
-    readdirSync: vi.fn((p: unknown) => {
-      if (String(p).endsWith("/extensions")) {
+    readdirSync: vi.fn((...args: Parameters<typeof actual.readdirSync>) => {
+      if (String(args[0]).endsWith("/extensions")) {
         // intentionally unsorted to prove the function sorts deterministically
         return ["observability", "memory", "single.ts", "compaction"];
       }
-      return [];
+      // Preserve real source/output enumeration for shipping-integrity checks.
+      return actual.readdirSync(...args);
     }),
   };
 });

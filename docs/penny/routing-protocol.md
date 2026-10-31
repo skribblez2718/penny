@@ -27,9 +27,19 @@ Route by capability reasoning against this table — what does the task actually
 need? — not by keyword matching. "Multi-step" alone justifies neither a skill
 nor a subagent.
 
+## Bounded work coordination
+
+For substantial decomposition or dependent execution, read [Bounded Work](../agents/agents/bounded-work.md). Use one coherent delegation without a graph when that suffices; use execution-ready leaves and explicit consumed-output dependencies when long-horizon work warrants them. Do not delegate merely to satisfy a task count.
+
+Penny supplies a bounded outcome, sufficient exact inputs, applicable constraints and change scope, expected outputs/evidence, and the context-fit basis through existing invocation fields. Ensure the worker has the applicable guidance rather than assuming it inherits this parent-only protocol. Select a suitable role within its actual authority; an approved plan or task description does not authorize implementation, deployment, or broader tools.
+
+After execution is authorized, choose an eligible task whose prerequisites are satisfied and dispatch it to a fresh worker. Inspect the captured result and appropriate evidence before accepting its outcome or releasing dependent work. Process completion and successful artifact delivery alone do not establish task acceptance. Clarify, repair, or re-decompose when the result is blocked, incomplete, or reveals unsupported scope/context assumptions; do not advance on a success-looking report or a transport-only chain gate.
+
+Reuse accepted products through exact IDs, assess shared-resource conflicts before parallel dispatch, and include integration outcomes. Keep coordinator context focused on the current decision and needed refs. Honor registered workflow state and completion rules where applicable; no parallel execution ledger, new scheduler, or universal reviewer/step limit is introduced.
+
 ## Engine-backed skills (orchestration)
 
-Playbooks are registered TypeScript `PlaybookCoreV1` implementations.
+Playbooks are registered TypeScript `PlaybookCore` implementations.
 `PLAYBOOK_REGISTRY` is the sole executable registry; the common engine owns
 validated phase results, deterministic repair routing, bounded attempts,
 checkpointing, and terminal admission.

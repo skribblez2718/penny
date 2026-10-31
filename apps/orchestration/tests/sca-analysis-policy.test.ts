@@ -4,7 +4,7 @@ import {
   ScaAnalysisPolicyError,
   buildDefaultScaAnalysisPolicyV1,
   validateScaAnalysisPolicyV1,
-} from "../src/sca/analysis-policy.js";
+} from "../dist/sca/analysis-policy.js";
 
 function expectPolicyError(run: () => unknown, code: ScaAnalysisPolicyError["code"]): void {
   try {

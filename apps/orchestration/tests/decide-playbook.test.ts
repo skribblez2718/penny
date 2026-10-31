@@ -1,15 +1,21 @@
+import { explicitSealPolicy } from "./helpers/explicit-cycle-policy.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ArtifactRefSchema,
   DECIDE_PLAYBOOK_REGISTRATION,
   DECIDE_PLAYBOOK_NAME,
   DecidePlaybook,
   OrchestrationService,
   canonicalJson,
+  validateContract,
+  sha256,
+  trustedInvocationDigest,
+  parsePersistedDecisionDraft,
   initializePennyState,
   validateEvidenceAdmission,
   validateDecision,
@@ -23,13 +29,14 @@ import {
   type InputArtifacts,
   type JsonValue,
   type ModelClient,
-  type PlaybookRegistrationV1,
-} from "../src/index.js";
+  type PlaybookRegistration,
+} from "../dist/index.js";
 import {
   decisionDraft,
   decisionRequest,
   persistedDecisionDraft,
 } from "./fixtures/decision-fixtures.js";
+import { decideCurrentSealDiagnosticRef } from "../dist/playbooks/decide.js";
 import { persistEvidenceContext } from "./helpers/evidence-context.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
@@ -76,12 +83,14 @@ function start(runId: string, playbook = DECIDE_PLAYBOOK_NAME, inputArtifacts?: 
 
 class ScriptedDecideClient implements ModelClient {
   readonly invocations: AgentInvocation[] = [];
+  onInvocation?: () => void;
   private next = 0;
 
   constructor(private readonly outputs: readonly string[]) {}
 
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
     this.invocations.push(invocation);
+    this.onInvocation?.();
     const output = this.outputs[this.next];
     this.next += 1;
     if (output === undefined) throw new Error("scripted Decide output is exhausted");
@@ -203,11 +212,308 @@ function happyOutputs(outcome: Parameters<typeof persistedDecisionDraft>[0] = "s
   return [analysisPass(), persistedDecisionDraft(outcome), veraPass(), carrenApprove(true)];
 }
 
+async function reachState(
+  service: OrchestrationService,
+  runId: string,
+  target: string,
+  inputArtifacts?: InputArtifacts
+): Promise<Directive> {
+  let next = service.engine.handle(start(runId, DECIDE_PLAYBOOK_NAME, inputArtifacts));
+  while (next.action === "invoke_agent" && next.state_id !== target) {
+    const [result] = await service.workers.execute(next);
+    if (result === undefined) throw new Error("worker result absent");
+    next = service.engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: identity(runId),
+      result,
+    });
+  }
+  if (next.action !== "invoke_agent" || next.state_id !== target)
+    throw new Error(`expected ${target}`);
+  return next;
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("orchestrated decide workflow", () => {
+  it("passes the reviewed product and both reports to evidence repair without promoting them to proof", async () => {
+    const client = new ScriptedDecideClient([
+      analysisPass(),
+      persistedDecisionDraft("selected"),
+      veraPass(),
+      carrenGap("evidence_gap"),
+      analysisEvidenceGap(),
+      evidencePacket(),
+      persistedDecisionDraft("ranked"),
+      veraPass(),
+      carrenApprove(),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    sequence += 1;
+    const runId = `run-decide-evidence-repair-${sequence}`;
+    const terminal = completeDirective(await service.execute(start(runId)));
+    expect(outputRef(terminal)).toMatchObject({ version: 1 });
+    expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
+      "analyzing_decision",
+      "deciding",
+      "verifying_decision",
+      "critiquing_decision",
+      "analyzing_decision",
+      "gathering_decision_evidence",
+      "deciding",
+      "verifying_decision",
+      "critiquing_decision",
+    ]);
+    const context = service.checkpointer.loadRunById(runId);
+    if (context === undefined) throw new Error("repaired run is absent");
+    const find = (phase: string, kind: string, version: number) => {
+      const ref = context.selectedArtifacts.find(
+        (entry) => entry.phase === phase && entry.kind === kind && entry.version === version
+      );
+      if (ref === undefined) throw new Error(`missing ${phase} ${kind} v${version}`);
+      return ref;
+    };
+    const products = context.selectedArtifacts.filter(
+      (ref) => ref.phase === "sealing_decision" && ref.kind === "semantic-core"
+    );
+    expect(products).toHaveLength(2);
+    expect(products.map((ref) => ref.version)).toEqual([1, 1]);
+    expect(new Set(products.map((ref) => ref.artifact_id)).size).toBe(2);
+    expect(new Set(products.map((ref) => ref.operation_id)).size).toBe(2);
+    for (const ref of products) {
+      expect(
+        service.artifacts.refFor(
+          runId,
+          "sealing_decision",
+          null,
+          "semantic-core",
+          ref.operation_id,
+          1
+        )
+      ).toEqual(ref);
+    }
+    const [firstProduct, finalProduct] = products;
+    if (firstProduct === undefined || finalProduct === undefined)
+      throw new Error("repaired products are absent");
+    expect(outputRef(terminal).artifact_id).toBe(finalProduct.artifact_id);
+    const veraReport = find("verifying_decision", "agent-output", 1);
+    const carrenReport = find("critiquing_decision", "agent-output", 1);
+    for (const index of [4, 5, 6]) {
+      const invocation = client.invocations[index];
+      if (invocation === undefined) throw new Error(`missing repair invocation ${index}`);
+      expect(invocation.inputArtifacts).toEqual(
+        expect.arrayContaining([firstProduct, veraReport, carrenReport])
+      );
+      expect(invocation.inputArtifacts.filter((ref) => ref.kind === "semantic-core")).toEqual([
+        firstProduct,
+      ]);
+    }
+    expect(client.invocations[7]?.inputArtifacts).toContainEqual(finalProduct);
+    const validity = context.selectedArtifacts.find(
+      (ref) => ref.kind === "review-receipt" && ref.branch_id === "validity" && ref.version === 2
+    );
+    const quality = context.selectedArtifacts.find(
+      (ref) => ref.kind === "review-receipt" && ref.branch_id === "quality" && ref.version === 1
+    );
+    if (validity === undefined || quality === undefined)
+      throw new Error("repaired receipt chain is absent");
+    expect(validateReviewReceipt(readJson(service, quality.artifact_id))).toMatchObject({
+      subject: { product_ref: { artifact_id: finalProduct.artifact_id } },
+      prior_review_receipt_ref: { artifact_id: validity.artifact_id },
+    });
+  });
+
+  it("carries the exact reviewed product and both historical reports through alternating Carren and Vera gaps", async () => {
+    const client = new ScriptedDecideClient([
+      analysisPass(),
+      persistedDecisionDraft("selected"),
+      veraPass(),
+      carrenGap("analysis_gap"),
+      analysisPass("Replacement analysis addresses the quality gap."),
+      persistedDecisionDraft("ranked"),
+      veraGap("product_gap"),
+      persistedDecisionDraft("unresolved"),
+      veraPass(),
+      carrenApprove(),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    sequence += 1;
+    const runId = `run-decide-alternating-repair-${sequence}`;
+    // Input slots are stable exact-ID addresses; the first create has no local product.
+    const productSlots: string[][] = [];
+    client.onInvocation = () => {
+      const pending = service.checkpointer.loadRunById(runId)?.pendingDirective;
+      if (pending?.action !== "invoke_agent") throw new Error("pending invocation is absent");
+      productSlots.push(
+        pending.input_artifacts.artifacts
+          .filter((entry) => entry.ref.kind === "semantic-core")
+          .map((entry) => `${entry.slot}:${entry.ref.artifact_id}`)
+      );
+    };
+
+    const terminal = completeDirective(await service.execute(start(runId)));
+    const finalRef = outputRef(terminal);
+    expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
+      "analyzing_decision",
+      "deciding",
+      "verifying_decision",
+      "critiquing_decision",
+      "analyzing_decision",
+      "deciding",
+      "verifying_decision",
+      "deciding",
+      "verifying_decision",
+      "critiquing_decision",
+    ]);
+    const context = service.checkpointer.loadRunById(runId);
+    if (context === undefined) throw new Error("repaired run is absent");
+    const at = (phase: string, artifactKind: string, version: number) => {
+      const ref = context.selectedArtifacts.find(
+        (artifact) =>
+          artifact.phase === phase && artifact.kind === artifactKind && artifact.version === version
+      );
+      if (ref === undefined) throw new Error(`missing ${phase} ${artifactKind} v${version}`);
+      return ref;
+    };
+    const products = context.selectedArtifacts.filter(
+      (ref) => ref.phase === "sealing_decision" && ref.kind === "semantic-core"
+    );
+    expect(products).toHaveLength(3);
+    expect(products.map((ref) => ref.version)).toEqual([1, 1, 1]);
+    expect(new Set(products.map((ref) => ref.artifact_id)).size).toBe(3);
+    expect(new Set(products.map((ref) => ref.operation_id)).size).toBe(3);
+    for (const ref of products) {
+      expect(
+        service.artifacts.refFor(
+          runId,
+          "sealing_decision",
+          null,
+          "semantic-core",
+          ref.operation_id,
+          1
+        )
+      ).toEqual(ref);
+    }
+    const veraReports = [1, 2, 3].map((version) =>
+      at("verifying_decision", "agent-output", version)
+    );
+    const carrenReports = [1, 2].map((version) =>
+      at("critiquing_decision", "agent-output", version)
+    );
+    expect(finalRef).toMatchObject({ artifact_id: products[2]?.artifact_id, version: 1 });
+    const inputIds = (index: number) =>
+      client.invocations[index]?.inputArtifacts.map((ref) => ref.artifact_id);
+    const expectInput = (
+      index: number,
+      productOrder: number,
+      veraVersion: number,
+      carrenVersion: number
+    ) => {
+      const invocation = client.invocations[index];
+      if (invocation === undefined) throw new Error(`invocation ${index} is absent`);
+      const productRef = products[productOrder - 1];
+      const veraRef = veraReports[veraVersion - 1];
+      const carrenRef = carrenReports[carrenVersion - 1];
+      if (productRef === undefined || veraRef === undefined || carrenRef === undefined) {
+        throw new Error("exact repair inputs are absent");
+      }
+      const ids = invocation.inputArtifacts.map((ref) => ref.artifact_id);
+      expect(ids).toEqual(
+        expect.arrayContaining([productRef.artifact_id, veraRef.artifact_id, carrenRef.artifact_id])
+      );
+      expect(invocation.inputArtifacts.filter((ref) => ref.kind === "semantic-core")).toEqual([
+        productRef,
+      ]);
+      expect(
+        invocation.inputArtifacts.filter(
+          (ref) => ref.phase === "verifying_decision" && ref.kind === "agent-output"
+        )
+      ).toEqual([veraRef]);
+      expect(
+        invocation.inputArtifacts.filter(
+          (ref) => ref.phase === "critiquing_decision" && ref.kind === "agent-output"
+        )
+      ).toEqual([carrenRef]);
+    };
+    expect(
+      client.invocations[1]?.inputArtifacts.filter((ref) => ref.kind === "semantic-core")
+    ).toEqual([]);
+    expect(inputIds(1)).not.toContain(products[0]?.artifact_id);
+    expect(productSlots[1]).toEqual([]);
+    expect(productSlots[5]).toEqual([`latest-decision:${products[0]?.artifact_id}`]);
+    expect(productSlots[7]).toEqual([`latest-decision:${products[1]?.artifact_id}`]);
+    // Framing/analysis and each author see the sealed subject, not just its draft.
+    expectInput(4, 1, 1, 1);
+    expectInput(5, 1, 1, 1);
+    expectInput(6, 2, 1, 1);
+    expectInput(7, 2, 2, 1);
+    expectInput(8, 3, 2, 1);
+    expectInput(9, 3, 3, 1);
+    expect(client.invocations[7]?.task).toContain("historical feedback, never approval");
+    // Final PASS/APPROVE and host receipts bind the third sealed product, never a prior review.
+    const finalVeraReport = veraReports[2];
+    const finalCarrenReport = carrenReports[1];
+    if (finalVeraReport === undefined || finalCarrenReport === undefined)
+      throw new Error("final reports are absent");
+    expect(service.artifacts.metadata(finalVeraReport).upstream_refs).toContainEqual(products[2]);
+    expect(service.artifacts.metadata(finalCarrenReport).upstream_refs).toContainEqual(products[2]);
+    const validity = context.selectedArtifacts.find(
+      (ref) => ref.kind === "review-receipt" && ref.branch_id === "validity" && ref.version === 2
+    );
+    const quality = context.selectedArtifacts.find(
+      (ref) => ref.kind === "review-receipt" && ref.branch_id === "quality" && ref.version === 1
+    );
+    if (validity === undefined || quality === undefined)
+      throw new Error("current review receipts are absent");
+    expect(validateReviewReceipt(readJson(service, validity.artifact_id))).toMatchObject({
+      verdict: "PASS",
+      subject: { product_ref: { artifact_id: products[2]?.artifact_id } },
+    });
+    expect(validateReviewReceipt(readJson(service, quality.artifact_id))).toMatchObject({
+      verdict: "APPROVE",
+      subject: { product_ref: { artifact_id: products[2]?.artifact_id } },
+      prior_review_receipt_ref: { artifact_id: validity.artifact_id },
+    });
+    const integrity = context.selectedArtifacts.find(
+      (ref) => ref.kind === "decision-product-integrity"
+    );
+    const envelope = context.selectedArtifacts.find(
+      (ref) => ref.kind === "decision-product-envelope"
+    );
+    if (integrity === undefined || envelope === undefined)
+      throw new Error("current completion graph is absent");
+    expect(
+      validateDecisionProductIntegrity(readJson(service, integrity.artifact_id))
+    ).toMatchObject({
+      status: "PASS",
+      decision_ref: { artifact_id: products[2]?.artifact_id },
+      vera_report_ref: { artifact_id: finalVeraReport.artifact_id },
+      carren_report_ref: { artifact_id: finalCarrenReport.artifact_id },
+      validity_receipt_ref: { artifact_id: validity.artifact_id },
+      quality_receipt_ref: { artifact_id: quality.artifact_id },
+    });
+    expect(validateDecisionProductEnvelope(readJson(service, envelope.artifact_id))).toMatchObject({
+      status: "complete",
+      decision_ref: { artifact_id: products[2]?.artifact_id },
+      integrity_ref: { artifact_id: integrity.artifact_id },
+    });
+    expect(service.checkpointer.completionAdmission(runId)).toBeDefined();
+  });
+
   it.each(["selected", "ranked", "no_feasible_option", "unresolved", "not_applicable"] as const)(
     "completes a reviewed canonical %s DecisionV2 and exact product envelope",
     async (outcome) => {
@@ -472,7 +778,7 @@ describe("orchestrated decide workflow", () => {
     ).toBe("unresolved");
   });
 
-  it("routes Vera product_gap to Demetri, reseals version 2, and re-verifies before Carren", async () => {
+  it("routes Vera product_gap to Demetri, reseals a distinct product, and re-verifies before Carren", async () => {
     const env = environment();
     const client = new ScriptedDecideClient([
       analysisPass(),
@@ -500,7 +806,7 @@ describe("orchestrated decide workflow", () => {
       "verifying_decision",
       "critiquing_decision",
     ]);
-    expect(outputRef(terminal)).toMatchObject({ version: 2 });
+    expect(outputRef(terminal)).toMatchObject({ version: 1 });
     expect(
       validateDecision(readJson(service, String(outputRef(terminal).artifact_id))).outcome
     ).toBe("ranked");
@@ -541,7 +847,7 @@ describe("orchestrated decide workflow", () => {
       "verifying_decision",
       "critiquing_decision",
     ]);
-    expect(outputRef(terminal)).toMatchObject({ version: 2 });
+    expect(outputRef(terminal)).toMatchObject({ version: 1 });
     const validity = terminal.artifacts.find(
       (artifact) => artifact.kind === "review-receipt" && artifact.branch_id === "validity"
     );
@@ -580,24 +886,17 @@ describe("orchestrated decide workflow", () => {
       playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
-    const terminal = completeDirective(
-      await service.execute(start(`run-decide-major-approve-${sequence}`))
-    );
+    const terminal = await service.execute(start(`run-decide-major-approve-${sequence}`));
+    expect(terminal).toMatchObject({ action: "incomplete", met: false });
     expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
       "analyzing_decision",
       "deciding",
       "verifying_decision",
       "critiquing_decision",
-      "critiquing_decision",
-      "deciding",
-      "verifying_decision",
-      "critiquing_decision",
     ]);
-    expect(client.invocations[4]).toMatchObject({
-      stateId: "critiquing_decision",
-      executionPurpose: "routing_repair",
-    });
-    expect(outputRef(terminal)).toMatchObject({ version: 2 });
+    expect(
+      client.invocations.some((invocation) => invocation.executionPurpose === "routing_repair")
+    ).toBe(false);
   });
 
   it("keeps request and orchestration refs out of semantic basis namespaces", async () => {
@@ -624,7 +923,7 @@ describe("orchestrated decide workflow", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: client,
-      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+      playbookRegistration: explicitSealPolicy(DECIDE_PLAYBOOK_REGISTRATION, 1),
     });
     sequence += 1;
     const terminal = await service.execute(start(`run-decide-request-basis-rejected-${sequence}`));
@@ -636,10 +935,181 @@ describe("orchestrated decide workflow", () => {
     ]);
   });
 
+  it("offers a new correction only after a same-run sealed product, not from old feedback", async () => {
+    const client = new ScriptedDecideClient([
+      analysisPass(),
+      persistedDecisionDraft("selected").replace("DECISION_CORE:", "BROKEN_CORE:"),
+      persistedDecisionDraft("selected"),
+      veraGap("product_gap"),
+      persistedDecisionDraft("selected").replace("DECISION_CORE:", "BROKEN_CORE:"),
+      persistedDecisionDraft("ranked"),
+      veraPass(),
+      carrenApprove(),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    sequence += 1;
+    const runId = `run-decide-epoch-${sequence}`;
+    const terminal = completeDirective(await service.execute(start(runId)));
+    expect(outputRef(terminal)).toMatchObject({ kind: "semantic-core", version: 1 });
+    const authors = client.invocations.filter((entry) => entry.stateId === "deciding");
+    expect(authors).toHaveLength(4);
+    expect(authors[1]?.inputArtifacts.filter((ref) => ref.kind === "seal-diagnostic")).toHaveLength(
+      1
+    );
+    expect(authors[2]?.inputArtifacts.filter((ref) => ref.kind === "seal-diagnostic")).toHaveLength(
+      0
+    );
+    expect(authors[3]?.inputArtifacts.filter((ref) => ref.kind === "seal-diagnostic")).toHaveLength(
+      1
+    );
+    const selected = service.checkpointer.loadRunById(runId)?.selectedArtifacts;
+    if (selected === undefined) throw new Error("run checkpoint absent");
+    const diagnostics = selected.filter((ref) => ref.kind === "seal-diagnostic");
+    expect(diagnostics).toHaveLength(2);
+    const first: unknown = readJson(service, diagnostics[0]?.artifact_id ?? "missing");
+    const second: unknown = readJson(service, diagnostics[1]?.artifact_id ?? "missing");
+    expect(first).toMatchObject({
+      rejection_ordinal: 1,
+      epoch_anchor_ref: null,
+      corrections_used: 0,
+    });
+    expect(second).toMatchObject({
+      rejection_ordinal: 1,
+      corrections_used: 0,
+      epoch_anchor_ref: selected.find((ref) => ref.kind === "semantic-core" && ref.version === 1),
+    });
+    const snapshot = service.checkpointer.loadRunById(runId);
+    if (snapshot === undefined) throw new Error("run checkpoint absent");
+    const imported = selected.find((ref) => ref.kind === "semantic-core" && ref.version === 1);
+    if (imported === undefined) throw new Error("first product absent");
+    snapshot.selectedArtifacts.push({ ...imported, run_id: "foreign-run", version: 100 });
+    const secondDiagnostic = diagnostics[1];
+    if (secondDiagnostic === undefined) throw new Error("second diagnostic absent");
+    snapshot.selectedArtifacts.push({ ...secondDiagnostic, run_id: "foreign-run", version: 101 });
+    expect(decideCurrentSealDiagnosticRef(snapshot)).toBeUndefined();
+    expect(client.invocations.map((entry) => entry.stateId).slice(-3)).toEqual([
+      "deciding",
+      "verifying_decision",
+      "critiquing_decision",
+    ]);
+  });
+
+  it("persists the final rejection and labels its exact draft, not an accepted product", async () => {
+    const client = new ScriptedDecideClient([
+      analysisPass(),
+      persistedDecisionDraft("selected").replace("DECISION_CORE:", "BROKEN_CORE:"),
+      persistedDecisionDraft("selected").replace("DECISION_CORE:", "BROKEN_CORE:"),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: explicitSealPolicy(DECIDE_PLAYBOOK_REGISTRATION, 1),
+    });
+    sequence += 1;
+    const runId = `run-decide-final-seal-${sequence}`;
+    const terminal = await service.execute(start(runId));
+    expect(terminal.action).toBe("incomplete");
+    if (terminal.action !== "incomplete") throw new Error("negative terminal absent");
+    expect(terminal.result).toMatchObject({
+      met: false,
+      output_artifact_label: "rejected draft (not a sealed product)",
+      seal_diagnostics: { corrections_used: 1, correction_limit: 1, disposition: "exhausted" },
+    });
+    const selected = service.checkpointer.loadRunById(runId)?.selectedArtifacts;
+    if (selected === undefined) throw new Error("run checkpoint absent");
+    const diagnostics = selected.filter((ref) => ref.kind === "seal-diagnostic");
+    expect(diagnostics).toHaveLength(2);
+    const last = diagnostics[1];
+    if (last === undefined) throw new Error("final seal diagnostic absent");
+    expect(readJson(service, last.artifact_id)).toMatchObject({
+      rejected_draft_ref: terminal.result.output_artifact_ref,
+      previous_diagnostic_ref: diagnostics[0],
+      rejection_ordinal: 2,
+    });
+    expect(terminal.result.seal_diagnostics).toMatchObject({ latest_diagnostic_ref: last });
+    const context = service.checkpointer.loadRunById(runId);
+    if (context === undefined) throw new Error("run checkpoint absent");
+    // Wrong-run feedback with a higher version cannot consume this epoch's allowance.
+    context.selectedArtifacts.push({ ...last, run_id: "foreign-run", version: 100 });
+    expect(decideCurrentSealDiagnosticRef(context)).toEqual(last);
+  });
+
+  it("adopts an interrupted first diagnostic before dispatching its only correction", async () => {
+    const env = environment();
+    let interrupted = false;
+    const registration: PlaybookRegistration = {
+      ...DECIDE_PLAYBOOK_REGISTRATION,
+      construct: (options) =>
+        new DecidePlaybook(
+          options.artifactRevisions,
+          options.artifactStore,
+          options.checkpointer,
+          (point) => {
+            if (!interrupted && point === "sealing_decision:feedback-persistence") {
+              interrupted = true;
+              throw new Error("injected diagnostic interruption");
+            }
+          }
+        ),
+    };
+    sequence += 1;
+    const runId = `run-decide-diagnostic-recover-${sequence}`;
+    {
+      using first = new OrchestrationService({
+        projectRoot: PROJECT_ROOT,
+        env,
+        modelClient: new ScriptedDecideClient([
+          analysisPass(),
+          persistedDecisionDraft("selected").replace("DECISION_CORE:", "BROKEN_CORE:"),
+        ]),
+        playbookRegistration: registration,
+      });
+      await expect(first.execute(start(runId))).rejects.toThrow(
+        /injected diagnostic interruption/u
+      );
+      expect(first.checkpointer.loadRunById(runId)?.stateId).toBe("sealing_decision");
+    }
+    const client = new ScriptedDecideClient([
+      persistedDecisionDraft("selected"),
+      veraPass(),
+      carrenApprove(),
+    ]);
+    using recovered = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env,
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    const terminal = completeDirective(
+      await recovered.execute({
+        schema_version: 2,
+        action: "recover",
+        identity: identity(runId),
+      })
+    );
+    expect(outputRef(terminal)).toMatchObject({ kind: "semantic-core", version: 1 });
+    expect(client.invocations.map((entry) => entry.stateId)).toEqual([
+      "deciding",
+      "verifying_decision",
+      "critiquing_decision",
+    ]);
+    expect(
+      recovered.checkpointer
+        .loadRunById(runId)
+        ?.selectedArtifacts.filter((ref) => ref.kind === "seal-diagnostic")
+    ).toHaveLength(1);
+  });
+
   it("recovers after host sealing persistence and continues the review graph", async () => {
     const env = environment();
     let interrupted = false;
-    const registration: PlaybookRegistrationV1 = {
+    const registration: PlaybookRegistration = {
       ...DECIDE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new DecidePlaybook(
@@ -689,16 +1159,16 @@ describe("orchestrated decide workflow", () => {
       analysisPass(),
       persistedDecisionDraft("selected"),
       veraGap("product_gap"),
-      persistedDecisionDraft("selected"),
+      persistedDraftValue({ ...decisionDraft(), rationale_report: `Changed rationale 1.` }),
       veraGap("product_gap"),
-      persistedDecisionDraft("selected"),
+      persistedDraftValue({ ...decisionDraft(), rationale_report: `Changed rationale 2.` }),
       veraGap("product_gap"),
-      persistedDecisionDraft("selected"),
+      persistedDraftValue({ ...decisionDraft(), rationale_report: `Changed rationale 3.` }),
       veraGap("product_gap"),
     ]);
     using service = new OrchestrationService({
       projectRoot: PROJECT_ROOT,
-      env,
+      env: { ...env, PENNY_ORCHESTRATION_MAX_ITERATIONS: "3" },
       modelClient: client,
       playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
@@ -793,7 +1263,7 @@ describe("orchestrated decide workflow", () => {
   ] as const)("recovers the deterministic host window after $point", async (scenario) => {
     const env = environment();
     let interrupted = false;
-    const registration: PlaybookRegistrationV1 = {
+    const registration: PlaybookRegistration = {
       ...DECIDE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new DecidePlaybook(
@@ -863,7 +1333,7 @@ describe("orchestrated decide workflow", () => {
     expect(routes.every((route) => route.on_exhaustion.reset_counter === false)).toBe(true);
   });
 
-  it("fails closed when active or terminal replay uses a drifted registration contract", async () => {
+  it("fails closed for active drift and exactly replays a historical terminal", async () => {
     const env = environment();
     sequence += 1;
     let activeIdentity: Directive["identity"];
@@ -886,7 +1356,7 @@ describe("orchestrated decide workflow", () => {
     if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const deciding = worker.phases.get("deciding");
     if (deciding === undefined) throw new Error("deciding registration phase is absent");
-    const drifted: PlaybookRegistrationV1 = {
+    const drifted: PlaybookRegistration = {
       ...DECIDE_PLAYBOOK_REGISTRATION,
       worker: {
         ...worker,
@@ -902,13 +1372,16 @@ describe("orchestrated decide workflow", () => {
       modelClient: new ScriptedDecideClient([]),
       playbookRegistration: drifted,
     });
-    for (const identity of [activeIdentity, terminal.identity]) {
-      for (const action of ["status", "recover"] as const) {
-        expect(await replay.execute({ schema_version: 2, action, identity })).toMatchObject({
-          action: "error",
-          result: { code: "REGISTRATION_CONTRACT_MISMATCH", checkpoint_unchanged: true },
-        });
-      }
+    for (const action of ["status", "recover"] as const) {
+      expect(
+        await replay.execute({ schema_version: 2, action, identity: activeIdentity })
+      ).toMatchObject({
+        action: "error",
+        result: { code: "REGISTRATION_CONTRACT_MISMATCH", checkpoint_unchanged: true },
+      });
+      expect(
+        await replay.execute({ schema_version: 2, action, identity: terminal.identity })
+      ).toEqual(terminal);
     }
   });
 
@@ -916,7 +1389,7 @@ describe("orchestrated decide workflow", () => {
     const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
     if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const phases = new Map(worker.phases);
-    const mutableRegistration: PlaybookRegistrationV1 = {
+    const mutableRegistration: PlaybookRegistration = {
       ...DECIDE_PLAYBOOK_REGISTRATION,
       worker: { ...worker, phases },
     };
@@ -978,5 +1451,933 @@ describe("orchestrated decide workflow", () => {
       /await_user|awaiting_user/iu
     );
     expect(client.invocations).toHaveLength(0);
+  });
+  it("continues productive seal and review repair beyond the former imposed limits", async () => {
+    const client = new ScriptedDecideClient([
+      analysisPass(),
+      ...Array.from(
+        { length: 4 },
+        (_value, index) =>
+          `Correction ${index}\n` +
+          persistedDecisionDraft("selected").replace(
+            /(?:ASSESSMENT_DRAFT|DIAGNOSIS_CORE|DECISION_CORE|STRATEGY_CORE|PRODUCED_ARTIFACT_DRAFT):/u,
+            "BROKEN_CORE:"
+          )
+      ),
+      persistedDecisionDraft("selected"),
+      ...Array.from({ length: 4 }, (_value, index) => [
+        veraGap("product_gap"),
+        persistedDraftValue({
+          ...decisionDraft(),
+          rationale_report: `Changed rationale ${index}.`,
+        }),
+      ]).flat(),
+      veraPass(),
+      carrenApprove(),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    sequence += 1;
+    const runId = `run-decide-productive-unlimited-${sequence}`;
+    const terminal = await service.execute(start(runId));
+    expect(terminal.action).toBe("complete");
+    const context = service.checkpointer.loadRunById(runId);
+    if (context === undefined) throw new Error("productive run checkpoint missing");
+    expect(context.maxSteps).toBeNull();
+    expect(context.maxIterations).toBeNull();
+    expect(context.iteration).toBe(4);
+    expect(context.selectedArtifacts.filter((ref) => ref.kind === "seal-diagnostic")).toHaveLength(
+      4
+    );
+    expect(
+      client.invocations.filter((invocation) => invocation.stateId === "deciding")
+    ).toHaveLength(9);
+    expect(
+      await service.execute({ schema_version: 2, action: "recover", identity: terminal.identity })
+    ).toEqual(terminal);
+  });
+  it.each(["NORMAL", "VALID_INCONCLUSIVE"])(
+    "keeps UNVERIFIABLE distinct from a valid product (%s) and recovers durably",
+    async (variant) => {
+      const env = environment();
+      const runId = `run-decide-unverifiable-${++sequence}`;
+      const report = summary({
+        verdict: "UNVERIFIABLE",
+        gap_kind: "verification_incomplete",
+        repair_owner: "none",
+        findings: ["Available evidence cannot establish this claim."],
+        evidence: ["The admitted basis does not supply an independent observation."],
+        strategy_delta:
+          "Retain the product and report; do not reauthor for a verification limitation.",
+      });
+      let terminal: Directive;
+      {
+        const client = new ScriptedDecideClient([
+          analysisPass(),
+          variant === "NORMAL"
+            ? persistedDecisionDraft("selected")
+            : persistedDecisionDraft("unresolved"),
+          report,
+        ]);
+        using service = new OrchestrationService({
+          projectRoot: PROJECT_ROOT,
+          env,
+          modelClient: client,
+          playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+        });
+        terminal = await service.execute(start(runId));
+        expect(terminal).toMatchObject({
+          action: "incomplete",
+          met: false,
+          result: {
+            incomplete_reason: "verification_incomplete",
+            verification_findings: ["Available evidence cannot establish this claim."],
+            evidence_limitations: [
+              "The admitted basis does not supply an independent observation.",
+            ],
+          },
+        });
+        if (terminal.action !== "incomplete") throw new Error("negative terminal absent");
+        expect(
+          terminal.artifacts.some(
+            (ref) => ref.phase === "verifying_decision" && ref.kind === "agent-output"
+          )
+        ).toBe(true);
+        expect(terminal.result.best_partial_artifact_refs).toHaveLength(1);
+        const context = service.checkpointer.loadRunById(runId);
+        if (context === undefined) throw new Error("durable run absent");
+        expect(context.selectedArtifacts.some((ref) => ref.kind === "review-receipt")).toBe(false);
+        expect(service.checkpointer.completionAdmission(runId)).toBeUndefined();
+        expect(client.invocations.map((entry) => entry.stateId)).toEqual([
+          "analyzing_decision",
+          "deciding",
+          "verifying_decision",
+        ]);
+      }
+      const client = new ScriptedDecideClient([]);
+      using recovered = new OrchestrationService({
+        projectRoot: PROJECT_ROOT,
+        env,
+        modelClient: client,
+        playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+      });
+      expect(
+        await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
+      ).toEqual(terminal);
+      expect(client.invocations).toHaveLength(0);
+      expect(recovered.checkpointer.completionAdmission(runId)).toBeUndefined();
+    }
+  );
+
+  it.each(["verifying_decision", "critiquing_decision"])(
+    "preserves the complete structured source judgment through routing-only repair at %s",
+    async (state) => {
+      const source = state === "verifying_decision" ? veraPass() : carrenApprove();
+      const client = new ScriptedDecideClient([
+        analysisPass(),
+        persistedDecisionDraft("selected"),
+        ...(state === "critiquing_decision" ? [veraPass()] : []),
+        source,
+        routingOnly(source),
+        ...(state === "verifying_decision" ? [carrenApprove()] : []),
+      ]);
+      using service = new OrchestrationService({
+        projectRoot: PROJECT_ROOT,
+        env: environment(),
+        modelClient: client,
+        playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+      });
+      const runId = `run-decide-preserved-${++sequence}`;
+      const pending = await reachState(service, runId, state);
+      const [captured] = await service.workers.execute(pending);
+      if (captured === undefined) throw new Error("captured result absent");
+      const repair = service.engine.handle({
+        schema_version: 2,
+        action: "step",
+        identity: identity(runId),
+        result: { ...captured, details: {} },
+      });
+      expect(repair).toMatchObject({ action: "invoke_agent", execution_purpose: "routing_repair" });
+      const terminal = completeDirective(
+        await service.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
+      );
+      expect(terminal.met).toBe(true);
+      const receipt = terminal.artifacts.find(
+        (ref) =>
+          ref.kind === "review-receipt" &&
+          ref.branch_id === (state === "verifying_decision" ? "validity" : "quality")
+      );
+      if (receipt === undefined) throw new Error("positive receipt absent");
+      expect(
+        validateReviewReceipt(readJson(service, receipt.artifact_id)).review_report_ref
+      ).toEqual(captured.output_artifact);
+      expect(
+        service.artifacts.readById(captured.output_artifact.artifact_id).toString("utf8")
+      ).toBe(source);
+    }
+  );
+
+  it.each([
+    ["verifying_decision", "verdict"],
+    ["verifying_decision", "unverifiable"],
+    ["verifying_decision", "evidence"],
+    ["verifying_decision", "confidence"],
+    ["critiquing_decision", "verdict"],
+    ["critiquing_decision", "evidence"],
+    ["critiquing_decision", "strategy_delta"],
+  ])("refuses source judgment mutation at %s (%s)", async (state, field) => {
+    const source =
+      field === "unverifiable"
+        ? summary({
+            verdict: "UNVERIFIABLE",
+            gap_kind: "verification_incomplete",
+            repair_owner: "none",
+            findings: ["Verification evidence unavailable."],
+            evidence: ["No independent observation."],
+            strategy_delta: "Preserve limitations, not an author repair.",
+          })
+        : state === "verifying_decision"
+          ? veraGap("product_gap")
+          : carrenGap("product_gap");
+    let replacement =
+      field === "verdict"
+        ? state === "verifying_decision"
+          ? veraPass()
+          : carrenApprove()
+        : source;
+    if (field === "unverifiable") replacement = veraGap("product_gap");
+    if (field === "evidence")
+      replacement = replacement
+        .replace("Exact latest product check failed.", "Different check.")
+        .replace("The exact latest product has a material quality defect.", "Different check.");
+    if (field === "confidence")
+      replacement = replacement.replace('"confidence":"PROBABLE"', '"confidence":"CERTAIN"');
+    if (field === "strategy_delta")
+      replacement = replacement.replace(
+        "before another complete review cycle.",
+        "with a different plan."
+      );
+    const client = new ScriptedDecideClient([
+      analysisPass(),
+      persistedDecisionDraft("selected"),
+      ...(state === "critiquing_decision" ? [veraPass()] : []),
+      source,
+      routingOnly(replacement),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    const runId = `run-decide-mutation-${++sequence}`;
+    const pending = await reachState(service, runId, state);
+    const [captured] = await service.workers.execute(pending);
+    if (captured === undefined) throw new Error("captured result absent");
+    service.engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: identity(runId),
+      result: { ...captured, details: {} },
+    });
+    const terminal = await service.execute({
+      schema_version: 2,
+      action: "recover",
+      identity: identity(runId),
+    });
+    expect(terminal).toMatchObject({ action: "incomplete", met: false });
+    expect(client.invocations.at(-1)?.executionPurpose).toBe("routing_repair");
+    expect(service.checkpointer.completionAdmission(runId)).toBeUndefined();
+    expect(
+      service.checkpointer
+        .events(runId)
+        .some((event) => event.eventType === "routing_repair_accepted")
+    ).toBe(false);
+  });
+
+  it("binds native mechanical evidence to the current product and signed verifier task only", async () => {
+    const client = new ScriptedDecideClient([
+      analysisPass(),
+      persistedDecisionDraft("selected"),
+      veraGap("product_gap"),
+      persistedDraftValue({ ...decisionDraft(), rationale_report: `Changed rationale fixture.` }),
+      veraPass(),
+      carrenApprove(),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    const runId = `run-decide-mechanics-${++sequence}`;
+    const first = await reachState(service, runId, "verifying_decision");
+    if (first.action !== "invoke_agent") throw new Error("verifier absent");
+    const [checked] = await service.workers.execute(first);
+    if (checked === undefined) throw new Error("signed verifier result absent");
+    expect(checked.worker_receipt.trusted_invocation_digest).toBe(
+      trustedInvocationDigest({
+        identity: first.identity,
+        state_id: first.state_id,
+        branch_id: null,
+        agent: first.agent,
+        attempt: first.attempt,
+        trust_profile: first.trust_profile,
+        model_override: first.model_override ?? null,
+        task_sha256: sha256(first.task),
+        input_artifacts: first.input_artifacts,
+        output_artifact: first.output_artifact,
+      })
+    );
+    service.engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: identity(runId),
+      result: checked,
+    });
+    const terminal = completeDirective(
+      await service.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
+    );
+    const reviews = client.invocations.filter((entry) => entry.stateId === "verifying_decision");
+    expect(reviews).toHaveLength(2);
+    const statements: string[] = [];
+    for (const invocation of reviews) {
+      const line = invocation.task
+        .split("\n")
+        .find((entry) => entry.startsWith("HOST_MECHANICAL_CHECKS:"));
+      if (line === undefined) throw new Error("mechanical evidence absent");
+      const product = invocation.inputArtifacts.find(
+        (ref) => ref.phase === "sealing_decision" && ref.kind === "semantic-core"
+      );
+      const draftRef = invocation.inputArtifacts.find((ref) => ref.kind === "decision-draft");
+      if (product === undefined || draftRef === undefined)
+        throw new Error("mechanical inputs absent");
+      expect(line).toContain(`"product_ref":${canonicalJson(product)}`);
+      expect(line).toContain('"scope":"host_mechanical_only_not_semantic_or_effect_absence"');
+      expect(line).toContain('"source_refs":');
+      for (const ref of invocation.inputArtifacts.filter((ref) =>
+        ["decision-request", "decision-draft", "evidence-admission"].includes(ref.kind)
+      ))
+        expect(line).toContain(canonicalJson(ref));
+      const requestRef = invocation.inputArtifacts.find((ref) => ref.kind === "decision-request");
+      if (requestRef === undefined) throw new Error("request absent");
+      const parsed = parsePersistedDecisionDraft(service.artifacts.readById(draftRef.artifact_id), {
+        request: readJson(service, requestRef.artifact_id),
+        exactInputArtifactIds: [],
+      });
+      const parsedDigest = sha256(canonicalJson(parsed.draft));
+      expect(line).toContain(
+        canonicalJson({ kind: "canonical_parsed_decision_draft", sha256: parsedDigest })
+      );
+      expect(parsedDigest).not.toBe(draftRef.content_digest);
+      statements.push(line);
+    }
+    expect(statements[0]).not.toBe(statements[1]);
+    expect(
+      client.invocations
+        .filter((entry) => entry.stateId !== "verifying_decision")
+        .every(
+          (entry) =>
+            !entry.task.split("\n").some((line) => line.startsWith("HOST_MECHANICAL_CHECKS:"))
+        )
+    ).toBe(true);
+    expect(terminal.met).toBe(true);
+  });
+
+  it.each([false, true])(
+    "fails mechanical validation closed before verifier dispatch (recovery=%s)",
+    async (recovery) => {
+      const env = environment();
+      const runId = `run-decide-mechanical-failure-${++sequence}`;
+      let invalid = false;
+      const client = new ScriptedDecideClient([analysisPass(), persistedDecisionDraft("selected")]);
+      const registration: PlaybookRegistration = {
+        ...DECIDE_PLAYBOOK_REGISTRATION,
+        construct: (options) => {
+          const store = options.artifactStore;
+          if (store === undefined) throw new Error("host store absent");
+          const read = store.readById.bind(store);
+          vi.spyOn(store, "readById").mockImplementation((id) => {
+            const bytes = read(id);
+            return invalid && store.refById(id)?.kind === "semantic-core"
+              ? Buffer.concat([bytes, Buffer.from(" ")])
+              : bytes;
+          });
+          return new DecidePlaybook(
+            options.artifactRevisions,
+            store,
+            options.checkpointer,
+            (point) => {
+              if (!recovery && point === "sealing_decision:artifact-persistence") invalid = true;
+            }
+          );
+        },
+      };
+      using service = new OrchestrationService({
+        projectRoot: PROJECT_ROOT,
+        env,
+        modelClient: client,
+        playbookRegistration: registration,
+      });
+      let terminal: Directive;
+      if (recovery) {
+        await reachState(service, runId, "verifying_decision");
+        invalid = true;
+        terminal = await service.execute({
+          schema_version: 2,
+          action: "recover",
+          identity: identity(runId),
+        });
+      } else terminal = await service.execute(start(runId));
+      expect(terminal).toMatchObject({
+        action: "incomplete",
+        met: false,
+        result: { incomplete_reason: "host_mechanical_validation_failed" },
+      });
+      expect(client.invocations.map((entry) => entry.stateId)).toEqual([
+        "analyzing_decision",
+        "deciding",
+      ]);
+      expect(service.checkpointer.completionAdmission(runId)).toBeUndefined();
+      invalid = false;
+      expect(
+        await service.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
+      ).toEqual(terminal);
+    }
+  );
+
+  it.each(["verifying_decision", "critiquing_decision"])(
+    "stalls the exact parsed candidate and repeated failed checks at %s across restart",
+    async (reviewer) => {
+      const env = environment();
+      const runId = `run-decide-stall-${++sequence}`;
+      const gap =
+        reviewer === "verifying_decision" ? veraGap("product_gap") : carrenGap("product_gap");
+      {
+        const client = new ScriptedDecideClient([
+          analysisPass(),
+          persistedDecisionDraft("selected"),
+          ...(reviewer === "critiquing_decision" ? [veraPass()] : []),
+          gap,
+        ]);
+        using service = new OrchestrationService({
+          projectRoot: PROJECT_ROOT,
+          env,
+          modelClient: client,
+          playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+        });
+        const pending = await reachState(service, runId, reviewer);
+        const [result] = await service.workers.execute(pending);
+        if (result === undefined) throw new Error("first failed check absent");
+        expect(
+          service.engine.handle({
+            schema_version: 2,
+            action: "step",
+            identity: identity(runId),
+            result,
+          })
+        ).toMatchObject({ action: "invoke_agent", state_id: "deciding" });
+      }
+      // New bytes, new raw digest and product identities do not make a new semantic candidate.
+      const same = persistedDecisionDraft("selected").replace("CORE:{", "CORE:{ ");
+      const repeated = gap
+        .replace("preserve exact lineage.", "use a different strategy.")
+        .replace("before another complete review cycle.", "using a different strategy.");
+      const client = new ScriptedDecideClient([
+        same,
+        ...(reviewer === "critiquing_decision" ? [veraPass()] : []),
+        repeated,
+      ]);
+      using service = new OrchestrationService({
+        projectRoot: PROJECT_ROOT,
+        env,
+        modelClient: client,
+        playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+      });
+      const terminal = await service.execute({
+        schema_version: 2,
+        action: "recover",
+        identity: identity(runId),
+      });
+      expect(terminal).toMatchObject({
+        action: "incomplete",
+        met: false,
+        result: {
+          incomplete_reason: "repair_stalled",
+          stalled: true,
+          repair_stall: {
+            origin_state: reviewer,
+            feedback_kind: "product_gap",
+          },
+        },
+      });
+      if (terminal.action !== "incomplete") throw new Error("stall terminal absent");
+      const stall = terminal.result.repair_stall;
+      if (stall === null || typeof stall !== "object" || Array.isArray(stall))
+        throw new Error("stall diagnostics absent");
+      expect(stall.feedback_report_refs).toHaveLength(1);
+      expect(client.invocations.filter((entry) => entry.stateId === "deciding")).toHaveLength(1);
+      const context = service.checkpointer.loadRunById(runId);
+      if (context === undefined) throw new Error("stall checkpoint absent");
+      expect(context.iteration).toBe(1);
+      expect(context.maxIterations).toBeNull();
+      expect(service.checkpointer.completionAdmission(runId)).toBeUndefined();
+      const calls = client.invocations.length;
+      expect(
+        await service.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
+      ).toEqual(terminal);
+      expect(client.invocations).toHaveLength(calls);
+    }
+  );
+
+  it.each(["verifying_decision", "critiquing_decision"])(
+    "continues changed candidates but detects A/B/A recurrence at %s",
+    async (reviewer) => {
+      for (const recurrence of [false, true]) {
+        const gap =
+          reviewer === "verifying_decision" ? veraGap("product_gap") : carrenGap("product_gap");
+        const a = persistedDecisionDraft("selected");
+        const b = persistedDraftValue({
+          ...decisionDraft(),
+          rationale_report: `Changed rationale fixture.`,
+        });
+        const cycle = (candidate: string, failed: boolean) => [
+          candidate,
+          ...(reviewer === "critiquing_decision"
+            ? [veraPass(), failed ? gap : carrenApprove()]
+            : [failed ? gap : veraPass(), ...(failed ? [] : [carrenApprove()])]),
+        ];
+        const client = new ScriptedDecideClient([
+          analysisPass(),
+          ...cycle(a, true),
+          ...cycle(b, true),
+          ...cycle(a, recurrence),
+        ]);
+        using service = new OrchestrationService({
+          projectRoot: PROJECT_ROOT,
+          env: environment(),
+          modelClient: client,
+          playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+        });
+        const terminal = await service.execute(start(`run-decide-recurrence-${++sequence}`));
+        expect(terminal.action).toBe(recurrence ? "incomplete" : "complete");
+        if (recurrence)
+          expect(terminal).toMatchObject({ result: { incomplete_reason: "repair_stalled" } });
+        expect(client.invocations.filter((entry) => entry.stateId === "deciding")).toHaveLength(3);
+      }
+    }
+  );
+
+  it.each([
+    "intact",
+    "changed",
+    "missing",
+    "duplicate",
+    "conflicting_duplicate",
+    "indented_duplicate",
+    "incomplete_line",
+  ])(
+    "recovers frozen contextual verifier evidence across restart or refuses %s evidence",
+    async (mode) => {
+      const env = environment();
+      const runId = `run-decide-context-mechanical-${++sequence}`;
+      let original: Extract<Directive, { action: "invoke_agent" }>;
+      {
+        using service = new OrchestrationService({
+          projectRoot: PROJECT_ROOT,
+          env,
+          modelClient: new ScriptedDecideClient([
+            analysisPass(),
+            persistedDecisionDraft("selected"),
+            veraPass(),
+            carrenApprove(),
+            analysisPass(),
+            persistedDecisionDraft("selected"),
+          ]),
+          playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+        });
+        // Context is an actually completed, reviewed native product, not a forged fixture ref.
+        const producer = completeDirective(await service.execute(start(`${runId}-producer`)));
+        const contextRef = validateContract(
+          ArtifactRefSchema,
+          producer.result.output_artifact_ref,
+          "accepted context"
+        );
+        const pending = await reachState(service, runId, "verifying_decision", {
+          schema_version: 2,
+          artifacts: [{ slot: "restart-context", designation: "context", ref: contextRef }],
+        });
+        if (pending.action !== "invoke_agent")
+          throw new Error("pending contextual verifier absent");
+        original = structuredClone(pending);
+        const statement = pending.task
+          .split("\n")
+          .find((line) => line.startsWith("HOST_MECHANICAL_CHECKS:"));
+        if (statement === undefined) throw new Error("mechanical statement absent");
+        expect(pending.task.indexOf("NONBINDING exact contextual artifacts")).toBeGreaterThan(
+          pending.task.indexOf(statement)
+        );
+        expect(pending.task.endsWith(statement)).toBe(false);
+        expect(pending.input_artifacts.artifacts).toContainEqual({
+          slot: "restart-context",
+          designation: "context",
+          ref: contextRef,
+        });
+        if (mode !== "intact") {
+          const context = service.checkpointer.loadRunById(runId);
+          if (context?.pendingDirective?.action !== "invoke_agent")
+            throw new Error("checkpoint absent");
+          const task = original.task;
+          context.pendingDirective.task =
+            mode === "changed"
+              ? task.replace(
+                  statement,
+                  statement.replace('"schema_version":1', '"schema_version":2')
+                )
+              : mode === "missing"
+                ? task.replace(statement, "")
+                : mode === "duplicate"
+                  ? `${task}\n${statement}`
+                  : mode === "conflicting_duplicate"
+                    ? `${task.replace(statement, "HOST_MECHANICAL_CHECKS:{}")}\n${statement}`
+                    : mode === "indented_duplicate"
+                      ? `${task}\n ${statement}`
+                      : task.replace(statement, `${statement} trailing bytes`);
+          service.checkpointer.saveRun(context, "fixture_frozen_task_tampered", {});
+        }
+      }
+      const client = new ScriptedDecideClient([veraPass(), carrenApprove()]);
+      using recovered = new OrchestrationService({
+        projectRoot: PROJECT_ROOT,
+        env,
+        modelClient: client,
+        playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+      });
+      const next = recovered.engine.handle({
+        schema_version: 2,
+        action: "recover",
+        identity: identity(runId),
+      });
+      if (mode === "intact") {
+        if (next.action !== "invoke_agent") throw new Error("contextual recovery refused");
+        expect(next.task).toBe(original.task);
+        expect(next.input_artifacts).toEqual(original.input_artifacts);
+        const saved = recovered.checkpointer.loadRunById(runId);
+        expect(saved?.pendingDirective).toEqual(next);
+        completeDirective(
+          await recovered.execute({
+            schema_version: 2,
+            action: "recover",
+            identity: identity(runId),
+          })
+        );
+        expect(client.invocations[0]?.task).toBe(original.task);
+        expect(recovered.checkpointer.completionAdmission(runId)).toBeDefined();
+      } else {
+        expect(next).toMatchObject({
+          action: "incomplete",
+          met: false,
+          result: { incomplete_reason: "host_mechanical_validation_failed" },
+        });
+        expect(client.invocations).toHaveLength(0);
+        expect(recovered.checkpointer.completionAdmission(runId)).toBeUndefined();
+        expect(
+          recovered.engine.handle({
+            schema_version: 2,
+            action: "recover",
+            identity: identity(runId),
+          })
+        ).toEqual(next);
+      }
+    }
+  );
+
+  it.each([
+    ["verifying_decision", "analysis_gap"],
+    ["critiquing_decision", "analysis_gap"],
+    ["verifying_decision", "evidence_gap"],
+    ["critiquing_decision", "evidence_gap"],
+  ] as const)(
+    "measures changed upstream content then identical replacement recurrence at %s/%s across restart",
+    async (reviewer, kind) => {
+      const env = environment();
+      const runId = `run-decide-upstream-${++sequence}`;
+      const gap = reviewer === "verifying_decision" ? veraGap(kind) : carrenGap(kind);
+      // Only substantive report prose changes. Routing fields, draft and failed checks stay exact.
+      const reports = (changed: boolean) =>
+        kind === "analysis_gap"
+          ? [
+              analysisPass().replace(
+                "Report body.",
+                changed
+                  ? "Option B now has an independently supported cost."
+                  : "Option B cost is only an assumption."
+              ),
+            ]
+          : [
+              analysisEvidenceGap(),
+              evidencePacket().replace(
+                "Report body.",
+                changed
+                  ? "A second source establishes the missing fact."
+                  : "The first source does not establish the missing fact."
+              ),
+            ];
+      const cycle = (changed: boolean) => [
+        ...reports(changed),
+        persistedDecisionDraft("selected"),
+        ...(reviewer === "critiquing_decision" ? [veraPass()] : []),
+        gap,
+      ];
+      {
+        using service = new OrchestrationService({
+          projectRoot: PROJECT_ROOT,
+          env,
+          modelClient: new ScriptedDecideClient(cycle(false)),
+          playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+        });
+        const pending = await reachState(service, runId, reviewer);
+        const [result] = await service.workers.execute(pending);
+        if (result === undefined) throw new Error("first failed review absent");
+        expect(
+          service.engine.handle({
+            schema_version: 2,
+            action: "step",
+            identity: identity(runId),
+            result,
+          })
+        ).toMatchObject({ action: "invoke_agent", state_id: "analyzing_decision" });
+      }
+      const client = new ScriptedDecideClient([...cycle(true), ...cycle(true)]);
+      using service = new OrchestrationService({
+        projectRoot: PROJECT_ROOT,
+        env,
+        modelClient: client,
+        playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+      });
+      let pending = service.engine.handle({
+        schema_version: 2,
+        action: "recover",
+        identity: identity(runId),
+      });
+      while (pending.action === "invoke_agent" && pending.state_id !== reviewer) {
+        const [result] = await service.workers.execute(pending);
+        if (result === undefined) throw new Error("repair result absent");
+        pending = service.engine.handle({
+          schema_version: 2,
+          action: "step",
+          identity: identity(runId),
+          result,
+        });
+      }
+      if (pending.action !== "invoke_agent" || pending.state_id !== reviewer)
+        throw new Error("second review absent");
+      const [result] = await service.workers.execute(pending);
+      if (result === undefined) throw new Error("second failed review absent");
+      expect(
+        service.engine.handle({
+          schema_version: 2,
+          action: "step",
+          identity: identity(runId),
+          result,
+        })
+      ).toMatchObject({ action: "invoke_agent", state_id: "analyzing_decision" });
+      const beforeRecurrence = service.checkpointer.loadRunById(runId);
+      if (beforeRecurrence === undefined) throw new Error("repair checkpoint absent");
+      const usedBeforeRecurrence = beforeRecurrence.iteration;
+      const terminal = await service.execute({
+        schema_version: 2,
+        action: "recover",
+        identity: identity(runId),
+      });
+      expect(terminal).toMatchObject({
+        action: "incomplete",
+        met: false,
+        result: {
+          incomplete_reason: "repair_stalled",
+          repair_stall: { origin_state: reviewer, feedback_kind: kind },
+        },
+      });
+      const context = service.checkpointer.loadRunById(runId);
+      if (context === undefined) throw new Error("stall checkpoint absent");
+      // Evidence-gap routing itself has a registered charge; the repeated reviewer has none.
+      expect(context.iteration).toBe(usedBeforeRecurrence + (kind === "evidence_gap" ? 1 : 0));
+      const operandState =
+        kind === "analysis_gap" ? "analyzing_decision" : "gathering_decision_evidence";
+      const operands = context.selectedArtifacts.filter(
+        (ref) => ref.phase === operandState && ref.kind === "agent-output"
+      );
+      expect(operands).toHaveLength(3);
+      const drafts = context.selectedArtifacts.filter((ref) => ref.kind === "decision-draft");
+      expect(drafts).toHaveLength(3);
+      expect(new Set(drafts.map((ref) => ref.content_digest)).size).toBe(1);
+      const reviews = context.selectedArtifacts.filter(
+        (ref) => ref.phase === reviewer && ref.kind === "agent-output"
+      );
+      expect(reviews).toHaveLength(3);
+      expect(new Set(reviews.map((ref) => ref.content_digest)).size).toBe(1);
+      const [first, changed, replacement] = operands;
+      if (first === undefined || changed === undefined || replacement === undefined)
+        throw new Error("upstream operands absent");
+      expect(changed.artifact_id).not.toBe(first.artifact_id);
+      expect(changed.content_digest).not.toBe(first.content_digest);
+      expect(replacement.artifact_id).not.toBe(changed.artifact_id);
+      expect(replacement.content_digest).toBe(changed.content_digest);
+      for (const operand of [changed, replacement]) {
+        const review = client.invocations.find(
+          (entry) =>
+            entry.stateId === reviewer &&
+            entry.inputArtifacts.some((ref) => ref.artifact_id === operand.artifact_id)
+        );
+        if (review === undefined)
+          throw new Error("review did not receive its exact changed/replacement operand");
+      }
+      expect(client.invocations.filter((entry) => entry.stateId === "deciding")).toHaveLength(2);
+      expect(service.checkpointer.completionAdmission(runId)).toBeUndefined();
+      const calls = client.invocations.length;
+      expect(
+        await service.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
+      ).toEqual(terminal);
+      expect(client.invocations).toHaveLength(calls);
+    }
+  );
+
+  it("declines recurrence measurement when upstream semantic content cannot be verified", async () => {
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: new ScriptedDecideClient([analysisPass(), persistedDecisionDraft("selected")]),
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    const runId = `run-decide-unmeasurable-${++sequence}`;
+    await reachState(service, runId, "verifying_decision");
+    const context = service.checkpointer.loadRunById(runId);
+    if (context === undefined) throw new Error("review checkpoint absent");
+    const playbook = new DecidePlaybook(service.artifacts, service.artifacts, service.checkpointer);
+    const details = {
+      verdict: "FAIL",
+      gap_kind: "analysis_gap",
+      repair_owner: "annie",
+      findings: ["Unchanged finding."],
+      evidence: ["Same check."],
+      strategy_delta: "Try again.",
+    };
+    expect(playbook.repairProgressFingerprint(context, "verifying_decision", details)).toMatch(
+      /^[a-f0-9]{64}$/u
+    );
+    const read = service.artifacts.readById.bind(service.artifacts);
+    vi.spyOn(service.artifacts, "readById").mockImplementation((id) =>
+      service.artifacts.refById(id)?.phase === "analyzing_decision"
+        ? Buffer.from("Unavailable source content.")
+        : read(id)
+    );
+    expect(playbook.repairProgressFingerprint(context, "verifying_decision", details)).toBeNull();
+    expect(
+      new DecidePlaybook().repairProgressFingerprint(context, "verifying_decision", details)
+    ).toBeNull();
+  });
+
+  it("recomputes the identical pending mechanical statement across a fresh owner restart", async () => {
+    const env = environment();
+    const runId = `run-decide-mechanical-restart-${++sequence}`;
+    let originalTask: string;
+    {
+      using service = new OrchestrationService({
+        projectRoot: PROJECT_ROOT,
+        env,
+        modelClient: new ScriptedDecideClient([analysisPass(), persistedDecisionDraft("selected")]),
+        playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+      });
+      const pending = await reachState(service, runId, "verifying_decision");
+      if (pending.action !== "invoke_agent") throw new Error("pending verifier absent");
+      originalTask = pending.task;
+    }
+    const client = new ScriptedDecideClient([veraPass(), carrenApprove()]);
+    using recovered = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env,
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    completeDirective(
+      await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
+    );
+    const invocation = client.invocations[0];
+    if (invocation === undefined) throw new Error("recovered verifier absent");
+    expect(invocation.task).toBe(originalTask);
+    expect(invocation.task).toContain("HOST_MECHANICAL_CHECKS:");
+  });
+
+  it("refuses mechanically inconsistent exact draft/product lineage without author repair", async () => {
+    const client = new ScriptedDecideClient([analysisPass(), persistedDecisionDraft("selected")]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
+    });
+    const runId = `run-decide-lineage-failure-${++sequence}`;
+    const pending = await reachState(service, runId, "verifying_decision");
+    const context = service.checkpointer.loadRunById(runId);
+    if (pending.action !== "invoke_agent" || context === undefined)
+      throw new Error("pending review absent");
+    const draftRef = pending.input_artifacts.artifacts.find(
+      (entry) => entry.ref.kind === "decision-draft"
+    )?.ref;
+    if (draftRef === undefined) throw new Error("draft absent");
+    const metadata = service.artifacts.metadata(draftRef);
+    if (metadata.schema_version !== 2) throw new Error("expected current draft metadata");
+    const replacement = service.artifacts.persist({
+      metadata: { ...metadata, version: metadata.version + 1, parent_ref: draftRef },
+      content: persistedDraftValue({
+        ...decisionDraft(),
+        rationale_report: "Changed source rationale.",
+      }),
+    });
+    context.selectedArtifacts.push(replacement);
+    service.checkpointer.saveRun(context, "fixture_divergent_draft_selected", {});
+    const terminal = await service.execute({
+      schema_version: 2,
+      action: "recover",
+      identity: identity(runId),
+    });
+    expect(terminal).toMatchObject({
+      action: "incomplete",
+      met: false,
+      result: { incomplete_reason: "host_mechanical_validation_failed" },
+    });
+    expect(client.invocations).toHaveLength(2);
+    expect(service.checkpointer.completionAdmission(runId)).toBeUndefined();
+  });
+  it("keeps verification inability closed and separate from repair-owned failures", () => {
+    const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
+    if (worker.kind !== "catalog-agent") throw new Error("catalog worker absent");
+    const phase = worker.phases.get("verifying_decision");
+    if (phase === undefined) throw new Error("verification schema absent");
+    const details = {
+      verdict: "UNVERIFIABLE",
+      gap_kind: "verification_incomplete",
+      repair_owner: "none",
+      findings: ["Verification capability unavailable."],
+      evidence: ["No independent observation."],
+      strategy_delta: "Retain limitations without author repair.",
+    };
+    expect(validateContract(phase.schema, details, "verification inability")).toEqual(details);
+    for (const invalid of [
+      { ...details, verdict: "PASS" },
+      { ...details, verdict: "FAIL" },
+      { ...details, gap_kind: "product_gap" },
+      { ...details, repair_owner: "echo" },
+      { ...details, findings: [] },
+      { ...details, evidence: [] },
+      { ...details, invented: true },
+    ])
+      expect(() =>
+        validateContract(phase.schema, invalid, "invalid verification inability")
+      ).toThrow();
   });
 });

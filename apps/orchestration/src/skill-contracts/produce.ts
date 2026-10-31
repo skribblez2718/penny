@@ -1,7 +1,18 @@
 import { Type, type Static } from "typebox";
+import { parseProduceReviewJson } from "./produce-review-json.js";
 
 import { canonicalJson, sha256 } from "../checkpointer.js";
-import { ArtifactRefSchema, ConfidenceSchema, type ArtifactRef } from "../contracts.js";
+import {
+  ArtifactRefSchema,
+  ConfidenceSchema,
+  ExecutionReceiptSchema,
+  InputArtifactsSchema,
+  OutputArtifactMetadataSchema,
+  RoutingRepairBindingV1Schema,
+  RunIdentitySchema,
+  TrustProfileSchema,
+  type ArtifactRef,
+} from "../contracts.js";
 import {
   ArtifactIdSchema,
   OpaqueIdSchema,
@@ -23,6 +34,54 @@ import {
   validateEffectEvidenceGraph,
   type EffectEvidenceGraphV1,
 } from "./effects.js";
+
+/** Host-only immutable assignment companion. Never a model operand or review wire field.
+ * The invocation is the exact signed digest preimage, including original slot/designation
+ * and task hash. No prompt/schema/slot generator participates in historical verification. */
+export const ProduceReviewAssignmentV1Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.produce-review-assignment.v1"),
+    schema_version: Type.Literal(1),
+    invocation: Type.Object(
+      {
+        identity: RunIdentitySchema,
+        state_id: Type.Union([
+          Type.Literal("critiquing_artifact"),
+          Type.Literal("verifying_artifact"),
+        ]),
+        branch_id: Type.Null(),
+        agent: Type.Union([Type.Literal("carren"), Type.Literal("vera")]),
+        attempt: Type.Integer({ minimum: 1 }),
+        trust_profile: TrustProfileSchema,
+        model_override: ExecutionReceiptSchema.properties.model,
+        execution_purpose: Type.Optional(Type.Literal("routing_repair")),
+        routing_repair_binding_sha256: Type.Optional(Sha256Schema),
+        task_sha256: Sha256Schema,
+        input_artifacts: InputArtifactsSchema,
+        output_artifact: OutputArtifactMetadataSchema,
+      },
+      { additionalProperties: false }
+    ),
+    routing_repair_binding: Type.Optional(RoutingRepairBindingV1Schema),
+  },
+  { additionalProperties: false }
+);
+export type ProduceReviewAssignmentV1 = Static<typeof ProduceReviewAssignmentV1Schema>;
+export function validateProduceReviewAssignment(value: unknown): ProduceReviewAssignmentV1 {
+  const parsed = validateSkillSchema(ProduceReviewAssignmentV1Schema, value, "review assignment");
+  const invocation = parsed.invocation;
+  const repair = parsed.routing_repair_binding;
+  if (
+    (invocation.state_id === "critiquing_artifact" ? "carren" : "vera") !== invocation.agent ||
+    (repair === undefined
+      ? invocation.execution_purpose !== undefined ||
+        invocation.routing_repair_binding_sha256 !== undefined
+      : invocation.execution_purpose !== "routing_repair" ||
+        invocation.routing_repair_binding_sha256 !== sha256(canonicalJson(repair)))
+  )
+    throw new Error("review assignment has inconsistent roles or repair binding");
+  return parsed;
+}
 
 const MAX_REQUEST_ITEMS = 64;
 const MAX_SOURCE_ITEMS = 128;
@@ -120,7 +179,7 @@ const ApproachOptionV1Schema = Type.Object(
 export const ArtifactApproachV1Schema = Type.Object(
   {
     schema_version: Type.Literal(1),
-    approaches: Type.Array(ApproachOptionV1Schema, { minItems: 2, maxItems: MAX_APPROACHES }),
+    approaches: Type.Array(ApproachOptionV1Schema, { minItems: 1, maxItems: MAX_APPROACHES }),
     confidence: ConfidenceSchema,
   },
   { additionalProperties: false }
@@ -145,7 +204,7 @@ export const ArtifactApproachDecisionV1Schema = Type.Object(
     schema_version: Type.Literal(1),
     disposition: Type.Union([Type.Literal("selected"), Type.Literal("unresolved")]),
     approach_assessments: Type.Array(ApproachAssessmentV1Schema, {
-      minItems: 2,
+      minItems: 1,
       maxItems: MAX_APPROACHES,
     }),
     selected_approach_id: Type.Union([OpaqueIdSchema, Type.Null()]),
@@ -765,11 +824,7 @@ const APPROACH_DECISION_PREFIX = "ARTIFACT_APPROACH_DECISION:";
 const DRAFT_PREFIX = "PRODUCED_ARTIFACT_DRAFT:";
 const SUMMARY_PREFIX = "SUMMARY:";
 
-function parseExactSummary<T>(
-  value: string,
-  validate: (parsed: unknown) => T,
-  exactText: (summary: T) => string
-): T | undefined {
+function parseExactSummary<T>(value: string, validate: (parsed: unknown) => T): T | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -778,7 +833,9 @@ function parseExactSummary<T>(
   }
   try {
     const summary = validate(parsed);
-    return exactText(summary) === value ? summary : undefined;
+    // SUMMARY is closed compact JSON, not a key-order-dependent template. The
+    // round trip also rejects duplicate keys rather than silently taking the last.
+    return JSON.stringify(summary) === value ? summary : undefined;
   } catch {
     return undefined;
   }
@@ -792,7 +849,9 @@ function parseTwoLineCore<T, S extends { readonly confidence: string }>(
     readonly maximumBytes: number;
     readonly validate: (value: unknown) => T;
     readonly validateSummary: (value: unknown) => S;
-    readonly summaryText: (summary: S) => string;
+    /** Only a host-verified routing-repair receipt may replace source routing.
+     * It never replaces, repairs, or relaxes validation of the semantic core. */
+    readonly routingRepairSummary?: unknown;
     readonly confidence: (value: T) => string;
   }
 ): { readonly value: T; readonly summary: S } {
@@ -823,25 +882,18 @@ function parseTwoLineCore<T, S extends { readonly confidence: string }>(
   const lines = framed.split("\n");
   if (
     framed.endsWith("\n") ||
-    lines.length !== 2 ||
+    (lines.length !== 2 && !(input.routingRepairSummary !== undefined && lines.length === 1)) ||
     !lines[0]?.startsWith(input.prefix) ||
-    !lines[1]?.startsWith(SUMMARY_PREFIX) ||
-    lines.some((line) => line.trim() !== line || line.includes("`"))
+    (lines.length === 2 && !lines[1]?.startsWith(SUMMARY_PREFIX)) ||
+    lines.some((line) => line.trim() !== line)
   ) {
     throw new ProduceDraftValidationError("FRAMING_INVALID", [
       `${input.label} requires exactly one unwrapped core line and one compact SUMMARY line`,
     ]);
   }
   const coreText = lines[0].slice(input.prefix.length);
-  const summary = parseExactSummary(
-    lines[1].slice(SUMMARY_PREFIX.length),
-    input.validateSummary,
-    input.summaryText
-  );
-  if (coreText.length === 0 || summary === undefined) {
-    throw new ProduceDraftValidationError("FRAMING_INVALID", [
-      `${input.label} core or SUMMARY framing is invalid`,
-    ]);
+  if (coreText.length === 0) {
+    throw new ProduceDraftValidationError("FRAMING_INVALID", ["empty core"]);
   }
   let parsed: unknown;
   try {
@@ -865,6 +917,17 @@ function parseTwoLineCore<T, S extends { readonly confidence: string }>(
       `${input.label} core must be canonical JSON`,
     ]);
   }
+  const summary = parseExactSummary(
+    input.routingRepairSummary === undefined
+      ? (lines[1]?.slice(SUMMARY_PREFIX.length) ?? "")
+      : (JSON.stringify(input.routingRepairSummary) ?? ""),
+    input.validateSummary
+  );
+  if (summary === undefined) {
+    throw new ProduceDraftValidationError("FRAMING_INVALID", [
+      `${input.label} SUMMARY framing is invalid`,
+    ]);
+  }
   if (input.confidence(value) !== summary.confidence) {
     throw new ProduceDraftValidationError("SEMANTIC_INVALID", [
       `${input.label} confidence must equal SUMMARY confidence`,
@@ -873,7 +936,10 @@ function parseTwoLineCore<T, S extends { readonly confidence: string }>(
   return { value, summary };
 }
 
-export function parsePersistedArtifactApproach(bytes: Uint8Array): {
+export function parsePersistedArtifactApproach(
+  bytes: Uint8Array,
+  input: { readonly routingRepairSummary?: unknown } = {}
+): {
   readonly approach: ArtifactApproachV1;
   readonly summary: ProduceRoutingSummaryV1;
 } {
@@ -884,7 +950,7 @@ export function parsePersistedArtifactApproach(bytes: Uint8Array): {
     validate: validateArtifactApproach,
     validateSummary: (value) =>
       validateSkillSchema(ProduceRoutingSummaryV1Schema, value, "Produce routing summary"),
-    summaryText: (summary) => `{"confidence":"${summary.confidence}","complete":true}`,
+    routingRepairSummary: input.routingRepairSummary,
     confidence: (value) => value.confidence,
   });
   return { approach: parsed.value, summary: parsed.summary };
@@ -892,7 +958,7 @@ export function parsePersistedArtifactApproach(bytes: Uint8Array): {
 
 export function parsePersistedArtifactApproachDecision(
   bytes: Uint8Array,
-  input: { readonly approach: unknown }
+  input: { readonly approach: unknown; readonly routingRepairSummary?: unknown }
 ): {
   readonly decision: ArtifactApproachDecisionV1;
   readonly summary: ProduceApproachDecisionRoutingSummaryV1;
@@ -908,8 +974,7 @@ export function parsePersistedArtifactApproachDecision(
         value,
         "Produce approach-decision routing summary"
       ),
-    summaryText: (summary) =>
-      `{"confidence":"${summary.confidence}","complete":true,"disposition":"${summary.disposition}"}`,
+    routingRepairSummary: input.routingRepairSummary,
     confidence: (value) => value.confidence,
   });
   if (parsed.value.disposition !== parsed.summary.disposition) {
@@ -931,7 +996,6 @@ export function parsePersistedProducedArtifactDraft(
     validate: (value) => validateProducedArtifactDraft(value, input),
     validateSummary: (value) =>
       validateSkillSchema(ProduceRoutingSummaryV1Schema, value, "Produce routing summary"),
-    summaryText: (summary) => `{"confidence":"${summary.confidence}","complete":true}`,
     confidence: (value) => value.confidence,
   });
   return { draft: parsed.value, summary: parsed.summary };
@@ -940,10 +1004,12 @@ export function parsePersistedProducedArtifactDraft(
 export function artifactApproachPromptContract(): string {
   return canonicalJson({
     schema: ArtifactApproachV1Schema,
+    summary_schema: ProduceRoutingSummaryV1Schema,
+    summary_serialization: "compact JSON; property order is immaterial; no duplicate keys",
     transport: {
       canonical_framing:
         "exactly ARTIFACT_APPROACH:<canonical-single-line-JSON> then SUMMARY:<compact-JSON>",
-      approach_count: { minimum: 2, maximum: MAX_APPROACHES },
+      approach_count: { minimum: 1, maximum: MAX_APPROACHES },
       final_artifact_authorship: "forbidden",
     },
   });
@@ -952,6 +1018,8 @@ export function artifactApproachPromptContract(): string {
 export function artifactApproachDecisionPromptContract(): string {
   return canonicalJson({
     schema: ArtifactApproachDecisionV1Schema,
+    summary_schema: ProduceApproachDecisionRoutingSummaryV1Schema,
+    summary_serialization: "compact JSON; property order is immaterial; no duplicate keys",
     transport: {
       canonical_framing:
         "exactly ARTIFACT_APPROACH_DECISION:<canonical-single-line-JSON> then SUMMARY:<compact-JSON>",
@@ -1643,7 +1711,7 @@ export function validateProducedArtifactDraftV2(
 
 export function parsePersistedProducedArtifactDraftV2(
   bytes: Uint8Array,
-  input: { readonly request: unknown }
+  input: { readonly request: unknown; readonly routingRepairSummary?: unknown }
 ): { readonly draft: ProducedArtifactDraftV2; readonly summary: ProduceRoutingSummaryV1 } {
   const parsed = parseTwoLineCore(bytes, {
     prefix: DRAFT_PREFIX,
@@ -1652,7 +1720,7 @@ export function parsePersistedProducedArtifactDraftV2(
     validate: (value) => validateProducedArtifactDraftV2(value, input),
     validateSummary: (value) =>
       validateSkillSchema(ProduceRoutingSummaryV1Schema, value, "Produce routing summary"),
-    summaryText: (summary) => `{"confidence":"${summary.confidence}","complete":true}`,
+    routingRepairSummary: input.routingRepairSummary,
     confidence: (value) => value.confidence,
   });
   return { draft: parsed.value, summary: parsed.summary };
@@ -1661,6 +1729,8 @@ export function parsePersistedProducedArtifactDraftV2(
 export function producedArtifactDraftPromptContractV2(): string {
   return canonicalJson({
     schema: ProducedArtifactDraftV2Schema,
+    summary_schema: ProduceRoutingSummaryV1Schema,
+    summary_serialization: "compact JSON; property order is immaterial; no duplicate keys",
     transport: {
       encoding: "strict UTF-8",
       maximum_output_bytes: MAX_PERSISTED_PRODUCE_DRAFT_BYTES,
@@ -2235,4 +2305,281 @@ export function validateProduceEvidenceBundle(input: {
     phases: PRODUCE_EFFECT_PHASES,
   });
   return { contract_version: 2, effect_evidence: quality.effect_evidence };
+}
+
+const FindingSchema = Type.String({ minLength: 1, maxLength: 4_096 });
+const FindingsSchema = Type.Array(FindingSchema, { maxItems: 32 });
+const EvidenceSchema = Type.Array(FindingSchema, { minItems: 1, maxItems: 64 });
+const StrategyDeltaSchema = Type.String({ minLength: 1, maxLength: 4_096 });
+const QualityFindingSchema = Type.Object(
+  {
+    severity: Type.Union([Type.Literal("minor"), Type.Literal("major"), Type.Literal("critical")]),
+    message: FindingSchema,
+  },
+  { additionalProperties: false }
+);
+const MinorQualityFindingSchema = Type.Object(
+  { severity: Type.Literal("minor"), message: FindingSchema },
+  { additionalProperties: false }
+);
+
+export const ProduceQualityReviewSummaryV1Schema = Type.Union([
+  Type.Object(
+    {
+      verdict: Type.Literal("APPROVE"),
+      gap_kind: Type.Literal("none"),
+      repair_owner: Type.Literal("none"),
+      findings: Type.Array(MinorQualityFindingSchema, { maxItems: 32 }),
+      evidence: EvidenceSchema,
+      strategy_delta: StrategyDeltaSchema,
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      verdict: Type.Literal("FAIL"),
+      gap_kind: Type.Literal("quality_gap"),
+      repair_owner: Type.Literal("skribble"),
+      findings: Type.Array(QualityFindingSchema, { minItems: 1, maxItems: 32 }),
+      evidence: EvidenceSchema,
+      strategy_delta: StrategyDeltaSchema,
+    },
+    { additionalProperties: false }
+  ),
+]);
+
+function validityFailureSchema(
+  gapKind: "brief_gap" | "artifact_product_gap",
+  owner: "ida" | "skribble"
+) {
+  return Type.Object(
+    {
+      verdict: Type.Literal("FAIL"),
+      gap_kind: Type.Literal(gapKind),
+      repair_owner: Type.Literal(owner),
+      findings: Type.Array(FindingSchema, { minItems: 1, maxItems: 32 }),
+      evidence: EvidenceSchema,
+      strategy_delta: StrategyDeltaSchema,
+    },
+    { additionalProperties: false }
+  );
+}
+
+export const ProduceValidityReviewSummaryV1Schema = Type.Union([
+  Type.Object(
+    {
+      verdict: Type.Literal("PASS"),
+      gap_kind: Type.Literal("none"),
+      repair_owner: Type.Literal("none"),
+      findings: FindingsSchema,
+      evidence: EvidenceSchema,
+      strategy_delta: StrategyDeltaSchema,
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      verdict: Type.Literal("UNVERIFIABLE"),
+      gap_kind: Type.Literal("verification_incomplete"),
+      repair_owner: Type.Literal("none"),
+      findings: Type.Array(FindingSchema, { minItems: 1, maxItems: 32 }),
+      evidence: EvidenceSchema,
+      strategy_delta: StrategyDeltaSchema,
+    },
+    { additionalProperties: false }
+  ),
+  validityFailureSchema("brief_gap", "ida"),
+  validityFailureSchema("artifact_product_gap", "skribble"),
+]);
+
+const MechanicalChecks = [
+  "canonical_product",
+  "content_sha256",
+  "canonical_json_when_applicable",
+  "exact_request_coverage",
+  "exact_draft_and_source_lineage",
+  "effect_graph_shape",
+] as const;
+export const ProduceMechanicalChecksV1Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.produce-mechanical-checks.v1"),
+    schema_version: Type.Literal(1),
+    status: Type.Literal("PASS"),
+    run_id: OpaqueIdSchema,
+    request_ref: ArtifactRefSchema,
+    approach_ref: ArtifactRefSchema,
+    decision_ref: ArtifactRefSchema,
+    draft_ref: ArtifactRefSchema,
+    product_ref: ArtifactRefSchema,
+    checks: Type.Tuple(MechanicalChecks.map((check) => Type.Literal(check))),
+    product_effect_evidence_sha256: Sha256Schema,
+    scope: Type.Literal("host_mechanical_only_not_semantic_or_effect_absence"),
+  },
+  { additionalProperties: false }
+);
+export function validateProduceMechanicalChecks(value: unknown) {
+  return validateSkillSchema(ProduceMechanicalChecksV1Schema, value, "ProduceMechanicalChecksV1");
+}
+export const PRODUCE_MECHANICAL_CHECK_NAMES = MechanicalChecks;
+
+const ProduceReviewCoreV1Schema = Type.Union([
+  Type.Object(
+    {
+      schema_version: Type.Literal(1),
+      review_kind: Type.Literal("quality"),
+      product_ref: ArtifactRefSchema,
+      host_check_ref: Type.Null(),
+      confidence: ConfidenceSchema,
+      review: ProduceQualityReviewSummaryV1Schema,
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      schema_version: Type.Literal(1),
+      review_kind: Type.Literal("validity"),
+      product_ref: ArtifactRefSchema,
+      host_check_ref: ArtifactRefSchema,
+      confidence: ConfidenceSchema,
+      review: ProduceValidityReviewSummaryV1Schema,
+    },
+    { additionalProperties: false }
+  ),
+]);
+/** V2 contains judgment only. Exact operands belong to the host assignment/receipt lineage. */
+function produceReviewCoreV2Schema(kind: "quality" | "validity") {
+  return Type.Object(
+    {
+      schema_version: Type.Literal(2),
+      review_kind: Type.Literal(kind),
+      confidence: ConfidenceSchema,
+      review:
+        kind === "quality"
+          ? ProduceQualityReviewSummaryV1Schema
+          : ProduceValidityReviewSummaryV1Schema,
+    },
+    { additionalProperties: false }
+  );
+}
+const ProduceReviewCoreV2Schema = Type.Union([
+  produceReviewCoreV2Schema("quality"),
+  produceReviewCoreV2Schema("validity"),
+]);
+function validateReviewCore(value: unknown) {
+  // Never strip fields or coerce a corrupt historical V1 into semantic-only V2.
+  return validateSkillSchema(
+    Type.Union([ProduceReviewCoreV1Schema, ProduceReviewCoreV2Schema]),
+    value,
+    "ProduceReviewCoreV1OrV2"
+  );
+}
+function validateReviewSummary(value: unknown) {
+  // Keep confidence in the wire, but out of the registered phase details.
+  const record = validateSkillSchema(
+    Type.Record(Type.String(), Type.Unknown()),
+    value,
+    "review SUMMARY"
+  );
+  const { confidence, ...details } = record;
+  const parsedConfidence = validateSkillSchema(ConfidenceSchema, confidence, "review confidence");
+  const review = validateSkillSchema(
+    Type.Union([ProduceQualityReviewSummaryV1Schema, ProduceValidityReviewSummaryV1Schema]),
+    details,
+    "review details"
+  );
+  return { confidence: parsedConfidence, ...review };
+}
+/** Immutable review meaning is the closed core, never free prose or repaired routing.
+ * Host normalization accepts JSON whitespace/order, not missing or changed values.
+ * Any present redundant SUMMARY is independently parsed and must agree in full.
+ * Routing repair cannot salvage an invalid original or strengthen its meaning.
+ * Parsing V2 is NOT approval: callers must prove exact host assignment/source lineage. */
+export function parsePersistedProduceReview(
+  bytes: Uint8Array,
+  input: {
+    readonly state: "critiquing_artifact" | "verifying_artifact";
+    readonly productRef: ArtifactRef;
+    readonly hostCheckRef?: ArtifactRef;
+    readonly routingRepairSummary?: unknown;
+  }
+) {
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_PERSISTED_PRODUCE_DRAFT_BYTES) {
+    throw new ProduceDraftValidationError("FRAMING_INVALID", ["review size violation"]);
+  }
+  const body = Buffer.from(bytes);
+  if (body.includes(0)) {
+    throw new ProduceDraftValidationError("FRAMING_INVALID", ["review NUL violation"]);
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body);
+  } catch {
+    throw new ProduceDraftValidationError("FRAMING_INVALID", ["review is not strict UTF-8"]);
+  }
+  const prefix = "PRODUCE_REVIEW:";
+  if (text.includes("\ufeff") || !text.startsWith(prefix)) {
+    throw new ProduceDraftValidationError("FRAMING_INVALID", ["review prefix or BOM violation"]);
+  }
+  let parsedCore: ReturnType<typeof parseProduceReviewJson>;
+  let redundant: unknown;
+  let hasRedundant = false;
+  try {
+    parsedCore = parseProduceReviewJson(text, prefix.length);
+    const tail = text.slice(parsedCore.end);
+    const separator = /^[ \t\r\n]*/u.exec(tail)?.[0] ?? "";
+    if (separator.length !== tail.length) {
+      if (!separator.includes("\n") || !tail.slice(separator.length).startsWith(SUMMARY_PREFIX)) {
+        throw new Error("unexpected content after review core");
+      }
+      const footer = parseProduceReviewJson(
+        text,
+        parsedCore.end + separator.length + SUMMARY_PREFIX.length
+      );
+      if (!/^[ \t\r\n]*$/u.test(text.slice(footer.end))) throw new Error("trailing review content");
+      redundant = footer.value;
+      hasRedundant = true;
+    }
+  } catch {
+    throw new ProduceDraftValidationError("JSON_INVALID", [
+      "review JSON or framing is invalid or ambiguous",
+    ]);
+  }
+  const core = validateReviewCore(parsedCore.value);
+  const summary = validateReviewSummary({ confidence: core.confidence, ...core.review });
+  // Repaired routing is never authority to discard a contradictory/malformed original footer.
+  for (const candidate of [
+    ...(hasRedundant ? [redundant] : []),
+    ...(input.routingRepairSummary === undefined ? [] : [input.routingRepairSummary]),
+  ]) {
+    if (canonicalJson(validateReviewSummary(candidate)) !== canonicalJson(summary)) {
+      throw new ProduceDraftValidationError("SEMANTIC_INVALID", [
+        "redundant review SUMMARY contradicts core",
+      ]);
+    }
+  }
+  if (
+    core.review_kind !== (input.state === "critiquing_artifact" ? "quality" : "validity") ||
+    (core.schema_version === 1 &&
+      (canonicalJson(core.product_ref) !== canonicalJson(input.productRef) ||
+        canonicalJson(core.host_check_ref) !== canonicalJson(input.hostCheckRef ?? null))) ||
+    canonicalJson({ confidence: core.confidence, ...core.review }) !== canonicalJson(summary)
+  ) {
+    throw new ProduceDraftValidationError("SEMANTIC_INVALID", [
+      "immutable review core, subject/evidence and routed SUMMARY must agree exactly",
+    ]);
+  }
+  return { core, summary };
+}
+export function produceReviewPromptContract(kind: "quality" | "validity") {
+  return canonicalJson({
+    wire: "PRODUCE_REVIEW:<closed-JSON>; optional newline-separated SUMMARY:<closed-JSON>; JSON whitespace and key order are immaterial; no duplicate decoded keys, BOM, NUL, prose, fences or trailing content",
+    projection_contract: "penny.produce-review-semantic-projection.v1",
+    maximum_output_bytes: MAX_PERSISTED_PRODUCE_DRAFT_BYTES,
+    json_complexity: { maximum_depth: 16, maximum_values: 4096 },
+    core_schema: produceReviewCoreV2Schema(kind),
+    binding:
+      "Host binds exact current operands from the captured assignment and signed source lineage. Do not emit artifact refs, IDs, digests or metadata fields; V2 rejects them. Parsing alone is never approval.",
+    summary:
+      "Host derives confidence plus the COMPLETE review object from validated original bytes; no model-authored SUMMARY is required. If present it must independently parse and equal all core fields, including ordered arrays. Invalid original framing/meaning cannot be salvaged by routing repair.",
+  });
 }

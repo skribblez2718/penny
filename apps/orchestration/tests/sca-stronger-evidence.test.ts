@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../src/canonical-json.js";
+import { canonicalJson, sha256 } from "../dist/canonical-json.js";
 import {
   ScaEvidenceError,
   buildScaM4ManifestV1,
   sealScaFindingEvidenceV1,
   validateScaFindingEvidenceV1,
   validateScaM4ManifestV1,
-} from "../src/sca/stronger-evidence.js";
+} from "../dist/sca/stronger-evidence.js";
 import {
   buildScaM3ManifestV1,
   scaFindingGapId,
   sealScaFindingValidationResultV1,
-} from "../src/sca/finding-validation.js";
+} from "../dist/sca/finding-validation.js";
 
 const FINDING_ID = `scafind_${"a".repeat(64)}`;
 const CANDIDATE_ID = `scaobs_${"b".repeat(64)}`;

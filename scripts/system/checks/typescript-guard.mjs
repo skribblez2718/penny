@@ -7,6 +7,8 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { ESLint } from "eslint";
 import ts from "typescript";
+import { vitestConfigFromScript } from "./typescript-tests.mjs";
+import { runEslintSuppressionAudit } from "./typescript-eslint-worker.mjs";
 
 export const MANDATORY_ESLINT_RULES = Object.freeze([
   "@typescript-eslint/no-explicit-any",
@@ -44,14 +46,14 @@ export const SUPPORTED_PI_PACKAGES = Object.freeze([
 export const EXACT_TEST_HOST_EXCEPTIONS = Object.freeze([
   Object.freeze({
     path: "apps/orchestration/tests/kb-loader-policy.test.ts",
-    site: "147:34:unusedContextHost as unknown as ExtensionContext",
+    site: "150:34:unusedContextHost as unknown as UnusedToolContext",
     rule: "DOUBLE_ASSERTION",
     eslintRule: "@typescript-eslint/no-unsafe-type-assertion",
-    suppressionLine: 146,
+    suppressionLine: 149,
     rationale:
-      "Pi requires a complete ExtensionContext argument although these context-free KB tools do not read it.",
+      "Pi requires a complete tool-execution context although these context-free KB tools do not read it.",
     removalCondition:
-      "Remove when Pi makes ExtensionContext optional for context-free tools or exports a supported test factory.",
+      "Remove when Pi makes the tool-execution context optional for context-free tools or exports a supported test factory.",
     focusedTest:
       "apps/orchestration/tests/kb-loader-policy.test.ts#terminates on typed submit without host-context reads and rejects duplicate/body metadata",
   }),
@@ -572,16 +574,15 @@ async function inspectEslint(root, files, sourceTexts, violations) {
 
       const text = sourceTexts.get(filePath) ?? "";
       if (/eslint-(?:disable|enable)/u.test(text)) {
-        const lintResults = await eslint.lintText(text, { filePath, warnIgnored: false });
-        for (const message of lintResults.flatMap((result) => result.messages)) {
-          if (message.ruleId === null && /Unused eslint-disable directive/u.test(message.message)) {
-            violations.push(
-              createViolation("ESLINT_UNUSED_SUPPRESSION", relative, message.message, {
-                line: message.line,
-                column: message.column,
-              })
-            );
-          }
+        // Type-aware lint owns parser caches for each project. Keep those caches out of
+        // this process, which already holds the repository-wide architecture checker.
+        for (const message of runEslintSuppressionAudit(root, filePath, text)) {
+          violations.push(
+            createViolation("ESLINT_UNUSED_SUPPRESSION", relative, message.message, {
+              line: message.line,
+              column: message.column,
+            })
+          );
         }
       }
     } catch (error) {
@@ -1470,13 +1471,6 @@ function reachableScripts(scripts, start) {
   return reached;
 }
 
-function configFromVitestScript(script, packageDirectory) {
-  if (!/\bvitest\b/u.test(script)) return undefined;
-  const match = script.match(/--config(?:\s+|=)(?:["']([^"']+)["']|([^\s]+))/u);
-  const configured = match?.[1] ?? match?.[2] ?? "vitest.config.ts";
-  return path.resolve(packageDirectory, configured);
-}
-
 function inspectRunnerMappings({ root, files, manifests, violations }) {
   const runnerConfigs = [];
   const mappingsByFile = new Map();
@@ -1488,7 +1482,7 @@ function inspectRunnerMappings({ root, files, manifests, violations }) {
     const scriptsByConfig = new Map();
     for (const [scriptName, scriptValue] of Object.entries(scripts)) {
       if (typeof scriptValue !== "string") continue;
-      const configPath = configFromVitestScript(scriptValue, manifest.directory);
+      const configPath = vitestConfigFromScript(scriptValue, manifest.directory);
       if (!configPath) continue;
       const entries = scriptsByConfig.get(canonicalPath(configPath)) ?? [];
       entries.push({ script: scriptName, aggregate: aggregateScripts.has(scriptName) });

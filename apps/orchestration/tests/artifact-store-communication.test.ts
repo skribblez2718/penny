@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
 
 const roots: string[] = [];
 afterEach(() => {

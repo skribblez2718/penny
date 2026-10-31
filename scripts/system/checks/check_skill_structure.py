@@ -49,7 +49,7 @@ KB_SUBAGENTS = ["echo", "synthia", "carren", "vera", "piper", "skribble"]
 KB_INVOCATION_FIXTURES = [
     'knowledge_base({schema_version: 1, action: "init", kb_profile_id: "kbp_demo", create: true, title: "Demo advisory KB"})',
     'knowledge_base({schema_version: 1, action: "ingest", kb_profile_id: "kbp_demo", source_capability_ids: ["src_cap_1"]})',
-    'knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "artifact_ref"})',
+    'knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", query_context: "Optional user intent, preferences, or answer-shaping context; not evidence.", answer_delivery: "artifact_ref"})',
     'knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "parent_tool_result"}) // requires exact ParentDeliveryGrantV1 + policy',
     'knowledge_base({schema_version: 1, action: "save", kb_profile_id: "kbp_demo", query_run_id: "run_1", page_kind: "synthesis", title: "..."})',
     'knowledge_base({schema_version: 1, action: "lint", kb_profile_id: "kbp_demo", mode: "deterministic_and_semantic"})',
@@ -170,40 +170,6 @@ def discover_skills() -> List[Path]:
             skills.append(entry)
 
     return sorted(skills)
-
-
-def check_native_model_ignore(model_disabled_names: set[str]) -> List[Tuple[str, str]]:
-    """Require Pi native discovery to ignore exactly explicitly model-disabled packages."""
-    ignore_file = SKILLS_DIR / ".ignore"
-    if ignore_file.is_symlink() or not ignore_file.is_file():
-        return [("ERROR", ".pi/skills/.ignore must be one safe regular file")]
-    try:
-        ignored_entries = [
-            line.strip().removesuffix("/")
-            for line in ignore_file.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        ]
-    except (OSError, UnicodeError):
-        return [("ERROR", ".pi/skills/.ignore must be readable UTF-8")]
-
-    issues: List[Tuple[str, str]] = []
-    if len(ignored_entries) != len(set(ignored_entries)) or any(
-        re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", name) is None for name in ignored_entries
-    ):
-        issues.append(
-            (
-                "ERROR",
-                "native skill ignore entries must be unique canonical package directory names",
-            )
-        )
-    if set(ignored_entries) != model_disabled_names:
-        issues.append(
-            (
-                "ERROR",
-                "native skill ignore entries must equal the parsed explicitly model-disabled package names exactly",
-            )
-        )
-    return issues
 
 
 def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
@@ -440,14 +406,10 @@ def main() -> None:  # noqa: C901
 
     total_errors = 0
     total_warnings = 0
-    model_disabled_names: set[str] = set()
 
     for skill_dir in skills:
         name = skill_dir.name
         issues = check_skill(skill_dir)
-        frontmatter, _ = parse_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
-        if frontmatter is not None and frontmatter.get("disable-model-invocation") is True:
-            model_disabled_names.add(name)
 
         if not issues:
             print(f"  ✅ {name}")
@@ -462,12 +424,6 @@ def main() -> None:  # noqa: C901
                 total_errors += 1
             elif severity == "WARN":
                 total_warnings += 1
-
-    if not args.skill:
-        for severity, msg in check_native_model_ignore(model_disabled_names):
-            print(f"  ❌ native-discovery: {msg}")
-            if severity == "ERROR":
-                total_errors += 1
 
     print()
     if total_errors == 0 and total_warnings == 0:

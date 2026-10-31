@@ -31,8 +31,3 @@ Untrusted data can reach browser markup, script, style, URL, rich-text, template
 
 - [Browser security](browser-security.md) owns general browser policy.
 - [Input validation](input-validation.md) constrains inputs; [PWA service workers](pwa-service-worker.md) covers cached browser execution.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

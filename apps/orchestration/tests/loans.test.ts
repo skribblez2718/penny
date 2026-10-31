@@ -1,7 +1,7 @@
 import { requireValue } from "./helpers/narrowing.js";
 import { describe, expect, it } from "vitest";
 
-import { COMPATIBILITY_LOANS, loanReviewState, loansNeedingReview } from "../src/loans.js";
+import { COMPATIBILITY_LOANS, loanReviewState, loansNeedingReview } from "../dist/loans.js";
 
 describe("TypeScript orchestration compatibility loans", () => {
   it("registers the active TypeScript research compatibility loans", () => {

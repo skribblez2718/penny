@@ -5,9 +5,9 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer } from "../src/checkpointer.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const roots: string[] = [];
@@ -80,8 +80,15 @@ describe("owner-seeded initial artifacts", () => {
     expect(directive.action).toBe("invoke_agent");
     if (directive.action !== "invoke_agent") throw new Error("expected invoke_agent");
     expect(directive.state_id).toBe("researching");
-    expect(directive.input_artifacts.artifacts.map((binding) => binding.ref)).toEqual([ref]);
-    expect(directive.output_artifact.upstream_refs).toEqual([ref]);
+    const inputs = directive.input_artifacts.artifacts.map((binding) => binding.ref);
+    expect(inputs).toContainEqual(ref);
+    expect(inputs).toHaveLength(2);
+    expect(inputs.find((input) => input.kind === "research-request")).toMatchObject({
+      run_id: runId,
+      phase: "intake",
+      content_schema: { schema_id: "penny.research-request.v1", schema_version: 1 },
+    });
+    expect(directive.output_artifact.upstream_refs).toEqual(inputs);
   });
 
   it("fails a missing input object before invoking the model", () => {

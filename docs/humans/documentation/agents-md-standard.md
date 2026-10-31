@@ -8,6 +8,12 @@ contains only global repository boundaries, navigation rules, trigger lookup gui
 and top-level links. Every nested `AGENTS.md` is a compact index of its direct children;
 the actual rules live in the document behind each route.
 
+Detailed public-repository policy and Pi documentation references are reached through
+`docs/agents/AGENTS.md`. The root retains the short public-repository invariant and
+routes Pi-platform questions into that index, rather than loading the topic map for
+every task. The Pi guide points to the installed runtime's documentation; it does not
+copy upstream documentation into Penny.
+
 ## Typed Routing
 
 Nested entries say both when to read a document and what it supplies. They use one of

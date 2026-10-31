@@ -10,7 +10,10 @@ Create or revise one self-contained Pi audit prompt. Preserve target-specific au
 - **Mode:** `$1` — `create` or `revise`.
 - **Audit domain or source prompt:** `$2`.
 - **Optional output token or first additional requirement:** `$3`.
-- **Remaining additional requirements:** `${@:4}`.
+
+**Remaining additional requirements:**
+
+${@:4}
 
 Quote a multi-word audit domain, source path, output token, or requirement. Treat `$3` as the output only when it begins `output=`; strip that prefix and use the remainder as the new file path. Otherwise treat `$3` and later arguments as additional requirements and return the candidate in the response. If mode or target is missing/invalid, `output=` is empty, or any material value remains ambiguous, stop and ask the minimum targeted question set rather than guessing.
 

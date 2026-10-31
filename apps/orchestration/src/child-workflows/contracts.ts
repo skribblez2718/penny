@@ -80,6 +80,19 @@ export const ChildWorkflowRequestV1Schema = Type.Object(
     provider_request_schema_id: SchemaIdSchema,
     provider_request_schema_version: Type.Integer({ minimum: 1 }),
     provider_request: Type.Unknown(),
+    /** Explicit Define/Plan invocation policy; absence is legacy V1 semantic-only. */
+    invocation_policy: Type.Optional(
+      Type.Object(
+        {
+          schema_version: Type.Literal(2),
+          specification_assurance: Type.Union([
+            Type.Literal("reviewed_definition"),
+            Type.Literal("semantic_only"),
+          ]),
+        },
+        { additionalProperties: false }
+      )
+    ),
     policy_binding: ChildWorkflowPolicyBindingV1Schema,
   },
   { additionalProperties: false }
@@ -475,6 +488,7 @@ const WorkerActivityClassV1Schema = Type.Union([
   Type.Literal("tool_execution_completed"),
   Type.Literal("provider_turn_ended"),
   Type.Literal("worker_completed"),
+  Type.Literal("host_context_resolution_progress"),
 ]);
 export type WorkerActivityClassV1 = Static<typeof WorkerActivityClassV1Schema>;
 

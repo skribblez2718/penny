@@ -11,7 +11,7 @@ import {
   type ArtifactRef,
   type ReviewReceiptV1,
   type ReviewSubjectV1,
-} from "../src/index.js";
+} from "../dist/index.js";
 
 let sequence = 0;
 

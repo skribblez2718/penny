@@ -40,6 +40,7 @@ function skillExchange(id: string, overrides: Record<string, unknown> = {}): Ses
     session_id: `session-${id}`,
     skill_name: "code",
     state: "complete",
+    requires_approval: false,
     steps_total: 1,
     agents_invoked: ["fixture-agent"],
     errors: [],
@@ -84,7 +85,19 @@ describe("exact run-id collection", () => {
       ...skillExchange("tc-2", {
         success: false,
         state: "awaiting_clarification",
-        escalation: { questions: [{ approval_run_id: "run-three" }] },
+        continuation: {
+          kind: "clarification",
+          identity: {
+            schema_version: 2,
+            engine_owner: "typescript",
+            run_id: "run-three",
+            session_id: "session-tc-2",
+            playbook: "code",
+          },
+          gate_id: "gate-three",
+          challenge: "challenge-three",
+        },
+        escalation: { questions: [{ id: "q", label: "Q1", prompt: "Scope?" }] },
       }),
       {
         role: "toolResult",
@@ -93,6 +106,129 @@ describe("exact run-id collection", () => {
       },
     ]);
     expect(ids.sort()).toEqual(["run-one", "run-three", "run-two"]);
+  });
+
+  it.each([false, true])(
+    "collects canonical single and chain clarification addresses, native=%s",
+    (native) => {
+      const paused = {
+        success: false,
+        session_id: "step-session",
+        skill_name: "code",
+        state: "clarifying",
+        requires_approval: false,
+        steps_total: 257,
+        agents_invoked: Array.from({ length: 257 }, () => "echo"),
+        errors: [],
+        continuation: {
+          kind: "clarification",
+          identity: {
+            schema_version: 2,
+            engine_owner: "typescript",
+            run_id: "paused-step-run",
+            session_id: "step-session",
+            playbook: "code",
+          },
+          gate_id: "gate-step",
+          challenge: "challenge-step",
+        },
+        escalation: {
+          questions: [
+            {
+              id: "q",
+              label: "Q1",
+              prompt: "Scope?",
+            },
+          ],
+          ...(native ? { trustedTransportCapability: "fixture-native-capability" } : {}),
+        },
+      };
+      expect(collectExplicitRunIds(skillExchange("single-pause", paused))).toEqual([
+        "paused-step-run",
+      ]);
+      expect(
+        collectExplicitRunIds(
+          skillExchange("obsolete-question-address", {
+            ...paused,
+            escalation: {
+              questions: [
+                {
+                  id: "q",
+                  label: "Q1",
+                  prompt: "Scope?",
+                  approval_run_id: "not-a-continuation-source",
+                },
+              ],
+            },
+          })
+        )
+      ).toEqual([]);
+      expect(
+        collectExplicitRunIds(
+          skillExchange("chain-pause", {
+            ...paused,
+            skill_name: "chain",
+            mode: "chain",
+            state: "awaiting_clarification",
+            session_id: "chain-session",
+            chain_session_id: "chain-session",
+            chain_total: 2,
+            steps_total: 2,
+            chain_error_step: 0,
+            chain_step: 0,
+            resumable: true,
+            chain_results: [],
+          })
+        )
+      ).toEqual(["paused-step-run"]);
+      expect(
+        collectExplicitRunIds(
+          skillExchange("parallel-pause", {
+            success: false,
+            state: "partial",
+            skill_name: "parallel",
+            mode: "parallel",
+            parallel_results: [paused],
+          })
+        )
+      ).toEqual(["paused-step-run"]);
+    }
+  );
+
+  it("collects output/partial refs from mixed nested aggregates with long invocation history", () => {
+    const output = artifactRef("nested-terminal-run", "output");
+    const partial = artifactRef("nested-partial-run", "partial");
+    const child = {
+      success: false,
+      session_id: "nested-session",
+      skill_name: "code",
+      state: "incomplete",
+      requires_approval: false,
+      steps_total: 300,
+      agents_invoked: Array.from({ length: 300 }, () => "echo"),
+      errors: [],
+      result: { met: false },
+      output_artifact_ref: output,
+      best_partial_artifact_refs: [partial],
+      repair_diagnostics: {
+        origin_state: "reviewing",
+        feedback_kind: "evidence_gap",
+        budget: { used: 1, limit: null },
+        feedback_report_refs: [],
+      },
+    };
+    const messages = skillExchange("nested", {
+      skill_name: "parallel",
+      mode: "parallel",
+      parallel_results: [{ ...child, skill_name: "chain", mode: "chain", chain_results: [child] }],
+    });
+    expect(collectExplicitRunIds(messages)).toEqual(["nested-terminal-run", "nested-partial-run"]);
+    const malformed = skillExchange("malformed-child", {
+      result: { met: true },
+      output_artifact_ref: artifactRef("must-not-leak", "outer"),
+      chain_results: [{ ...child, unknown: true }],
+    });
+    expect(collectExplicitRunIds(malformed)).toEqual([]);
   });
 
   it("does not infer a run from session IDs or malformed prose", () => {

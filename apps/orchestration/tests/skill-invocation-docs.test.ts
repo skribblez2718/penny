@@ -4,12 +4,12 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { validateContract, type StartRequest } from "../src/contracts.js";
+import { validateContract, type StartRequest } from "../dist/contracts.js";
 import {
   DOCUMENTED_SKILL_INGRESS_NAMES,
   generateSkillInvocationManifests,
-} from "../src/skill-invocation-docs.js";
-import { resolvePlaybook } from "../src/playbooks/registry.js";
+} from "../dist/skill-invocation-docs.js";
+import { resolvePlaybook } from "../dist/playbooks/registry.js";
 
 const directories: string[] = [];
 const projectRoot = path.resolve(import.meta.dirname, "..", "..", "..");
@@ -56,6 +56,23 @@ describe("generated skill Invocation contracts", () => {
     }
   });
 
+  it("publishes explicit V2 Define/Plan policy while identifying V1 as semantic-only", () => {
+    for (const skill of ["define", "plan"] as const) {
+      const registration = resolvePlaybook(skill);
+      const example = registration?.caller_documentation?.example.constraints;
+      expect(example).toMatchObject({
+        schema_version: 2,
+        specification_assurance: "reviewed_definition",
+      });
+      const manifest = readFileSync(
+        path.join(projectRoot, ".pi", "skills", skill, "SKILL.md"),
+        "utf8"
+      );
+      expect(manifest).toContain('"specification_assurance":"reviewed_definition"');
+      expect(manifest).toContain("legacy V1 constraints always mean `semantic_only`");
+    }
+  });
+
   it("validates every generated example through its runtime schema and real admission path", () => {
     for (const skill of DOCUMENTED_SKILL_INGRESS_NAMES) {
       const registration = resolvePlaybook(skill);
@@ -70,7 +87,14 @@ describe("generated skill Invocation contracts", () => {
         registration.caller_documentation.example.constraints,
         `${skill} generated example`
       );
-      expect(() => registration.start_admission?.prepare(requestFor(skill), {})).not.toThrow();
+      if (skill === "define" || skill === "plan") {
+        // These invocations require a project-bound exact verifier, not a synthetic docs host.
+        expect(() => registration.start_admission?.prepare(requestFor(skill), {})).toThrow(
+          "SPECIFICATION_ASSURANCE_UNAVAILABLE"
+        );
+      } else {
+        expect(() => registration.start_admission?.prepare(requestFor(skill), {})).not.toThrow();
+      }
     }
   });
 

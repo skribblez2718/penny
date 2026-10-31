@@ -13,7 +13,15 @@ A task changes a trust boundary or security-sensitive behavior and requires secu
 
 - Select adversarial tests, static/dynamic analysis, configuration inspection, dependency/supply-chain review, and operational checks from the changed threats and invariants.
 - Test negative paths and boundary behavior; distinguish source review, test result, deployed inspection, and unverified assumption.
-- Record each affected invariant as satisfied with evidence, blocking, or covered by an approved exception with the required fields.
+- Apply the [baseline completion and exception contract](security-invariants.md#requirements) to every affected invariant.
+- Scope evidence to the [assigned stage and claim](../../agents/bounded-work.md#dependencies-and-composition):
+  component tests do not qualify application integration, nor does integration alone qualify
+  deployment. Missing later qualification blocks that claim, not independent earlier work;
+  any control needed by earlier work still applies before the risk it governs begins.
+- Challenge unsupported verification machinery and its cost under
+  [proportionality](../../architecture/project-standards.md#proportionality-outcomes-before-mechanisms).
+  Prior reviewer/model approval is neither independent evidence nor authority to waive a
+  standard. Independent checks need not mean a new custom attestation mechanism.
 
 ## Failure modes
 
@@ -30,8 +38,3 @@ A task changes a trust boundary or security-sensitive behavior and requires secu
 
 - [Security invariants](security-invariants.md) defines completion states.
 - [Threat modeling](threat-model.md) identifies what to test; every topic guide provides subject-specific evidence.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

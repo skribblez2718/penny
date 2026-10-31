@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
-import { validateRegistrationContract, type PlaybookRegistryV1 } from "@penny/orchestration/source";
+import { validateRegistrationContract, type PlaybookRegistry } from "@penny/orchestration";
 
 interface SkillFrontmatter extends Record<string, unknown> {
   name?: unknown;
@@ -45,6 +45,12 @@ function parseSkillPackage(skillPath: string, directoryName: string): SkillDisco
   const skillMdPath = path.join(skillPath, "SKILL.md");
   const content = fs.readFileSync(skillMdPath, "utf8");
   const { frontmatter } = parseFrontmatter<SkillFrontmatter>(content);
+  if (
+    Object.hasOwn(frontmatter, "disable-model-invocation") &&
+    frontmatter["disable-model-invocation"] !== true
+  ) {
+    throw new Error("disable-model-invocation must be omitted or true");
+  }
   const penny = pennyMetadata(frontmatter);
   const engine = typeof penny?.engine === "string" ? penny.engine : undefined;
   return {
@@ -149,13 +155,13 @@ export function checkSkillPackage(input: {
 /**
  * Validate the complete package↔registry relationship after one discovery pass.
  *
- * A model-invocable orchestration package must have one executable registration. A package marked
- * `disable-model-invocation: true` remains valid without a registration so development scaffolds
- * can be documented and statically checked without gaining generic execution authority.
+ * A model-invocable orchestration package must have one executable registration.
+ * Visibility never grants execution authority; generic ingress independently refuses
+ * unregistered names regardless of their parsed disable flag.
  */
 export function validateUnifiedSkillRegistryPackages(input: {
   readonly skillsDir: string;
-  readonly registry: PlaybookRegistryV1;
+  readonly registry: PlaybookRegistry;
   readonly discoveredSkills?: readonly SkillDiscovery[];
 }): readonly SkillDiscovery[] {
   const discovered = input.discoveredSkills ?? discoverSkillsFromDirectory(input.skillsDir);
@@ -191,35 +197,5 @@ export function validateUnifiedSkillRegistryPackages(input: {
     }
   }
 
-  const nativeIgnorePath = path.join(input.skillsDir, ".ignore");
-  let ignoredPackageNames: string[];
-  try {
-    const ignoreFile = fs.lstatSync(nativeIgnorePath);
-    if (ignoreFile.isSymbolicLink() || !ignoreFile.isFile()) {
-      throw new Error("unsafe type");
-    }
-    ignoredPackageNames = fs
-      .readFileSync(nativeIgnorePath, "utf8")
-      .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0 && !line.startsWith("#"))
-      .map((line) => (line.endsWith("/") ? line.slice(0, -1) : line))
-      .sort();
-  } catch {
-    throw new Error("unified skill root requires one safe native-discovery .ignore file");
-  }
-  const modelDisabledPackageNames = discovered
-    .filter((skill) => skill.disableModelInvocation)
-    .map((skill) => skill.name)
-    .sort();
-  if (
-    ignoredPackageNames.length !== new Set(ignoredPackageNames).size ||
-    ignoredPackageNames.some((name) => !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(name)) ||
-    ignoredPackageNames.join("\0") !== modelDisabledPackageNames.join("\0")
-  ) {
-    throw new Error(
-      "native-discovery .ignore entries must equal parsed explicitly model-disabled package names exactly"
-    );
-  }
   return discovered;
 }

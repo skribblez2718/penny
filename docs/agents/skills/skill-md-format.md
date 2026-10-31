@@ -23,9 +23,10 @@ metadata:
 5. Every package remains under `.pi/skills/<name>/`. `metadata.penny.release_status` is retired and
    forbidden. A package is model-visible when the optional top-level
    `disable-model-invocation` flag is absent. Declare that flag only as `true`, and only to hide the
-   package; never declare redundant `false`. `.pi/skills/.ignore` lists exactly packages whose parsed
-   flag is explicitly `true` and remains comment-only when none are disabled. A disabled
-   development package may be unregistered, but generic invocation then fails safely.
+   package; never declare redundant `false`. Pi loads both classes from the same root. Visible
+   packages are advertised to the model and may be invoked by the user or Penny; hidden packages
+   are omitted from automatic model advertising but remain manually invocable through
+   `/skill:<name> <description>`. Visibility does not grant executable registration or approval.
 6. `metadata.penny.mempalace` is optional. It describes optional **primary
    durable-memory** integration only. It does not authorize worker memory tools
    or workflow rooms.
@@ -55,15 +56,24 @@ cannot affect workflow correctness.
 
 ## Canonical wire terms
 
-| Term                   | Meaning                                                             |
-| ---------------------- | ------------------------------------------------------------------- |
-| `input_artifacts`      | Unique exact cross-run predecessor slots/IDs selected by the owner. |
-| `output_artifact`      | Owner contract for the current stage's exact response bytes.        |
-| `output_artifact_ref`  | Canonical selected product ref exposed by the terminal result.      |
-| `SUMMARY`              | Minimal model-authored routing payload, never persistence proof.    |
-| `needs_clarification`  | Worker requests owner-mediated user input.                          |
-| `clarifying_questions` | Questions preserved by the run checkpoint.                          |
-| `confidence`           | CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN wire vocabulary.          |
+| Term                   | Meaning                                                                |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `input_artifacts`      | Unique exact cross-run predecessor slots/IDs selected by the owner.    |
+| `output_artifact`      | Owner contract for the current stage's exact response bytes.           |
+| `output_artifact_ref`  | Canonical selected product ref exposed by the terminal result.         |
+| `SUMMARY`              | Minimal model-authored routing payload, never persistence proof.       |
+| `needs_clarification`  | Where the phase schema permits it, requests owner-mediated user input. |
+| `clarifying_questions` | Where permitted, questions preserved by the run checkpoint.            |
+| `confidence`           | CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN where the schema uses it.    |
+
+A phase with the explicit versioned registration-owned host-projection exception in
+[Role and Domain Standards](../prompts/role-and-domain-standards.md#domain-guidance) derives routing
+from its captured core instead of requiring a model-authored duplicate SUMMARY. Its manifest and
+Domain Guidance must state that narrow exception; other phases keep their existing transport.
+
+The active closed phase schema owns SUMMARY framing and required/optional/forbidden fields;
+this vocabulary does not authorize adding keys. Generic transport/capture belongs to
+[Invocation](../agents/invocation.md); keep the manifest handoff statement usable on its own.
 
 ## Verification
 

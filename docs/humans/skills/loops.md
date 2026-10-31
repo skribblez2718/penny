@@ -30,24 +30,24 @@ Both trace back to the same root cause: **the goal wasn't verifiable, or the loo
 
 ## The Seven Loop Classes
 
-Loops are not alternatives — they **nest**. A production system layers seven classes, each running inside the one above it:
+Loops can **nest**. These seven classes describe useful compositions, not mandatory layers in every workflow:
 
-| #      | Loop Class               | What It Does                                                 | Penny Mechanism                                                                   |
-| ------ | ------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| **L1** | Inner tool-use (ReAct)   | Thought → action → observation, per agent invocation         | Pi runtime (per subagent)                                                         |
-| **L2** | Verifier / critic gate   | Separate evaluation decides: converge or cycle back          | Closed completion admission + playbook-specific review contracts                  |
-| **L3** | Retry / repair (bounded) | On failure, repair and retry under a budget                  | Typed feedback + registered repair/exhaustion routes + `RunContext.maxIterations` |
-| **L4** | Human-in-the-loop gates  | Consequence-conditioned approval or blocking escalation      | Declared `await_user`/host continuation states                                    |
-| **L5** | Orchestration FSM        | Explicit states, typed transitions, checkpointing, resume    | Registered TypeScript `PlaybookCoreV1` + durable checkpointer                     |
-| **L6** | Reflection / memory      | Optional, gated learning between runs without weight updates | Primary-owned writes; optional bounded worker read; never handoff                 |
-| **L7** | Background / scheduled   | Time-triggered polling, monitoring, maintenance              | External caller/scheduler resumes durable runs; no general heartbeat loop         |
+| #      | Loop Class                  | What It Does                                                 | Penny Mechanism                                                                   |
+| ------ | --------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| **L1** | Inner tool-use (ReAct)      | Thought → action → observation, per agent invocation         | Pi runtime (per subagent)                                                         |
+| **L2** | Verifier / critic gate      | Separate evaluation decides: converge or cycle back          | Closed completion admission + playbook-specific review contracts                  |
+| **L3** | Retry / repair (policy-led) | On failure, repair when another attempt can add information  | Typed feedback + registered repair/exhaustion routes + `RunContext.maxIterations` |
+| **L4** | Human-in-the-loop gates     | Consequence-conditioned approval or blocking escalation      | Declared `await_user`/host continuation states                                    |
+| **L5** | Orchestration FSM           | Explicit states, typed transitions, checkpointing, resume    | Registered TypeScript `PlaybookCore` + durable checkpointer                       |
+| **L6** | Reflection / memory         | Optional, gated learning between runs without weight updates | Primary-owned writes; optional bounded worker read; never handoff                 |
+| **L7** | Background / scheduled      | Time-triggered polling, monitoring, maintenance              | External caller/scheduler resumes durable runs; no general heartbeat loop         |
 
 ```
 ┌─ L7 Background loops ─────────────────────────────────────────────┐
 │ ┌─ L6 Reflection loop (learning across runs) ───────────────────┐ │
 │ │ ┌─ L5 Orchestration loop (FSM, checkpointed) ───────────────┐ │ │
 │ │ │ ┌─ L4 HITL gates (approve / refine / deny) ────────────┐ │ │ │
-│ │ │ │ ┌─ L3 Retry / repair loop (bounded budget) ─────────┐ │ │ │ │
+│ │ │ │ ┌─ L3 Retry / repair loop (actual policy) ─────────┐ │ │ │ │
 │ │ │ │ │ ┌─ L2 Verifier / critic gate ──────────────────┐ │ │ │ │ │
 │ │ │ │ │ │ ┌─ L1 Inner tool-use loop (per agent) ──────┐ │ │ │ │ │ │
 │ │ │ │ │ │ └──────────────────────────────────────────┘ │ │ │ │ │ │
@@ -61,7 +61,11 @@ Loops are not alternatives — they **nest**. A production system layers seven c
 
 ### These Classes Are Arrangements of Smaller Parts
 
-The seven classes are not the ground floor. Beneath them is a set of **16 core atomic components**—reusable building blocks (an event log, a budget counter, a verifier, a safety gate, parallel-execution machinery, explicit memory retrieval) that snap together into loops. The seven classes are common _arrangements_ of those parts. The reason this matters: it lets Penny build a loop for any task without reaching for a one-size-fits-all loop, and it keeps loops from ageing badly as models improve because all model judgment stays behind one intelligence interface (`Decide` plus optional fresh-context `Critique`). See [Atomic Loop Components](../architecture/atomic-loop-components.md) for the atomhood rule, the optional L6 learning arrangement, and the [Bitter-Lesson Doctrine](../architecture/bitter-lesson.md) for why it is built this way.
+[Atomic Loop Components](../architecture/atomic-loop-components.md) is an optional construction
+lens for arranging reusable capabilities, not a universal late-topology requirement. Use it when
+applying that model; a loop lookup does not require the full catalog. Code-owned graphs remain
+appropriate for fixed evidence, approval, recovery, or audit dependencies. Open-ended work can use
+model-directed search without weakening bounds or gates.
 
 ### Key Finding: Evidence-Gated Completion Is Load-Bearing
 
@@ -77,23 +81,25 @@ Review order remains playbook-specific: `assess` uses Annie→Carren→Vera; `de
 
 Match the loop stack to the task's verifiability and step-predictability:
 
-| Task Type        | Primary Loops       | Oracle Strength            | Key Risk                   |
-| ---------------- | ------------------- | -------------------------- | -------------------------- |
-| **Coding**       | L2+L3 (+L4 gates)   | High (tests/lint)          | Premature "done"           |
-| **Security**     | L5+L4 (+bounded L3) | High on PoC, low on triage | Verifier gaming            |
-| **Research**     | L5+L1 fan-out+L2+L6 | Low (source grounding)     | Shallow/premature report   |
-| **Scheduling**   | L7+L5 (+L4)         | High but narrow            | Double-execution           |
-| **Long-horizon** | L5+L6               | Mixed, drifting            | Lost state across sessions |
+| Task Type        | Primary Loops          | Oracle Strength            | Key Risk                   |
+| ---------------- | ---------------------- | -------------------------- | -------------------------- |
+| **Coding**       | L2+L3 (+L4 gates)      | High (tests/lint)          | Premature "done"           |
+| **Security**     | L5+L4 (+policy-led L3) | High on PoC, low on triage | Verifier gaming            |
+| **Research**     | L5+L1 fan-out+L2+L6    | Low (source grounding)     | Shallow/premature report   |
+| **Scheduling**   | L7+L5 (+L4)            | High but narrow            | Double-execution           |
+| **Long-horizon** | L5+L6                  | Mixed, drifting            | Lost state across sessions |
 
 **Principle:** Tasks with crisp external oracles (code: tests; security: PoC) can lean hard on tight verifier-gated repair. Fuzzy-oracle tasks (research, writing) need explicit evidence criteria and may use separate critique or human review when consequence and measured value justify them; fuzziness alone does not require a planned HITL gate.
 
 ## How Penny Implements Loops
 
+Derive values from actual operator policy, not test constants or model guesses. Honor optional operator controls; do not invent finite agent-call, step, phase-cycle, repair, or correction allowances. Trusted progress/inactivity, cancellation, measured failure handling, authorization and honest completion still govern work.
+
 Penny's architecture is already aligned with what the research prescribes:
 
-1. **The loop shape is a lens, not universal procedure or a base class.** Each registered TypeScript `PlaybookCoreV1` implements domain-named states behind the common engine interface and omits phases that have not earned their cost.
+1. **The loop shape is a lens, not universal procedure or a base class.** Each registered TypeScript `PlaybookCore` implements domain-named states behind the common engine interface and omits phases that have not earned their cost.
 
-2. **The engine owns continuity, not the model.** Sessions are memoryless. The durable `run_id` checkpointer persists state after every step. `recover_pending` auto-resumes interrupted runs. Everything routing-relevant lives in `RunContext`, never in an agent's context window.
+2. **The engine owns continuity, not the model.** Sessions are memoryless. The durable `run_id` checkpointer persists state after every step. `recover` reissues pending work from its checkpoint. Everything routing-relevant lives in `RunContext`, never in an agent's context window.
 
 3. **The FSM is a safety mechanism.** An FSM whose only edges are the intended loop edges cannot wander into an unintended cycle. The graph boundary defines what actions are even possible, reducing the frequency and severity of runaway loops.
 
@@ -103,11 +109,11 @@ The research identified four current leverage points. Penny has acted on each, a
 
 1. **Enforce a strategy delta through typed feedback** — Each playbook's repair evaluator returns a non-empty `strategy_delta`; the engine resolves exactly one registered repair route, charges `RunContext.iteration`, and records feedback digests.
 
-2. **Add measured stall detection and honest exhaustion** — There is no universal base progress hook. Research compares repeated issue histories, host liveness caps repeated protocol failures, and every repair contract declares an exhaustion route. Add new stall checks only where evidence supplies a meaningful comparison.
+2. **Stop exact recurrence where it is measurable** — Opted-in skills fingerprint the relevant candidate, evidence and failed checks. A repeated fingerprint, including A/B/A across restart, stops incomplete before another repair. The measurements differ by skill: Assess/Diagnose cannot measure analysis/evidence gaps and stop measuring product gaps once upstream prose changes. `null` means unmeasurable, not progress or stall. A changed fingerprint does not prove progress; exact matching cannot guarantee detection of semantic stagnation. This adds no duration or count cap. Research's native issue-history and host inactivity controls remain separate.
 
-3. **Require externally grounded evidence in VERIFY contracts** — A verifier must carry an evidence artifact such as test output, a lint result, or a PoC transcript. Presence is only the floor; executed or otherwise non-fabricable evidence is stronger.
+3. **Require domain-appropriate evidence** — Bind verdicts to the exact product and independent support: executed output for checks, authoritative-source references for source claims, or separately collected data. Before verification, the host runs native mechanical checks; these establish custody, shape and lineage, not semantic approval or absence of effects. Missing verification support yields `UNVERIFIABLE` and a negative `verification_incomplete` outcome, not an author-repair loop. That differs from a valid product honestly describing blocked, unresolved or partial work.
 
-4. **Harden verifiers against gaming** — Cross-model separation and per-finding agreement now provide defense in depth for high-stakes skills. Stronger executed-marker oracles and the appropriate policy for verifier disagreement remain active design work.
+4. **Harden verifiers against gaming** — Model diversity may supplement evidence when required by a registration or justified by measurement; agreement is not proof of authenticity. Stronger reproducible checks and the policy for missing support or disagreement remain domain-specific.
 
 Memory is handled separately: the engine does not inject past-run lessons into directives. The primary explicitly retrieves or curates stored context only when it could materially affect the task. A catalog worker may receive an owner-granted, YAML-declared bounded read-only bundle, but never memory writes, advisory-log access, or memory-based handoff; skill drivers receive none. Full cross-run learning uses the optional gated L6 curation arrangement.
 

@@ -5,10 +5,10 @@ import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer } from "../src/checkpointer.js";
-import type { RunIdentity } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import type { RunIdentity } from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import {
   buildAgentOpening,
   canonicalAssistantText,
@@ -17,9 +17,9 @@ import {
   type AgentCompletion,
   type AgentInvocation,
   type ModelClient,
-} from "../src/model-client.js";
-import { resolvePlaybook } from "../src/playbooks/registry.js";
-import { OrchestrationRunner, WorkerExecutor, buildRoutingRepairGuidance } from "../src/worker.js";
+} from "../dist/model-client.js";
+import { resolvePlaybook } from "../dist/playbooks/registry.js";
+import { OrchestrationRunner, WorkerExecutor, buildRoutingRepairGuidance } from "../dist/worker.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const roots: string[] = [];
@@ -191,16 +191,29 @@ class Fresh004LivenessClient implements ModelClient {
 class UnifiedMalformedSemanticDraftClient implements ModelClient {
   readonly invocations: AgentInvocation[] = [];
   private synthesisCalls = 0;
+  private malformedRepairReturned = false;
+  private negativeRepairReturned = false;
 
   constructor(
     readonly malformedDraft: string,
-    readonly malformedRepair: string
+    readonly malformedRepair: string,
+    readonly negativeRepair: string
   ) {}
 
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
     this.invocations.push(invocation);
     if (invocation.executionPurpose === "routing_repair") {
-      return { text: this.malformedRepair };
+      if (!this.malformedRepairReturned) {
+        this.malformedRepairReturned = true;
+        return { text: this.malformedRepair };
+      }
+      if (this.negativeRepairReturned) throw new Error("truthful negative repair was not accepted");
+      this.negativeRepairReturned = true;
+      return {
+        text: this.negativeRepair,
+        confidence: "CERTAIN",
+        details: { synthesis_complete: true },
+      };
     }
     if (invocation.stateId === "researching") {
       return {
@@ -211,6 +224,7 @@ class UnifiedMalformedSemanticDraftClient implements ModelClient {
     }
     if (invocation.stateId === "synthesizing") {
       this.synthesisCalls += 1;
+      if (this.synthesisCalls > 2) throw new Error("malformed draft advanced to new synthesis");
       return this.synthesisCalls === 1
         ? { text: "", confidence: "CERTAIN", details: { synthesis_complete: true } }
         : { text: this.malformedDraft };
@@ -300,133 +314,171 @@ describe("P4-QR Fresh-004 liveness terminal regression", () => {
 });
 
 describe("P4-QR unified provider-free semantic-draft regression", () => {
-  it("keeps an empty draft pending, persists a malformed draft, and stalls identical malformed repair", async () => {
-    const root = temporaryRoot();
-    const runId = "run-p4-unified-malformed-semantic-draft";
-    const malformedDraft = "DRAFT_BODY\nSUMMARY: not-json";
-    const malformedRepair =
-      'REPAIR_BODY\nSUMMARY:{"confidence":"CERTAIN","synthesis_complete":true,"defect":"forbidden"}';
-    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
-    const checkpointer = new Checkpointer(path.join(root, "orchestration.db"));
-    const engine = new OrchestrationEngine(checkpointer, {
-      projectRoot: root,
-      maxSteps: 96,
-      receiptAuthority: TEST_RECEIPT_AUTHORITY,
-      artifactRevisions: artifacts,
-      artifactStore: artifacts,
-      artifactReader: artifacts,
-    });
-    const client = new UnifiedMalformedSemanticDraftClient(malformedDraft, malformedRepair);
-    const workers = new WorkerExecutor(client, artifacts, {
-      projectRoot: root,
-      parallelConcurrency: 1,
-      registration: engine.registration,
-    });
-    const runner = new OrchestrationRunner(engine, workers);
-    const identity = {
-      schema_version: 2,
-      run_id: runId,
-      session_id: "session-p4-unified-malformed-semantic-draft",
-      playbook: "research",
-      engine_owner: "typescript",
-    } satisfies RunIdentity;
-    const start = engine.handle({
-      schema_version: 2,
-      action: "start",
-      identity,
-      goal: "Exercise the unified provider-free semantic-draft failure chain.",
-      constraints: { mode: "quick" },
-      project_root: root,
-      trust_profile: "trusted-interactive",
-    });
+  it.each([
+    ["incomplete", 'SUMMARY:{"confidence":"CERTAIN","synthesis_complete":false}'],
+    [
+      "clarification",
+      'SUMMARY:{"confidence":"CERTAIN","synthesis_complete":true,"needs_clarification":true,"clarifying_questions":["Which evidence is required?"]}',
+    ],
+  ])(
+    "keeps empty/malformed drafts non-positive and permits truthful %s routing",
+    async (_outcome, negativeRepair) => {
+      const root = temporaryRoot();
+      const runId = "run-p4-unified-malformed-semantic-draft";
+      const malformedDraft = "DRAFT_BODY\nSUMMARY: not-json";
+      const malformedRepair =
+        'REPAIR_BODY\nSUMMARY:{"confidence":"CERTAIN","synthesis_complete":true,"defect":"forbidden"}';
+      const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+      const checkpointer = new Checkpointer(path.join(root, "orchestration.db"));
+      const engine = new OrchestrationEngine(checkpointer, {
+        projectRoot: root,
+        receiptAuthority: TEST_RECEIPT_AUTHORITY,
+        artifactRevisions: artifacts,
+        artifactStore: artifacts,
+        artifactReader: artifacts,
+      });
+      const client = new UnifiedMalformedSemanticDraftClient(
+        malformedDraft,
+        malformedRepair,
+        negativeRepair
+      );
+      const workers = new WorkerExecutor(client, artifacts, {
+        projectRoot: root,
+        parallelConcurrency: 1,
+        registration: engine.registration,
+      });
+      const runner = new OrchestrationRunner(engine, workers);
+      const identity = {
+        schema_version: 2,
+        run_id: runId,
+        session_id: "session-p4-unified-malformed-semantic-draft",
+        playbook: "research",
+        engine_owner: "typescript",
+      } satisfies RunIdentity;
+      const start = engine.handle({
+        schema_version: 2,
+        action: "start",
+        identity,
+        goal: "Exercise the unified provider-free semantic-draft failure chain.",
+        constraints: { mode: "quick" },
+        project_root: root,
+        trust_profile: "trusted-interactive",
+      });
 
-    await expect(runner.runUntilBoundary(start)).rejects.toThrow(
-      /no non-empty final assistant text/u
-    );
-    const pendingRun = checkpointer.loadRunById(runId);
-    if (pendingRun === undefined) throw new Error("pending semantic-draft run is absent");
-    expect(pendingRun.stateId).toBe("synthesizing");
-    expect(pendingRun.status).toBe("running");
-    const pending = pendingRun.pendingDirective;
-    if (pending?.action !== "invoke_agent")
-      throw new Error("semantic-draft directive is not pending");
-    expect(pendingRun.selectedArtifacts.map((artifact) => artifact.phase)).toEqual(
-      expect.arrayContaining(["intake", "researching"])
-    );
-    expect(
-      artifacts.lastVersion(
+      await expect(runner.runUntilBoundary(start)).rejects.toThrow(
+        /no non-empty final assistant text/u
+      );
+      const pendingRun = checkpointer.loadRunById(runId);
+      if (pendingRun === undefined) throw new Error("pending semantic-draft run is absent");
+      expect(pendingRun.stateId).toBe("synthesizing");
+      expect(pendingRun.status).toBe("running");
+      const pending = pendingRun.pendingDirective;
+      if (pending?.action !== "invoke_agent")
+        throw new Error("semantic-draft directive is not pending");
+      expect(pendingRun.selectedArtifacts.map((artifact) => artifact.phase)).toEqual(
+        expect.arrayContaining(["intake", "researching"])
+      );
+      expect(
+        artifacts.lastVersion(
+          runId,
+          pending.output_artifact.phase,
+          pending.output_artifact.branch_id,
+          pending.output_artifact.kind,
+          pending.output_artifact.operation_id
+        )
+      ).toBe(0);
+      expect(
+        checkpointer.events(runId).some((event) => event.eventType.startsWith("routing_repair"))
+      ).toBe(false);
+      expect(
+        pendingRun.selectedArtifacts.some((artifact) =>
+          ["semantic-core", "product-envelope", "deterministic-render"].includes(artifact.kind)
+        )
+      ).toBe(false);
+      expect(existsSync(path.join(root, "research"))).toBe(false);
+
+      const recovered = engine.handle({ schema_version: 2, action: "recover", identity });
+      expect(recovered.action).toBe("invoke_agent");
+      const waiting = await runner.runUntilBoundary(recovered);
+      expect(waiting.action).toBe("await_user");
+      if (waiting.action !== "await_user") throw new Error("negative repair did not request input");
+      expect(waiting.state_id).toBe("awaiting_clarification");
+      if (_outcome === "clarification") {
+        expect(waiting.questions.map((question) => question.prompt)).toEqual([
+          "Which evidence is required?",
+        ]);
+      }
+      expect(engine.handle({ schema_version: 2, action: "recover", identity })).toEqual(waiting);
+
+      const draftRef = artifacts.refFor(
         runId,
         pending.output_artifact.phase,
         pending.output_artifact.branch_id,
         pending.output_artifact.kind,
-        pending.output_artifact.operation_id
-      )
-    ).toBe(0);
-    expect(
-      checkpointer.events(runId).some((event) => event.eventType.startsWith("routing_repair"))
-    ).toBe(false);
-    expect(
-      pendingRun.selectedArtifacts.some((artifact) =>
-        ["semantic-core", "product-envelope", "deterministic-render"].includes(artifact.kind)
-      )
-    ).toBe(false);
-    expect(existsSync(path.join(root, "research"))).toBe(false);
+        pending.output_artifact.operation_id,
+        pending.output_artifact.version
+      );
+      if (draftRef === null) throw new Error("malformed semantic draft artifact was not persisted");
+      expect(artifacts.readById(draftRef.artifact_id).toString("utf8")).toBe(malformedDraft);
+      const repairInvocation = client.invocations.at(-1);
+      if (repairInvocation?.executionPurpose !== "routing_repair") {
+        throw new Error("routing repair invocation is absent");
+      }
+      expect(repairInvocation.inputArtifacts).toEqual([draftRef]);
+      const acceptedRepair = checkpointer
+        .events(runId)
+        .find((event) => event.eventType === "routing_repair_accepted");
+      const receiptId = acceptedRepair?.payload["repair_receipt_id"];
+      if (typeof receiptId !== "string") throw new Error("accepted routing receipt is absent");
+      const repairResult = checkpointer.receiptResultById(receiptId);
+      if (repairResult === undefined) throw new Error("accepted routing result is absent");
+      const repairRef = repairResult.output_artifact;
+      expect(artifacts.readById(repairRef.artifact_id).toString("utf8")).toBe(negativeRepair);
+      const priorRepair = artifacts.metadata(repairRef).parent_ref;
+      if (priorRepair === null) throw new Error("rejected routing metadata is absent");
+      expect(artifacts.readById(priorRepair.artifact_id).toString("utf8")).toBe(malformedRepair);
+      expect(artifacts.metadata(repairRef).upstream_refs).toEqual([draftRef]);
+      const malformedDigests = checkpointer
+        .events(runId)
+        .filter((event) => event.eventType === "liveness_malformed_charged")
+        .map((event) => {
+          const digest = event.payload["digest"];
+          if (typeof digest !== "string") throw new Error("malformed digest is absent");
+          return digest;
+        });
+      expect(malformedDigests).toHaveLength(2);
+      expect(new Set(malformedDigests).size).toBe(1);
 
-    const recovered = engine.handle({ schema_version: 2, action: "recover", identity });
-    expect(recovered.action).toBe("invoke_agent");
-    const terminal = await runner.runUntilBoundary(recovered);
-    expect(terminal.action).toBe("incomplete");
-    if (terminal.action !== "incomplete") throw new Error("malformed repair did not terminalize");
-    expect(terminal.met).toBe(false);
-    expect(terminal.result.terminal_reason).toBe("identical_error_stall");
-
-    const draftRef = artifacts.refFor(
-      runId,
-      pending.output_artifact.phase,
-      pending.output_artifact.branch_id,
-      pending.output_artifact.kind,
-      pending.output_artifact.operation_id,
-      pending.output_artifact.version
-    );
-    if (draftRef === null) throw new Error("malformed semantic draft artifact was not persisted");
-    expect(artifacts.readById(draftRef.artifact_id).toString("utf8")).toBe(malformedDraft);
-    const repairInvocation = client.invocations.at(-1);
-    if (repairInvocation?.executionPurpose !== "routing_repair") {
-      throw new Error("routing repair invocation is absent");
-    }
-    expect(repairInvocation.inputArtifacts).toEqual([draftRef]);
-    const malformedDigests = checkpointer
-      .events(runId)
-      .filter((event) => event.eventType === "liveness_malformed_charged")
-      .map((event) => {
-        const digest = event.payload["digest"];
-        if (typeof digest !== "string") throw new Error("malformed digest is absent");
-        return digest;
+      const waitingRun = checkpointer.loadRunById(runId);
+      if (waitingRun === undefined) throw new Error("waiting semantic-draft run is absent");
+      expect(waitingRun.status).toBe("awaiting_user");
+      expect(waitingRun.met).toBe(false);
+      expect(waitingRun.previousState).toBe("synthesizing");
+      // The identical malformed digests above are telemetry, not a retired default cap.
+      expect(engine.liveness.policy(runId)).toMatchObject({
+        identical_malformed_digest_limit: null,
       });
-    expect(malformedDigests).toHaveLength(2);
-    expect(new Set(malformedDigests).size).toBe(1);
-
-    const terminalRun = checkpointer.loadRunById(runId);
-    expect(terminalRun?.status).toBe("incomplete");
-    expect(
-      terminalRun?.selectedArtifacts.some((artifact) =>
-        ["semantic-core", "product-envelope", "deterministic-render"].includes(artifact.kind)
-      )
-    ).toBe(false);
-    expect(existsSync(path.join(root, "research"))).toBe(false);
-    expect(
-      client.invocations.map(
-        (invocation) => `${invocation.stateId}:${invocation.executionPurpose ?? "phase"}`
-      )
-    ).toEqual([
-      "researching:phase",
-      "synthesizing:phase",
-      "synthesizing:phase",
-      "synthesizing:routing_repair",
-    ]);
-    artifacts.close();
-    checkpointer.close();
-  });
+      expect(
+        waitingRun.selectedArtifacts.some((artifact) =>
+          ["semantic-core", "product-envelope", "deterministic-render"].includes(artifact.kind)
+        )
+      ).toBe(false);
+      expect(existsSync(path.join(root, "research"))).toBe(false);
+      expect(
+        client.invocations.map(
+          (invocation) => `${invocation.stateId}:${invocation.executionPurpose ?? "phase"}`
+        )
+      ).toEqual([
+        "researching:phase",
+        "synthesizing:phase",
+        "synthesizing:phase",
+        "synthesizing:routing_repair",
+        "synthesizing:routing_repair",
+      ]);
+      artifacts.close();
+      checkpointer.close();
+    }
+  );
 });
 
 describe("P4-QR summary-only repair prompt", () => {

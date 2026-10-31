@@ -10,7 +10,7 @@ import {
   parseBrowserNetworkAllowlistV1,
   validateBrowserPolicyCarrierIdV1,
   validateRegisteredBrowserPolicyCarrierV1,
-} from "../src/browser-policy-contract-v1.js";
+} from "../dist/browser-policy-contract.js";
 
 describe("browser policy wire contract v1", () => {
   it("canonicalizes one bounded pattern grammar for every producer and consumer", () => {

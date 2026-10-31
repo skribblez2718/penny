@@ -7,6 +7,7 @@ import {
   type CompletionRefusalEvidence,
   type Directive,
   type JsonValue,
+  type InputArtifacts,
   type RegistrationContractBindingV1,
   type RunIdentity,
   type RunStatus,
@@ -26,13 +27,15 @@ import {
   type RunContextSnapshot,
 } from "./durable-state.js";
 
+import { attachContextArtifacts } from "./contextual-artifacts.js";
+
 export type { PendingBranch, ResearchData, RunContextSnapshot } from "./durable-state.js";
 
 function emptyResearchData(): ResearchData {
   return {
     mode: "",
     max_sub_queries: 4,
-    max_research_rounds: 2,
+    max_research_rounds: null,
     critique_passes: 0,
     research_round: 1,
     report_format: "default",
@@ -69,6 +72,7 @@ export class RunContext {
   readonly identity: Readonly<RunIdentity>;
   readonly completionProtocolVersion: 1 | undefined;
   readonly registrationContractBinding: Readonly<RegistrationContractBindingV1> | undefined;
+  readonly sealCorrectionLimit: number | null | undefined;
   readonly goal: string;
   readonly constraints: Readonly<Record<string, JsonValue>>;
   readonly projectRoot: string;
@@ -77,16 +81,31 @@ export class RunContext {
   stateId: string;
   previousState: string | null;
   stepCount: number;
-  readonly maxSteps: number;
+  readonly maxSteps: number | null;
   iteration: number;
-  readonly maxIterations: number;
+  readonly maxIterations: number | null;
   iterationHistory: string[][];
   clarificationText: string;
   met: boolean;
   research: ResearchData;
   private readonly playbookState: PlaybookDurableState;
   selectedArtifacts: ArtifactRef[];
-  pendingDirective: Directive | null;
+  private readonly admittedInputs: InputArtifacts | undefined;
+
+  get admittedInputArtifacts(): InputArtifacts | undefined {
+    return clone(this.admittedInputs);
+  }
+  private pending: Directive | null = null;
+
+  get pendingDirective(): Directive | null {
+    return this.pending;
+  }
+
+  set pendingDirective(value: Directive | null) {
+    // Enrich the same directive object returned by the playbook, before checkpoint/signing.
+    if (value !== null) attachContextArtifacts(value, this.admittedInputArtifacts);
+    this.pending = value;
+  }
   pendingBranches: PendingBranch[];
   terminalDirective: Directive | null;
   private pendingVisits: StateVisit[] = [];
@@ -100,6 +119,7 @@ export class RunContext {
       snapshot.registration_contract_binding === undefined
         ? undefined
         : Object.freeze(clone(snapshot.registration_contract_binding));
+    this.sealCorrectionLimit = snapshot.seal_correction_limit;
     this.goal = snapshot.goal;
     this.constraints = Object.freeze(clone(snapshot.constraints));
     this.projectRoot = snapshot.project_root;
@@ -117,6 +137,7 @@ export class RunContext {
     this.research = clone(snapshot.research);
     this.playbookState = clone(snapshot.playbook_state);
     this.selectedArtifacts = clone(snapshot.selected_artifacts);
+    this.admittedInputs = clone(snapshot.admitted_input_artifacts);
     this.pendingDirective = clone(snapshot.pending_directive);
     this.pendingBranches = clone(snapshot.pending_branches);
     this.terminalDirective = clone(snapshot.terminal_directive);
@@ -128,9 +149,12 @@ export class RunContext {
     constraints: Record<string, JsonValue>;
     projectRoot: string;
     trustProfile: TrustProfile;
-    maxSteps: number;
+    maxSteps?: number | null;
+    maxIterations?: number | null;
+    sealCorrectionLimit?: number | null | undefined;
     registrationContractBinding?: RegistrationContractBindingV1;
     initialArtifacts?: readonly ArtifactRef[];
+    admittedInputArtifacts?: InputArtifacts;
   }): RunContext {
     const identity = validateContract(RunIdentitySchema, input.identity, "run identity");
     if (identity.engine_owner !== "typescript") {
@@ -156,14 +180,20 @@ export class RunContext {
         state_id: "intake",
         previous_state: null,
         step_count: 0,
-        max_steps: input.maxSteps,
+        max_steps: optionalCycleLimit(input.maxSteps, "max_steps"),
+        ...(input.sealCorrectionLimit === undefined
+          ? {}
+          : { seal_correction_limit: input.sealCorrectionLimit }),
         iteration: 0,
-        max_iterations: positiveIntegerConstraint(input.constraints.max_iterations, 3),
+        max_iterations: combinedCycleLimit(input.maxIterations, input.constraints.max_iterations),
         iteration_history: [],
         clarification_text: "",
         met: false,
         research: emptyResearchData(),
         selected_artifacts: clone([...(input.initialArtifacts ?? [])]),
+        ...(input.admittedInputArtifacts === undefined
+          ? {}
+          : { admitted_input_artifacts: clone(input.admittedInputArtifacts) }),
         // playbook_data is intentionally omitted here; it materializes only when a
         // playbook writes to it, keeping research snapshots byte-identical.
         pending_directive: null,
@@ -203,7 +233,7 @@ export class RunContext {
     if (isTerminalStatus(this.status)) {
       throw new Error(`cannot reissue terminal run ${this.identity.run_id}`);
     }
-    if (this.stepCount >= this.maxSteps) {
+    if (this.maxSteps !== null && this.stepCount >= this.maxSteps) {
       throw new Error(`run exceeded max_steps=${this.maxSteps}`);
     }
     this.previousState = this.stateId;
@@ -217,7 +247,7 @@ export class RunContext {
     if (isTerminalStatus(this.status)) {
       throw new Error(`cannot transition terminal run ${this.identity.run_id}`);
     }
-    if (this.stepCount >= this.maxSteps) {
+    if (this.maxSteps !== null && this.stepCount >= this.maxSteps) {
       throw new Error(`run exceeded max_steps=${this.maxSteps}`);
     }
     this.previousState = this.stateId;
@@ -293,6 +323,9 @@ export class RunContext {
       previous_state: this.previousState,
       step_count: this.stepCount,
       max_steps: this.maxSteps,
+      ...(this.sealCorrectionLimit === undefined
+        ? {}
+        : { seal_correction_limit: this.sealCorrectionLimit }),
       iteration: this.iteration,
       max_iterations: this.maxIterations,
       iteration_history: clone(this.iterationHistory),
@@ -301,11 +334,33 @@ export class RunContext {
       research: clone(this.research),
       playbook_state: clone(this.playbookState),
       selected_artifacts: clone(this.selectedArtifacts),
+      ...(this.admittedInputArtifacts === undefined
+        ? {}
+        : { admitted_input_artifacts: clone(this.admittedInputArtifacts) }),
       pending_directive: clone(this.pendingDirective),
       pending_branches: clone(this.pendingBranches),
       terminal_directive: clone(this.terminalDirective),
     });
   }
+}
+
+/** Unspecified is unlimited; malformed explicit policy must never become a fallback. */
+export function optionalCycleLimit(value: unknown, name: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive safe integer or null`);
+  }
+  return value;
+}
+
+function combinedCycleLimit(host: unknown, caller: unknown): number | null {
+  const hostLimit = optionalCycleLimit(host, "max_iterations");
+  const callerLimit = optionalCycleLimit(caller, "max_iterations");
+  return hostLimit === null
+    ? callerLimit
+    : callerLimit === null
+      ? hostLimit
+      : Math.min(hostLimit, callerLimit);
 }
 
 export function positiveIntegerConstraint(value: JsonValue | undefined, fallback: number): number {

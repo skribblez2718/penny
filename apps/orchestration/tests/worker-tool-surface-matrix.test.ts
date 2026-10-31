@@ -1,13 +1,18 @@
 /** Real-SDK tool-surface coverage for the TypeScript skill worker path. */
 
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  SettingsManager,
+  type AgentSession,
+  type ExtensionFactory,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface SessionCapture {
   readonly requested: readonly string[];
@@ -19,10 +24,20 @@ interface SessionCapture {
   prompt?: string;
 }
 
-const { sessionCaptures, promptBoundary } = vi.hoisted(() => ({
-  sessionCaptures: [] as SessionCapture[],
-  promptBoundary: new Error("deterministic session boundary before model invocation"),
-}));
+const { sessionCaptures, promptBoundary, promptCompletion } = vi.hoisted(() => {
+  const promptCompletion: {
+    providerCalls: number;
+    complete: ((session: AgentSession) => Promise<string>) | undefined;
+  } = {
+    providerCalls: 0,
+    complete: undefined,
+  };
+  return {
+    sessionCaptures: [] as SessionCapture[],
+    promptBoundary: new Error("deterministic session boundary before model invocation"),
+    promptCompletion,
+  };
+});
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
@@ -37,7 +52,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
         active: [...created.session.getActiveToolNames()],
         thinkingLevel: args[0]?.thinkingLevel,
       };
-      const carrierModule = await import("../src/browser-policy-carrier.js");
+      const carrierModule = await import("../dist/browser-policy-carrier.js");
       const carrier = carrierModule.currentRegisteredBrowserPolicyCarrier();
       if (carrier !== undefined) {
         capture.registeredBrowserAllowlist = carrier.allowlist;
@@ -46,9 +61,34 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
         );
       }
       sessionCaptures.push(capture);
+      created.session.agent.streamFunction = () => {
+        promptCompletion.providerCalls += 1;
+        throw new Error("provider dispatch is forbidden in this SDK matrix");
+      };
       vi.spyOn(created.session, "prompt").mockImplementation(async (prompt) => {
         capture.prompt = prompt;
-        throw promptBoundary;
+        if (promptCompletion.complete === undefined) throw promptBoundary;
+        const text = await promptCompletion.complete(created.session);
+        created.session.messages.push({
+          role: "assistant",
+          content: [
+            { type: "text", text: text.slice(0, 7) },
+            { type: "text", text: text.slice(7) },
+          ],
+          api: "openai-completions",
+          provider: "offline-fixture",
+          model: "offline-fixture",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        });
       });
       return created;
     }),
@@ -56,30 +96,90 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 });
 
 import { registerTool } from "../../../.pi/lib/pi-tool-registration.js";
-import { ArtifactStore } from "../src/artifact-store.js";
-import { canonicalBrowserNetworkAllowlist } from "../src/browser-policy-carrier.js";
-import { canonicalJson, Checkpointer } from "../src/checkpointer.js";
-import type { Directive } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { canonicalBrowserNetworkAllowlist } from "../dist/browser-policy-carrier.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { validateContract, type Directive } from "../dist/contracts.js";
+import { assertCurrentShippingBuild } from "../dist/build-provenance.js";
+import { initializePennyState } from "../dist/state/setup.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import { PiAgentClient, type AgentInvocation, type InlineExtension } from "../src/model-client.js";
-import type { WorkerPromptBudgetV1 } from "../src/liveness.js";
-import { resolvePlaybook, type PlaybookRegistrationV1 } from "../src/playbooks/registry.js";
-import { validateContextSourceRef } from "../src/skill-contracts/research.js";
-import { buildRoutingRepairGuidance, WorkerExecutor } from "../src/worker.js";
+import {
+  PiAgentClient,
+  RemoteModelOutcomeUnknownError,
+  type AgentInvocation,
+  type InlineExtension,
+} from "../dist/model-client.js";
+import type { WorkerPromptBudget } from "../dist/liveness.js";
+import {
+  fallbackWorkerLeaseProfile,
+  LIVENESS_LEASE_REGISTRY_ID,
+} from "../dist/liveness-profiles.js";
+import { resolvePlaybook, type PlaybookRegistration } from "../dist/playbooks/registry.js";
+import { validateContextSourceRef } from "../dist/skill-contracts/research.js";
+import { WorkerExecutor } from "../dist/worker.js";
+import { writeModelSelectionFixture } from "./helpers/model-selection-fixture.js";
+import { unavailableMemoryReplacement } from "./helpers/unavailable-memory-replacement.js";
 import { CORE_ONLY_PLAYBOOK_NAME, CORE_ONLY_REGISTRATION } from "./fixtures/core-only-playbook.js";
+
+async function expectRemoteUnknownAtPromptBoundary(promise: Promise<unknown>): Promise<void> {
+  try {
+    await promise;
+    throw new Error("expected provider-boundary failure");
+  } catch (error) {
+    expect(error).toBeInstanceOf(RemoteModelOutcomeUnknownError);
+    expect(error).toHaveProperty("cause", promptBoundary);
+  }
+}
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const AGENTS_DIR = path.join(PROJECT_ROOT, ".pi", "agents");
 const TRUST_PROFILES = ["trusted-interactive", "hardened-untrusted"] as const;
+const lease = fallbackWorkerLeaseProfile("phase");
 const QUICK_PROMPT_BUDGET = {
-  schema_version: 1,
+  schema_version: 3,
   preset: "quick",
   purpose: "phase",
-  model_turns: { worker_remaining: 16, run_remaining: 48, effective_remaining: 16 },
-  tool_calls: { worker_remaining: 20, run_remaining: 64, effective_remaining: 20 },
-  external_requests: { worker_remaining: 8, run_remaining: 12, effective_remaining: 8 },
-} satisfies WorkerPromptBudgetV1;
+  inactivity_lease: {
+    registry_id: LIVENESS_LEASE_REGISTRY_ID,
+    profile_id: lease.profile_id,
+    profile_sha256: lease.profile_sha256,
+    interval_ms: lease.inactivity_interval_ms,
+    remaining_ms: lease.inactivity_interval_ms,
+    last_progress_at_ms: 0,
+    accepted_progress_signals: 0,
+  },
+} satisfies WorkerPromptBudget;
+
+const ArtifactChunkSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    artifact_ref: Type.Object({ artifact_id: Type.String() }, { additionalProperties: true }),
+    content_digest: Type.String(),
+    content: Type.String(),
+    truncated: Type.Boolean(),
+    returned_range: Type.Object({ start: Type.Integer(), end: Type.Integer() }),
+    next_range: Type.Union([
+      Type.Object({ start: Type.Integer(), end: Type.Integer() }),
+      Type.Null(),
+    ]),
+  },
+  { additionalProperties: true }
+);
+
+function isInstalledArtifactWorker(value: unknown): value is {
+  createArtifactReadExtension(host: {
+    projectRoot: string;
+    env: NodeJS.ProcessEnv;
+  }): ExtensionFactory;
+} {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "createArtifactReadExtension" in value &&
+    typeof value.createArtifactReadExtension === "function"
+  );
+}
 
 type TrustProfile = AgentInvocation["trustProfile"];
 type InvokeAgentDirective = Extract<Directive, { action: "invoke_agent" }>;
@@ -107,53 +207,16 @@ function declaredTools(agent: string): string[] {
   return tools;
 }
 
-function independentlyExternallyCharged(toolName: string): boolean {
-  return (
-    toolName === "web_search" ||
-    toolName === "web_fetch" ||
-    toolName === "youtube_transcript" ||
-    toolName === "bash" ||
-    toolName.startsWith("playwright_")
-  );
-}
-
-function unavailableMemoryExtension(names: readonly string[]): InlineExtension {
-  return (pi) => {
-    for (const name of names) {
-      registerTool(pi, {
-        name,
-        label: name,
-        description: "Typed unavailable optional-service test provider",
-        parameters: Type.Object({}, { additionalProperties: true }),
-        async execute() {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({
-                  ok: false,
-                  error: { code: "MEMPALACE_UNAVAILABLE", retryable: true },
-                }),
-              },
-            ],
-            details: {},
-          };
-        },
-      });
-    }
-  };
-}
-
 function registration(
   agent: string,
   browserNetworkAllowlist?: readonly string[]
-): PlaybookRegistrationV1 {
+): PlaybookRegistration {
   const shipped = resolvePlaybook("research");
   if (shipped === undefined || shipped.worker.kind !== "catalog-agent") {
     throw new Error("research catalog registration is unavailable");
   }
   const guidance = { skill_root: ".pi/agents", resolution: "per_agent" } as const;
-  const { generic_child: shippedAuthority, ...synthetic } = shipped;
+  const { generic_child: shippedAuthority, seal_policy: _sealPolicy, ...synthetic } = shipped;
   const { prompt_sources: _promptSources, ...syntheticWorker } = shipped.worker;
   if (shippedAuthority === undefined) {
     throw new Error("research generic-child authority is unavailable");
@@ -247,6 +310,19 @@ function directive(
   };
 }
 
+let isolatedAgentDir: string | undefined;
+beforeEach(() => {
+  isolatedAgentDir = mkdtempSync(path.join(tmpdir(), "penny-matrix-agent-"));
+  writeModelSelectionFixture(isolatedAgentDir);
+  vi.stubEnv("PI_CODING_AGENT_DIR", isolatedAgentDir);
+  promptCompletion.providerCalls = 0;
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  if (isolatedAgentDir !== undefined) rmSync(isolatedAgentDir, { recursive: true, force: true });
+  isolatedAgentDir = undefined;
+});
+
 describe("TypeScript skill worker exact tool surfaces", () => {
   it("drives a non-Research/non-KB fixture through ordinary PiAgentClient from registration-owned surfaces", async () => {
     sessionCaptures.length = 0;
@@ -267,7 +343,7 @@ describe("TypeScript skill worker exact tool surfaces", () => {
         playbookRegistry: new Map([[CORE_ONLY_REGISTRATION.name, CORE_ONLY_REGISTRATION]]),
       });
       const client = new PiAgentClient({
-        workerExtensions: [unavailableMemoryExtension(memoryNames)],
+        workerExtensionReplacements: [unavailableMemoryReplacement(PROJECT_ROOT, memoryNames)],
         testOnlySessionManagerFactory: (invocation) =>
           SessionManager.inMemory(invocation.projectRoot),
       });
@@ -294,14 +370,18 @@ describe("TypeScript skill worker exact tool surfaces", () => {
         trust_profile: "hardened-untrusted",
       });
 
-      await expect(workers.execute(pending)).rejects.toBe(promptBoundary);
+      await expectRemoteUnknownAtPromptBoundary(workers.execute(pending));
       const capture = sessionCaptures[0];
       if (capture === undefined || capture.prompt === undefined) {
         throw new Error("generic PiAgentClient prompt capture is absent");
       }
       expect(capture.requested).toEqual(declared);
       expect([...capture.active].sort()).toEqual([...declared].sort());
-      expect(capture.thinkingLevel).toBeUndefined();
+      const thinking = readFileSync(path.join(AGENTS_DIR, "piper.md"), "utf8").match(
+        /^thinking:\s*(\S+)\s*$/mu
+      )?.[1];
+      expect(thinking).toBeDefined();
+      expect(capture.thinkingLevel).toBe(thinking);
       expect(capture.prompt).toContain("'piper' role for a registered workflow");
       expect(capture.prompt).not.toContain("# Generic Fixture Planning");
       expect(capture.systemPrompt).toContain("# Generic Fixture Planning");
@@ -331,7 +411,7 @@ describe("TypeScript skill worker exact tool surfaces", () => {
     try {
       using artifacts = new ArtifactStore(path.join(directory, "artifacts"));
       const client = new PiAgentClient({
-        workerExtensions: [unavailableMemoryExtension(memoryNames)],
+        workerExtensionReplacements: [unavailableMemoryReplacement(PROJECT_ROOT, memoryNames)],
         testOnlySessionManagerFactory: (invocation) =>
           SessionManager.inMemory(invocation.projectRoot),
       });
@@ -341,8 +421,8 @@ describe("TypeScript skill worker exact tool surfaces", () => {
         registration: activeRegistration,
       });
 
-      await expect(workers.execute(directive(agent, "hardened-untrusted", 10_001))).rejects.toBe(
-        promptBoundary
+      await expectRemoteUnknownAtPromptBoundary(
+        workers.execute(directive(agent, "hardened-untrusted", 10_001))
       );
       const capture = sessionCaptures[0];
       if (capture === undefined) throw new Error("browser policy SDK session capture is absent");
@@ -373,7 +453,7 @@ describe("TypeScript skill worker exact tool surfaces", () => {
         artifactReader: artifacts,
       });
       const client = new PiAgentClient({
-        workerExtensions: [unavailableMemoryExtension(memoryNames)],
+        workerExtensionReplacements: [unavailableMemoryReplacement(PROJECT_ROOT, memoryNames)],
         testOnlySessionManagerFactory: (invocation) =>
           SessionManager.inMemory(invocation.projectRoot),
         testOnlyThinkingLevelOverride: "low",
@@ -401,7 +481,7 @@ describe("TypeScript skill worker exact tool surfaces", () => {
         trust_profile: "trusted-interactive",
       });
 
-      await expect(workers.execute(pending)).rejects.toBe(promptBoundary);
+      await expectRemoteUnknownAtPromptBoundary(workers.execute(pending));
 
       const capture = sessionCaptures[0];
       if (capture === undefined) throw new Error("Quick SDK session capture is absent");
@@ -427,7 +507,7 @@ describe("TypeScript skill worker exact tool surfaces", () => {
     try {
       using artifacts = new ArtifactStore(path.join(directory, "artifacts"));
       const client = new PiAgentClient({
-        workerExtensions: [unavailableMemoryExtension(memoryNames)],
+        workerExtensionReplacements: [unavailableMemoryReplacement(PROJECT_ROOT, memoryNames)],
         testOnlySessionManagerFactory: (invocation) =>
           SessionManager.inMemory(invocation.projectRoot),
       });
@@ -441,8 +521,8 @@ describe("TypeScript skill worker exact tool surfaces", () => {
             parallelConcurrency: agents.length,
             registration: registration(agent),
           });
-          await expect(workers.execute(directive(agent, trustProfile, sequence))).rejects.toBe(
-            promptBoundary
+          await expectRemoteUnknownAtPromptBoundary(
+            workers.execute(directive(agent, trustProfile, sequence))
           );
           const capture = sessionCaptures[captureIndex];
           if (capture === undefined) {
@@ -471,53 +551,222 @@ describe("TypeScript skill worker exact tool surfaces", () => {
     }
   }, 120_000);
 
-  it("keeps exact Skribble YAML equality while routing guidance is summary-only", async () => {
+  it("reads exact artifacts and persists outputs for every catalog role in ordinary and routing-repair SDK sessions", async () => {
     sessionCaptures.length = 0;
-    const agent = "skribble";
-    const declared = declaredTools(agent);
-    const memoryNames = declared.filter((name) => name.startsWith("memory_"));
-    const client = new PiAgentClient({
-      workerExtensions: [unavailableMemoryExtension(memoryNames)],
-      testOnlySessionManagerFactory: (invocation) =>
-        SessionManager.inMemory(invocation.projectRoot),
-    });
-    const activeRegistration = registration(agent);
-    await expect(
-      client.runAgent({
-        agent,
-        stateId: "tool-surface-verification",
-        task: "Repair routing metadata only.",
+    const agents = agentNames();
+    expect(agents.length).toBeGreaterThan(0);
+    const directory = mkdtempSync(path.join(tmpdir(), "penny-all-role-artifact-sdk-"));
+    const env = { PENNY_STATE_ROOT: path.join(directory, "state") };
+    const state = initializePennyState(PROJECT_ROOT, { env });
+    const output = 'SUMMARY:{"confidence":"CERTAIN","complete":true,"artifact_text":"β🙂漢"}';
+    const input = "aβ🙂漢\n".repeat(4_000);
+    try {
+      using artifacts = ArtifactStore.openExisting(state.paths.artifacts.root, {
+        projectId: state.projectId,
+      });
+      const firstAgent = agents[0];
+      if (firstAgent === undefined) throw new Error("catalog discovery returned no roles");
+      const source = artifacts.persist({
+        metadata: {
+          ...directive(firstAgent, "trusted-interactive", 0).output_artifact,
+          run_id: "prior-artifact-input",
+          operation_id: "prior-artifact-input",
+        },
+        content: input,
+      });
+      // Same installed-helper assembly as the service: freshness first, no ambient reader/fallback.
+      const installedReader: InlineExtension = {
+        name: "artifact-worker-read",
+        hidden: true,
+        factory: async (pi) => {
+          const identity = assertCurrentShippingBuild();
+          if (identity === undefined) throw new Error("matrix requires a compiled shipping helper");
+          const helper: unknown = await import(
+            new URL("../dist/artifact-worker.js", import.meta.url).href
+          );
+          if (!isInstalledArtifactWorker(helper))
+            throw new Error("Installed artifact reader unavailable");
+          await helper.createArtifactReadExtension({ projectRoot: PROJECT_ROOT, env })(pi);
+        },
+      };
+      const builtins = new Set([
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "grep",
+        "find",
+        "ls",
+        "artifact_read",
+      ]);
+      const fixtureNames = [...new Set(agents.flatMap(declaredTools))].filter(
+        (name) => !builtins.has(name)
+      );
+      const optionalProviders: InlineExtension = (pi) => {
+        for (const name of fixtureNames)
+          registerTool(pi, {
+            name,
+            label: name,
+            description: "Offline registration fixture; not an executable service.",
+            parameters: Type.Object({}),
+            execute: async () => {
+              throw new Error("unrelated fixture tool must not execute");
+            },
+          });
+      };
+      const client = new PiAgentClient({
+        workerExtensions: [optionalProviders, installedReader],
+        sessionRuntime: {
+          settingsManager: SettingsManager.inMemory(),
+          noAmbientExtensions: true,
+          attach: () => () => {},
+        },
+        testOnlySessionManagerFactory: () => SessionManager.inMemory(PROJECT_ROOT),
+      });
+      let readCalls = 0;
+      promptCompletion.complete = async (session) => {
+        const reader = session.agent.state.tools.find((tool) => tool.name === "artifact_read");
+        if (reader === undefined) throw new Error("active SDK reader is absent");
+        let range: { start: number; end?: number } | undefined;
+        let content = "";
+        let chunks = 0;
+        for (;;) {
+          const result = await reader.execute(`artifact-chunk-${chunks}`, {
+            artifact: source.artifact_id,
+            ...(range === undefined ? {} : { range }),
+          });
+          const text = result.content[0];
+          if (text?.type !== "text") throw new Error("artifact reader returned no JSON text");
+          const candidate: unknown = JSON.parse(text.text);
+          const body = validateContract(ArtifactChunkSchema, candidate, "SDK artifact chunk");
+          expect(body.artifact_ref.artifact_id).toBe(source.artifact_id);
+          expect(body.content_digest).toBe(source.content_digest);
+          expect(body.returned_range.start).toBe(Buffer.byteLength(content, "utf8"));
+          content += body.content;
+          chunks += 1;
+          readCalls += 1;
+          if (!body.truncated) {
+            expect(body.next_range).toBeNull();
+            break;
+          }
+          if (body.next_range === null || body.next_range.start <= body.returned_range.start)
+            throw new Error("continuation made no progress");
+          range = body.next_range;
+        }
+        expect(chunks).toBeGreaterThan(1);
+        expect(Buffer.from(content, "utf8")).toEqual(Buffer.from(input, "utf8"));
+        return output;
+      };
+      let sequence = 20_000;
+      for (const trustProfile of TRUST_PROFILES) {
+        for (const agent of agents) {
+          for (const purpose of ["phase", "routing_repair"] as const) {
+            const base = directive(agent, trustProfile, ++sequence);
+            const active: InvokeAgentDirective = {
+              ...base,
+              input_artifacts: {
+                schema_version: 2,
+                artifacts: [{ slot: "exact-input", ref: source }],
+              },
+              ...(purpose === "phase"
+                ? {}
+                : {
+                    execution_purpose: purpose,
+                    routing_repair_binding: {
+                      schema_version: 1,
+                      source_state_id: base.state_id,
+                      source_branch_id: null,
+                      source_agent: agent,
+                      source_attempt: 1,
+                      source_artifact_ref: source,
+                      source_receipt_id: "synthetic-matrix-source-receipt",
+                      source_result_sha256: source.content_digest,
+                    },
+                    output_artifact: { ...base.output_artifact, kind: "routing-metadata" },
+                  }),
+            };
+            const workers = new WorkerExecutor(client, artifacts, {
+              projectRoot: PROJECT_ROOT,
+              parallelConcurrency: 1,
+              registration: registration(agent),
+            });
+            workers.setReceiptAuthority(TEST_RECEIPT_AUTHORITY);
+            const captureIndex = sessionCaptures.length;
+            const result = (await workers.execute(active))[0];
+            if (result?.output_artifact === undefined)
+              throw new Error("owner returned no persisted output");
+            const capture = sessionCaptures[captureIndex];
+            if (capture === undefined) throw new Error(`missing ${agent}/${purpose} SDK capture`);
+            const declared = declaredTools(agent);
+            expect(capture.requested).toEqual(declared);
+            expect([...capture.active].sort()).toEqual([...declared].sort());
+            expect(capture.active).not.toContain("artifact_write");
+            expect(artifacts.readById(result.output_artifact.artifact_id)).toEqual(
+              Buffer.from(output)
+            );
+            expect(result.worker_receipt.output_digest).toBe(result.output_artifact.content_digest);
+            expect(result.details).toEqual({ complete: true, artifact_text: "β🙂漢" });
+          }
+        }
+      }
+      expect(sessionCaptures).toHaveLength(agents.length * TRUST_PROFILES.length * 2);
+      expect(readCalls).toBeGreaterThan(sessionCaptures.length);
+      expect(promptCompletion.providerCalls).toBe(0);
+
+      // Owner persistence is independent of filesystem-write role authority. Both faults must
+      // refuse BEFORE a later successful owner capture; no failure is turned into a result ref.
+      const readOnlyAgent = agents.find(
+        (agent) => !declaredTools(agent).includes("write") && !declaredTools(agent).includes("edit")
+      );
+      if (readOnlyAgent === undefined)
+        throw new Error("catalog has no non-writing role to exercise");
+      const workers = new WorkerExecutor(client, artifacts, {
         projectRoot: PROJECT_ROOT,
-        trustProfile: "trusted-interactive",
-        inputArtifacts: [],
-        executionPurpose: "routing_repair",
-        routingRepairGuidance: buildRoutingRepairGuidance(
-          activeRegistration,
-          "tool-surface-verification"
-        ),
-        workflowSession: {
-          run_id: "tool-surface-repair",
-          workflow_session_id: "tool-surface-repair",
-          branch_id: null,
-          attempt: 2,
-          worker_id: "worker-tool-surface-repair",
-          purpose: "routing_repair",
-        },
-        registration: {
-          playbook_name: activeRegistration.name,
-          workflow_name: activeRegistration.worker.workflow_name,
-          guidance: activeRegistration.worker.guidance,
-          result_transport: activeRegistration.worker.result_transport,
-          opening_policy: activeRegistration.worker.opening_policy,
-          model_policy: activeRegistration.worker.model_policy,
-        },
-      })
-    ).rejects.toBe(promptBoundary);
-    const capture = sessionCaptures[0];
-    if (capture === undefined) throw new Error("routing-repair SDK session capture is absent");
-    expect(capture.requested).toEqual(declared);
-    expect([...capture.active].sort()).toEqual([...declared].sort());
-  });
+        parallelConcurrency: 1,
+        registration: registration(readOnlyAgent),
+      });
+      workers.setReceiptAuthority(TEST_RECEIPT_AUTHORITY);
+      const persist = vi.spyOn(artifacts, "persist").mockImplementationOnce(() => {
+        throw new Error("synthetic output persistence corruption");
+      });
+      await expect(
+        workers.execute(directive(readOnlyAgent, "trusted-interactive", ++sequence))
+      ).rejects.toThrow(/synthetic output persistence corruption/u);
+      persist.mockRestore();
+      const originalPersist = artifacts.persist.bind(artifacts);
+      let damagedObject: string | undefined;
+      const corrupt = vi.spyOn(artifacts, "persist").mockImplementationOnce((request) => {
+        const ref = originalPersist(request);
+        damagedObject = path.join(
+          state.paths.artifacts.root,
+          "objects",
+          "sha256",
+          ref.content_digest.slice(0, 2),
+          ref.content_digest.slice(2)
+        );
+        writeFileSync(damagedObject, "corrupt fixture bytes");
+        return ref;
+      });
+      await expect(
+        workers.execute(directive(readOnlyAgent, "trusted-interactive", ++sequence))
+      ).rejects.toThrow(/failed exact-byte verification/u);
+      corrupt.mockRestore();
+      if (damagedObject === undefined)
+        throw new Error("readback corruption fixture did not execute");
+      writeFileSync(damagedObject, output); // Restore only this synthetic test object to its exact bytes.
+      const success = (
+        await workers.execute(directive(readOnlyAgent, "trusted-interactive", ++sequence))
+      )[0];
+      if (success?.output_artifact === undefined)
+        throw new Error("owner success after faults is absent");
+      expect(artifacts.readById(success.output_artifact.artifact_id).toString("utf8")).toBe(output);
+      expect(promptCompletion.providerCalls).toBe(0);
+    } finally {
+      promptCompletion.complete = undefined;
+      vi.restoreAllMocks();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   it("keeps exact Echo YAML equality for document-only, approved-KB-only, and combined overlays", async () => {
     sessionCaptures.length = 0;
@@ -525,7 +774,7 @@ describe("TypeScript skill worker exact tool surfaces", () => {
     const declared = declaredTools(agent);
     const memoryNames = declared.filter((name) => name.startsWith("memory_"));
     const client = new PiAgentClient({
-      workerExtensions: [unavailableMemoryExtension(memoryNames)],
+      workerExtensionReplacements: [unavailableMemoryReplacement(PROJECT_ROOT, memoryNames)],
       testOnlySessionManagerFactory: (invocation) =>
         SessionManager.inMemory(invocation.projectRoot),
     });
@@ -557,7 +806,7 @@ describe("TypeScript skill worker exact tool surfaces", () => {
     for (const trustProfile of TRUST_PROFILES) {
       for (const overlays of modes) {
         const captureIndex = sessionCaptures.length;
-        await expect(
+        await expectRemoteUnknownAtPromptBoundary(
           client.runAgent({
             agent,
             stateId: "researching",
@@ -576,21 +825,18 @@ describe("TypeScript skill worker exact tool surfaces", () => {
               model_policy: shipped.worker.model_policy,
             },
           })
-        ).rejects.toBe(promptBoundary);
+        );
         const capture = sessionCaptures[captureIndex];
         if (capture === undefined) throw new Error("context-mode SDK capture is absent");
         expect(capture.requested).toEqual(declared);
         expect([...capture.active].sort()).toEqual([...declared].sort());
         if (capture.prompt === undefined) throw new Error("Echo opening prompt was not captured");
-        expect(capture.prompt).toContain("HOST-ENFORCED LEGACY V1 LIVENESS BUDGET:");
-        expect(capture.prompt).toContain(canonicalJson(QUICK_PROMPT_BUDGET));
-        expect(capture.prompt).toContain(
-          JSON.stringify(declared.filter(independentlyExternallyCharged).sort())
-        );
-        expect(capture.prompt.indexOf("HOST-ENFORCED LEGACY V1 LIVENESS BUDGET:")).toBeLessThan(
+        expect(capture.prompt).toContain("HOST-ENFORCED RENEWABLE INACTIVITY LEASE:");
+        expect(capture.prompt).not.toContain("HOST-ENFORCED LEGACY V1 LIVENESS BUDGET:");
+        expect(capture.prompt.indexOf("HOST-ENFORCED RENEWABLE INACTIVITY LEASE:")).toBeLessThan(
           capture.prompt.indexOf("TASK:")
         );
-        expect(capture.prompt).toContain("Every requested tool call—including each");
+        expect(capture.prompt).toContain("Total elapsed work is not a liveness budget");
       }
     }
     expect(sessionCaptures).toHaveLength(TRUST_PROFILES.length * modes.length);

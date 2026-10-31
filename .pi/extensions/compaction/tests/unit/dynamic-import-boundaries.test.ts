@@ -59,11 +59,12 @@ describe("summarizer dynamic import boundaries", () => {
 
   it("returns the compat completion and propagates cancellation without wrapping it", async () => {
     const cancellation = new DOMException("cancelled", "AbortError");
-    const complete = vi
+    const result = vi
       .fn()
       .mockResolvedValueOnce({ content: [{ type: "text", text: "summary" }] })
       .mockRejectedValueOnce(cancellation);
-    vi.doMock(COMPAT_SPEC, () => ({ complete }));
+    const stream = vi.fn(() => ({ async *[Symbol.asyncIterator]() {}, result }));
+    vi.doMock(COMPAT_SPEC, () => ({ stream }));
 
     const { _summaryInternals } = await import("../../summarizer.js");
     const model = { provider: "test", id: "model" };
@@ -74,6 +75,31 @@ describe("summarizer dynamic import boundaries", () => {
       content: [{ type: "text", text: "summary" }],
     });
     await expect(_summaryInternals.complete(model, context, options)).rejects.toBe(cancellation);
+    expect(stream).toHaveBeenCalledWith(model, context, options);
+  });
+
+  it("reports only actual nonempty stream deltas without leaking any payload", async () => {
+    vi.doMock(COMPAT_SPEC, () => ({
+      stream: () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "start" };
+          yield { type: "text_delta", delta: "" };
+          yield { type: "text_delta", delta: "private summary" };
+          yield { type: "thinking_delta", delta: "é" };
+          yield { type: "toolcall_delta", delta: "not summary progress" };
+        },
+        result: async () => ({ content: [{ type: "text", text: "summary" }] }),
+      }),
+    }));
+    const { _summaryInternals } = await import("../../summarizer.js");
+    const progress = vi.fn();
+    await expect(
+      _summaryInternals.complete({ provider: "test", id: "model" }, { messages: [] }, {}, progress)
+    ).resolves.toEqual({ content: [{ type: "text", text: "summary" }] });
+    expect(progress.mock.calls).toEqual([
+      [{ activity_class: "assistant_text_delta", observed_units: 15 }],
+      [{ activity_class: "assistant_thinking_delta", observed_units: 2 }],
+    ]);
   });
 
   it("rejects when the compat dynamic import fails", async () => {
@@ -89,8 +115,8 @@ describe("summarizer dynamic import boundaries", () => {
     ).rejects.toThrow();
   });
 
-  it("rejects when the lazily imported compat module has no callable complete export", async () => {
-    vi.doMock(COMPAT_SPEC, () => ({ complete: null }));
+  it("rejects when the lazily imported compat module has no callable stream export", async () => {
+    vi.doMock(COMPAT_SPEC, () => ({ stream: null }));
 
     const { _summaryInternals } = await import("../../summarizer.js");
 
@@ -101,7 +127,10 @@ describe("summarizer dynamic import boundaries", () => {
 
   it("rejects a malformed compat response at the unknown result boundary", async () => {
     vi.doMock(COMPAT_SPEC, () => ({
-      complete: () => Promise.resolve({ content: [{ type: "text", text: 42 }] }),
+      stream: () => ({
+        async *[Symbol.asyncIterator]() {},
+        result: async () => ({ content: [{ type: "text", text: 42 }] }),
+      }),
     }));
 
     const { _summaryInternals } = await import("../../summarizer.js");

@@ -4,12 +4,12 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { canonicalJson } from "../src/checkpointer.js";
-import { Checkpointer } from "../src/checkpointer.js";
-import type { ArtifactRef } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
-import { validateGroundedSynthesis } from "../src/skill-contracts/research.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { canonicalJson } from "../dist/checkpointer.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import type { ArtifactRef } from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
+import { validateGroundedSynthesis } from "../dist/skill-contracts/research.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const roots: string[] = [];
@@ -50,6 +50,7 @@ function persist(input: {
   readonly operation: string;
   readonly content: string;
   readonly kind: string;
+  readonly phase?: string;
   readonly schemaId?: string;
   readonly schemaVersion?: number;
 }): ArtifactRef {
@@ -57,7 +58,7 @@ function persist(input: {
     metadata: {
       schema_version: 2,
       run_id: input.runId,
-      phase: "chain_input",
+      phase: input.phase ?? "chain_input",
       branch_id: null,
       kind: input.kind,
       operation_id: input.operation,
@@ -112,29 +113,35 @@ function start(
 }
 
 describe("P2 pre-model research request and import admission", () => {
-  it("admits an exact canonical GroundedSynthesisV1 import", () => {
-    const projectRoot = root("typed-import");
-    const { artifacts, checkpointer, engine } = engineRuntime(projectRoot);
-    const core = validateGroundedSynthesis(positiveCore());
-    const ref = persist({
-      artifacts,
-      runId: "prior-run",
-      operation: "canonical-core",
-      content: canonicalJson(core),
-      kind: "semantic-core",
-      schemaId: "penny.grounded-synthesis.v1",
-    });
-    const directive = start(engine, projectRoot, "typed-target", [
-      { slot: "prior_grounded_synthesis", ref },
-    ]);
-    expect(directive.action).toBe("invoke_agent");
-    expect(checkpointer.runExists("typed-target")).toBe(true);
-    if (directive.action === "invoke_agent") {
-      expect(directive.input_artifacts.artifacts.map((binding) => binding.ref)).toContainEqual(ref);
+  it.each(["chain_input", "sealing_core"])(
+    "admits and directly assigns an exact canonical GroundedSynthesisV1 import at %s",
+    (phase) => {
+      const projectRoot = root("typed-import");
+      const { artifacts, checkpointer, engine } = engineRuntime(projectRoot);
+      const core = validateGroundedSynthesis(positiveCore());
+      const ref = persist({
+        artifacts,
+        runId: "prior-run",
+        operation: "canonical-core",
+        phase,
+        content: canonicalJson(core),
+        kind: "semantic-core",
+        schemaId: "penny.grounded-synthesis.v1",
+      });
+      const directive = start(engine, projectRoot, "typed-target", [
+        { slot: "prior_grounded_synthesis", ref },
+      ]);
+      expect(directive.action).toBe("invoke_agent");
+      expect(checkpointer.runExists("typed-target")).toBe(true);
+      if (directive.action === "invoke_agent") {
+        expect(directive.input_artifacts.artifacts.map((binding) => binding.ref)).toContainEqual(
+          ref
+        );
+      }
+      checkpointer.close();
+      artifacts.close();
     }
-    checkpointer.close();
-    artifacts.close();
-  });
+  );
 
   it("rejects noncanonical bytes, wrong version, wrong kind, and envelope/render/receipt substitution", () => {
     const projectRoot = root("typed-negative");

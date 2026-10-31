@@ -16,11 +16,8 @@ import enhance, {
   stripFlag,
   type CompleteFn,
 } from "../../index.js";
-import {
-  createTestExtensionApi,
-  isRecord,
-  requireFunction,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord, requireFunction } from "../../../../lib/tests/test-narrowers.js";
 
 const compatBoundary = vi.hoisted(() => ({
   complete: vi.fn(),

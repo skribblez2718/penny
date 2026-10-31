@@ -19,14 +19,14 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { RunContext } from "../src/context.js";
+import { RunContext } from "../dist/context.js";
 import {
   KnowledgeBasePlaybook,
   validateKnowledgeBasePhaseDetails,
-} from "../src/playbooks/knowledge-base.js";
-import { defaultKbIngestPlane, resolveKbRoot } from "../src/kb/ingest-plane.js";
-import { initKb } from "../src/kb/workflows.js";
-import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
+} from "../dist/playbooks/knowledge-base.js";
+import { defaultKbIngestPlane, resolveKbRoot } from "../dist/kb/ingest-plane.js";
+import { initKb } from "../dist/kb/workflows.js";
+import { readPolicy, writePolicy } from "../dist/kb/filesystem.js";
 
 /** The active parent identity these runs execute under (§5.3). */
 const PARENT = { provider: "ollama", model: "qwen327b:latest" };
@@ -41,14 +41,14 @@ function installTestPolicy(kbRoot: string): void {
     allowed_child_models: [{ ...PARENT, locality: "local" }],
   });
 }
-import type { ArtifactKind } from "../src/kb/contracts.js";
-import { RunArtifactStore } from "../src/kb/run-artifacts.js";
+import type { ArtifactKind } from "../dist/kb/contracts.js";
+import { RunArtifactStore } from "../dist/kb/run-artifacts.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
-import { mintSourceCapability } from "../src/kb/gate.js";
-import { validateContentReviewPacket } from "../src/kb/content-review.js";
-import { CapabilityStore } from "../src/kb/capabilities.js";
-import { readSelectedGeneration } from "../src/kb/generations.js";
-import type { JsonValue } from "../src/contracts.js";
+import { mintSourceCapability } from "../dist/kb/gate.js";
+import { validateContentReviewPacket } from "../dist/kb/content-review.js";
+import { CapabilityStore } from "../dist/kb/capabilities.js";
+import { readSelectedGeneration } from "../dist/kb/generations.js";
+import type { JsonValue } from "../dist/contracts.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_integration";

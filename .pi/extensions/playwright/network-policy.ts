@@ -17,7 +17,7 @@ import {
   validateRegisteredBrowserPolicyCarrierV1,
   type BrowserNetworkSchemeV1,
   type CanonicalBrowserNetworkPatternV1,
-} from "../../../apps/orchestration/src/browser-policy-contract-v1.js";
+} from "../../../apps/orchestration/dist/browser-policy-contract.js";
 
 export const MAX_NETWORK_POLICY_PATTERNS = MAX_BROWSER_POLICY_PATTERNS;
 export const MAX_NETWORK_POLICY_PATTERN_CHARS = MAX_BROWSER_POLICY_PATTERN_CHARS;

@@ -3,6 +3,8 @@ import type { CheckpointObservation, CheckpointObserver } from "./checkpointer.j
 export interface ObservabilityClientOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly fetchImpl?: typeof fetch;
+  readonly inactivityMs?: number;
+  /** @deprecated Compatibility name; interpreted as connection/header inactivity, not total time. */
   readonly timeoutMs?: number;
 }
 
@@ -20,7 +22,7 @@ export class ObservabilityClient {
   private readonly url: string;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
-  private readonly timeoutMs: number;
+  private readonly inactivityMs: number;
   private circuitOpen = false;
 
   constructor(options: ObservabilityClientOptions = {}) {
@@ -29,7 +31,7 @@ export class ObservabilityClient {
     this.url = baseUrl(env);
     this.apiKey = env.PI_OBSERVABILITY_API_KEY ?? "";
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? 1_500;
+    this.inactivityMs = options.inactivityMs ?? options.timeoutMs ?? 1_500;
     this.observe = (observation) => {
       void this.emit(observation);
     };
@@ -62,7 +64,9 @@ export class ObservabilityClient {
       return;
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    // fetch resolves when response headers arrive, so this bounds silence before the first
+    // trusted network activity rather than total observer request duration.
+    const timer = setTimeout(() => controller.abort(), this.inactivityMs);
     try {
       const response = await this.fetchImpl(`${this.url}${path}`, {
         method: "POST",

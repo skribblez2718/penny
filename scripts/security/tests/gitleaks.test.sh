@@ -114,8 +114,9 @@ git init -q "$REPO"
 git -C "$REPO" config user.name 'TS-145 Test'
 git -C "$REPO" config user.email 'ts-145@example.invalid'
 cp "$CONFIG" "$REPO/.gitleaks.toml"
+cp "$PROJECT_ROOT/.gitleaksignore" "$REPO/.gitleaksignore"
 printf '%s\n' 'clean baseline' > "$REPO/README.md"
-git -C "$REPO" add .gitleaks.toml README.md
+git -C "$REPO" add .gitleaks.toml .gitleaksignore README.md
 git -C "$REPO" commit -q -m 'clean baseline'
 BASE_COMMIT=$(git -C "$REPO" rev-parse HEAD)
 case "$REPO/" in
@@ -149,6 +150,25 @@ write_fake_token > "$REPO/staged.txt"
 run_capture "$OUTPUT" run_wrapper staged
 assert_status 'wrapper staged scan ignores an untracked working-tree-only fake token' 0
 rm -f "$REPO/staged.txt"
+
+# The historical exclusion must not suppress the same rule on a new occurrence.
+# Construct a synthetic identifier so this test source is not itself a finding.
+fixture_prefix='idem-'
+fixture_label='application-'
+fixture_suffix='001'
+printf 'idempotency_key: "%s%s%s"\n' "$fixture_prefix" "$fixture_label" "$fixture_suffix" > "$REPO/generic.txt"
+git -C "$REPO" add generic.txt
+run_capture "$OUTPUT" run_wrapper staged
+assert_status 'historical fingerprint does not suppress a staged generic-api-key finding' 1
+assert_output_contains 'staged generic identifier' 'generic-api-key'
+git -C "$REPO" commit -q -m 'synthetic generic identifier'
+GENERIC_COMMIT=$(git -C "$REPO" rev-parse HEAD)
+run_capture "$OUTPUT" run_wrapper range "$BASE_COMMIT..$GENERIC_COMMIT"
+assert_status 'historical fingerprint does not suppress a new committed generic-api-key finding' 1
+assert_output_contains 'committed generic identifier' 'generic-api-key'
+printf '%s\n' 'clean generic fixture' > "$REPO/generic.txt"
+git -C "$REPO" add generic.txt
+git -C "$REPO" commit -q -m 'remove synthetic generic identifier'
 
 write_fake_token > "$REPO/range.txt"
 git -C "$REPO" add range.txt

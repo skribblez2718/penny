@@ -26,7 +26,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
   }),
 }));
 
-import { createTestExtensionApi } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
 
 describe("Statusline Integration — Format Functions", () => {
   it("should format token counts with K suffix for thousands", () => {

@@ -113,6 +113,12 @@ export function deriveWorkerTerminalOutcome(result: SingleResult): WorkerTermina
     return { schema_version: 1, status: "failed", reason: "process_lifecycle" };
   }
 
+  // The runner uses the same bounded termination lifecycle for owner lease expiry and
+  // caller abort. An actual inactivity termination is a lifecycle failure, not cancellation.
+  if (result.inactivityExpired === true) {
+    return { schema_version: 1, status: "failed", reason: "process_lifecycle" };
+  }
+
   if (result.wasAborted === true) {
     return { schema_version: 1, status: "cancelled", reason: "caller_cancelled" };
   }

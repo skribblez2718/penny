@@ -4,9 +4,9 @@
  * Production policy: each agent runs on the model declared in its SSOT
  * frontmatter (.pi/agents/<agent>.md `model:`). An explicit override exists
  * for tests only. These tests pin the SSOT parsing and the refusal behavior;
- * catalog resolution (alias → provider/model) was verified live in this
- * environment (`sol` → openai-codex/gpt-5.6-sol, `terra` →
- * openai-codex/gpt-5.6-terra).
+ * Global alias configuration in this environment maps `sol` to
+ * openai-codex/gpt-6.1-sol, `terra` to openai-codex/gpt-5.6-terra, and
+ * `luna` to openai-codex/gpt-6-luna.
  */
 
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -15,13 +15,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { KbModelClient, ssotModel } from "../src/kb/kb-model-client.js";
+import { KbModelClient, ssotModel } from "../dist/kb/kb-model-client.js";
 import {
   resolveDomainGuidancePath,
   type ActiveWorkerRegistrationMetadataV1,
-} from "../src/model-client.js";
-import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../src/playbooks/knowledge-base.js";
-import { type IngestSource } from "../src/kb/ingest.js";
+} from "../dist/model-client.js";
+import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../dist/playbooks/knowledge-base.js";
+import { type IngestSource } from "../dist/kb/ingest.js";
 
 const projectRoot = path.resolve(__dirname, "..", "..", "..");
 const KB_WORKER_METADATA: ActiveWorkerRegistrationMetadataV1 = {

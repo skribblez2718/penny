@@ -4,8 +4,8 @@ import path from "node:path";
 
 import { Type, type Static } from "typebox";
 
-import { jcsCanonicalize, strictParseJson } from "../src/kb/approval-receipts.js";
-import { sha256Hex, validateKbContract } from "../src/kb/contracts.js";
+import { jcsCanonicalize, strictParseJson } from "../dist/kb/approval-receipts.js";
+import { sha256Hex, validateKbContract } from "../dist/kb/contracts.js";
 
 export const G8_SMOKE_MANIFEST_PATH = "apps/orchestration/smoke/g8-qwen3.8-cohort.jcs.json";
 export const G8_SMOKE_RESULT_PATH_ENV = "PENNY_KB_MODEL_SMOKE_RESULT_PATH";

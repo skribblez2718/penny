@@ -6,7 +6,9 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ScaAdapterRegistry, ScaOperationAdapter } from "../src/adapters.js";
 import { SCA_SERVICE_ENV, validateScaServiceConfig } from "../src/config.js";
+import { SCA_BROKER_CONTRACT_LIMITS_V1 } from "../src/contracts.js";
 import { SCA_SERVICE_IPC_PROTOCOL } from "../src/router.js";
 import { startScaService, type ScaServiceHandle } from "../src/server.js";
 
@@ -75,6 +77,46 @@ function capabilityFrame(token = TOKEN): Record<string, unknown> {
       requested_at: requestedAt.toISOString(),
       deadline_at: deadlineAt.toISOString(),
       timeout_ms: 1_000,
+    },
+  };
+}
+
+function availableAdapter(): ScaOperationAdapter {
+  return {
+    async capability(request) {
+      return {
+        schema_id: "penny.sca-broker-capability-result.v1",
+        schema_version: 1,
+        request_id: request.request_id,
+        tenant_id: request.tenant_id,
+        project_id: request.project_id,
+        run_id: request.run_id,
+        tool_name: request.tool_name,
+        operation: request.operation,
+        status: "available",
+        limits: {
+          max_request_bytes: SCA_BROKER_CONTRACT_LIMITS_V1.max_request_bytes,
+          max_input_refs: SCA_BROKER_CONTRACT_LIMITS_V1.max_input_refs,
+          max_output_refs: SCA_BROKER_CONTRACT_LIMITS_V1.max_output_refs,
+          max_selectors: SCA_BROKER_CONTRACT_LIMITS_V1.max_selectors,
+          max_parameters: SCA_BROKER_CONTRACT_LIMITS_V1.max_parameters,
+          max_timeout_ms: SCA_BROKER_CONTRACT_LIMITS_V1.max_timeout_ms,
+          max_output_bytes: SCA_BROKER_CONTRACT_LIMITS_V1.max_output_bytes,
+          max_result_items: SCA_BROKER_CONTRACT_LIMITS_V1.max_result_items,
+        },
+        error: null,
+        observed_at: request.requested_at,
+      };
+    },
+    async run() {
+      return {
+        terminal_status: "failed",
+        partial: false,
+        truncated: false,
+        output_refs: [],
+        result_item_count: 0,
+        failure: { code: "failed", message: "unused startup fixture" },
+      };
     },
   };
 }
@@ -186,6 +228,33 @@ describe("SCA service startup and Unix-socket framing", () => {
     await service.shutdown();
     expect(service.isListening()).toBe(false);
     await expect(lstat(socketPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("routes an injected trusted adapter through the real socket server", async () => {
+    const { socketPath } = await temporarySocket();
+    const adapter = availableAdapter();
+    const adapters: ScaAdapterRegistry = {
+      source_query: adapter,
+      graph_query: null,
+      application_test: null,
+    };
+    const service = await startScaService(
+      {
+        socketPath,
+        authenticationToken: TOKEN,
+        requestTimeoutMs: 500,
+        shutdownTimeoutMs: 100,
+      },
+      { adapters }
+    );
+    services.add(service);
+
+    const response = await request(socketPath, `${JSON.stringify(capabilityFrame())}\n`);
+    expect(response).toMatchObject({
+      ok: true,
+      action: "capability",
+      result: { status: "available", error: null },
+    });
   });
 
   it("refuses malformed JSON and incorrect authentication at the socket boundary", async () => {
@@ -351,12 +420,14 @@ describe("SCA service startup and Unix-socket framing", () => {
       })
     ).toThrow(/unsupported SCA service config key: host/);
 
-    await expect(
-      startScaService({
-        socketPath: path.join(tmpdir(), `penny-sca-unsafe-${process.pid}.sock`),
-        authenticationToken: TOKEN,
-      })
-    ).rejects.toThrow(/owned by the service user|mode 0700/);
+    const unsafe = await temporarySocket();
+    await chmod(unsafe.root, 0o755);
+    expect((await lstat(unsafe.root)).uid).toBe(process.geteuid?.());
+    expect((await lstat(unsafe.root)).mode & 0o777).toBe(0o755);
+    // Track an unexpected success too, so a failed assertion cannot leak a listener.
+    await expect(trackedService(unsafe.socketPath)).rejects.toThrow(/mode 0700/);
+    expect((await lstat(unsafe.root)).mode & 0o777).toBe(0o755);
+    await expect(lstat(unsafe.socketPath)).rejects.toMatchObject({ code: "ENOENT" });
 
     await writeFile(socketPath, "do not replace", { mode: 0o600 });
     await expect(startScaService({ socketPath, authenticationToken: TOKEN })).rejects.toThrow(

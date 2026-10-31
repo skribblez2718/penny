@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import enhance from "../../index.js";
-import {
-  createTestExtensionApi,
-  isRecord,
-  requireFunction,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord, requireFunction } from "../../../../lib/tests/test-narrowers.js";
 
 type InputHook = (
   event: { text: string; source: string; streamingBehavior?: "steer" | "followUp" },

@@ -18,8 +18,9 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { enforceNativeAutoCompaction } from "../compaction-policy.mjs";
 import { registerTool } from "../pi-tool-registration.js";
 import { isRecord } from "./test-narrowers.js";
 
@@ -53,6 +54,7 @@ describe("Pi tool registration runtime failure bridge", () => {
   const sandboxes: string[] = [];
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     for (const sandbox of sandboxes.splice(0)) {
       rmSync(sandbox, { recursive: true, force: true });
     }
@@ -64,7 +66,13 @@ describe("Pi tool registration runtime failure bridge", () => {
     const agentDir = path.join(sandbox, "agent");
     mkdirSync(agentDir, { recursive: true });
 
-    const faux = fauxProvider({ tokensPerSecond: 0 });
+    vi.stubGlobal("fetch", () => {
+      throw new Error("network forbidden in tool runtime fixture");
+    });
+    const faux = fauxProvider({
+      tokensPerSecond: 0,
+      models: [{ id: "compact", contextWindow: 8000, maxTokens: 1000 }],
+    });
     const modelRuntime = await ModelRuntime.create({
       credentials: new InMemoryCredentialStore(),
       modelsStore: new InMemoryModelsStore(),
@@ -74,9 +82,30 @@ describe("Pi tool registration runtime failure bridge", () => {
     });
     modelRuntime.registerNativeProvider(faux.provider);
 
+    const settingsManager = enforceNativeAutoCompaction(
+      SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 500, keepRecentTokens: 1 },
+        retry: { enabled: false },
+        cacheWarming: "off",
+      })
+    );
+    const sessionManager = SessionManager.create(sandbox, path.join(sandbox, "sessions"));
+    sessionManager.appendMessage({
+      role: "user",
+      content: "prior tool contract work ".repeat(3000),
+      timestamp: Date.now(),
+    });
+    const prior = fauxAssistantMessage("prior tool contract result");
+    sessionManager.appendMessage({
+      ...prior,
+      usage: { ...prior.usage, input: 10000, totalTokens: 10004 },
+    });
+    sessionManager.appendMessage({ role: "user", content: "recent work", timestamp: Date.now() });
     const resourceLoader = new DefaultResourceLoader({
       cwd: sandbox,
       agentDir,
+      settingsManager,
+      noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
       noThemes: true,
@@ -126,16 +155,16 @@ describe("Pi tool registration runtime failure bridge", () => {
       modelRuntime,
       model: faux.getModel(),
       resourceLoader,
-      sessionManager: SessionManager.inMemory(sandbox),
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: false },
-      }),
+      sessionManager,
+      settingsManager,
       tools: ["runtime_contract"],
     });
 
+    expect(session.autoCompactionEnabled).toBe(true);
+    const reasons: string[] = [];
     const outcomes: ObservedToolOutcome[] = [];
     const unsubscribe = session.subscribe((event) => {
+      if (event.type === "compaction_start") reasons.push(event.reason);
       const outcome = observeToolOutcome(event);
       if (outcome !== undefined) outcomes.push(outcome);
     });
@@ -143,6 +172,7 @@ describe("Pi tool registration runtime failure bridge", () => {
     try {
       for (const outcome of ["success", "prose_only", "explicit_failure", "throw"] as const) {
         faux.setResponses([
+          ...(outcome === "success" ? [fauxAssistantMessage("Native tool contract summary")] : []),
           fauxAssistantMessage(
             fauxToolCall("runtime_contract", { outcome }, { id: `tool-${outcome}` }),
             { stopReason: "toolUse" }
@@ -150,6 +180,7 @@ describe("Pi tool registration runtime failure bridge", () => {
           fauxAssistantMessage(`continued after ${outcome}`),
         ]);
         await session.prompt(`run ${outcome}`);
+        expect(session.getLastAssistantText()).toBe(`continued after ${outcome}`);
       }
     } finally {
       unsubscribe();
@@ -171,6 +202,15 @@ describe("Pi tool registration runtime failure bridge", () => {
       content: [{ type: "text", text: "ordinary thrown diagnostic" }],
       details: {},
     });
-    expect(faux.state.callCount).toBe(8);
+    expect(reasons).toEqual(["threshold"]);
+    const sessionFile = sessionManager.getSessionFile();
+    if (!sessionFile) throw new Error("missing durable tool runtime session");
+    const summaries = SessionManager.open(sessionFile)
+      .getEntries()
+      .filter((entry) => entry.type === "compaction");
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ summary: "Native tool contract summary" });
+    expect(summaries[0]?.fromHook).not.toBe(true);
+    expect(faux.state.callCount).toBe(9);
   });
 });

@@ -25,17 +25,17 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { Checkpointer, canonicalJson } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import type { GateState } from "../src/kb/gate.js";
-import type { KbIngestPlaneV1 } from "../src/kb/ingest-plane.js";
-import { evaluateCompletionGate } from "../src/playbooks/playbook.js";
+import { Checkpointer, canonicalJson } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import type { GateState } from "../dist/kb/gate.js";
+import type { KbIngestPlaneV1 } from "../dist/kb/ingest-plane.js";
+import { evaluateCompletionGate } from "../dist/playbooks/playbook.js";
 import {
   KNOWLEDGE_BASE_SKILL_CONTRACT,
   KnowledgeBasePlaybook,
   validateKnowledgeBasePhaseDetails,
-} from "../src/playbooks/knowledge-base.js";
-import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
+} from "../dist/playbooks/knowledge-base.js";
+import type { Confidence, Directive, JsonValue } from "../dist/contracts.js";
 
 const PROJECT_ROOT = "/tmp/penny-kb-durable";
 const TEST_ROOT_RESOLVER = (projectRoot: string, profileId: string): string =>

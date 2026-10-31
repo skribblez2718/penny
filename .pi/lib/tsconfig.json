@@ -1,6 +1,8 @@
 {
   "compilerOptions": {
     "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
@@ -13,6 +15,6 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["**/*.ts"],
+  "include": ["**/*.ts", "**/*.mts", "**/*.mjs"],
   "exclude": ["node_modules"]
 }

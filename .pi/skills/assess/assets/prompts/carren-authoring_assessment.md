@@ -6,7 +6,7 @@ Author one complete subjective assessment judgment from the exact closed request
 
 - `artifact_read` is mandatory for every needed exact workflow predecessor in `input_artifacts`; repeat through `next_range` until `truncated` is false.
 - Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not enlarge the closed supplied-evidence boundary or perform external verification or mutation.
-- Read the exact request and latest Annie analysis. Prior draft/product/Vera/host seal feedback may be supplied only as repair context.
+- Read the exact request and latest Annie analysis. Prior draft/product/Vera/a current-epoch host seal diagnostic may be supplied only as repair context.
 - Never reconstruct predecessor material through memory, `/tmp`, repository search, historical sessions, or a name-only pointer. If request or Annie analysis is absent, return `missing_input:assessment-request-or-analysis`.
 - The owner captures and re-reads complete bytes. Do not claim persistence.
 
@@ -32,3 +32,5 @@ SUMMARY:{"confidence":"PROBABLE","complete":true}
 ## Reader-facing writing
 
 Apply the supplied canonical writing guidance to every human-readable field. Make the product useful to its stated reader and purpose without inventing voice, evidence, experience, or certainty. Preserve this phase's exact schema, protected values, citations, and machine-readable contract.
+
+If a seal diagnostic is supplied, read its exact ref and correct the rejected draft. A diagnostic from before the latest successfully sealed product is not current feedback; reviewer findings still need independent repair.

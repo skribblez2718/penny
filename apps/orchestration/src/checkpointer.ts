@@ -1,3 +1,4 @@
+import { assertSupportedSqliteVersion } from "./state/sqlite-runtime.js";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
@@ -5,6 +6,7 @@ import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { Type, type Static } from "typebox";
 
 import { canonicalJson, sha256 } from "./canonical-json.js";
+import { projectChildGate } from "./child-workflows/gates.js";
 import {
   childWorkflowCallImmutableJcs,
   decodeStoredChildWorkflowCallRow,
@@ -17,6 +19,18 @@ import type {
   ChildWorkflowCallRecord,
   ChildWorkflowLifecycleV1,
 } from "./child-workflows/contracts.js";
+import {
+  decodeStoredHostOperationCallRow,
+  encodeHostOperationCallRecord,
+  hostOperationCallImmutableJcs,
+  isLegalHostOperationCallTransition,
+  verifyHostOperationArtifactCustody,
+  type StoredHostOperationCallRowV1,
+} from "./host-operations/storage.js";
+import type {
+  HostOperationCallRecordV1,
+  HostOperationLifecycleV1,
+} from "./host-operations/contracts.js";
 import { RunContext } from "./context.js";
 import {
   CompletionAdmissionEnvelopeSchema,
@@ -29,6 +43,7 @@ import {
   validateContract,
 } from "./contracts.js";
 import type {
+  ArtifactRef,
   CompletionAdmissionEnvelope,
   CompletionEvidenceRef,
   CompletionRefusalEvidence,
@@ -40,6 +55,7 @@ import type {
   StateVisitRef,
 } from "./contracts.js";
 import { CheckpointIdentityError, orchestrationDurableStateCodec } from "./durable-state.js";
+import type { GenericGateResponseStorageModeV1 } from "./playbooks/playbook.js";
 
 export { CheckpointIdentityError } from "./durable-state.js";
 import {
@@ -92,15 +108,12 @@ import type {
 import type { PromotionControlApprovalBinding } from "./kb/promotion.js";
 import { assertOwnerDirectory, assertOwnerFile, pathExistsNoFollow } from "./state/custody.js";
 import { PENNY_STATE_LAYOUT_VERSION, PROJECT_ID_PATTERN } from "./state/paths.js";
-import {
-  createReadOnlySqliteSnapshot,
-  type ReadOnlySqliteSnapshot,
-} from "./state/sqlite-snapshot.js";
+import { assertSqliteHealthy, openReadOnlySqliteDatabase } from "./state/sqlite-health.js";
 
 export { canonicalJson, sha256 } from "./canonical-json.js";
 
-export const ORCHESTRATION_DATABASE_SCHEMA_VERSION = 12 as const;
-export const ORCHESTRATION_UPGRADE_SOURCE_VERSIONS = [10, 11] as const;
+export const ORCHESTRATION_DATABASE_SCHEMA_VERSION = 13 as const;
+export const ORCHESTRATION_UPGRADE_SOURCE_VERSIONS = [10, 11, 12] as const;
 
 export class OrchestrationSchemaCompatibilityError extends Error {
   readonly code = "ORCHESTRATION_SCHEMA_INCOMPATIBLE";
@@ -136,6 +149,19 @@ export interface OrchestrationSchemaUpgradeResult {
 }
 
 const REQUIRED_ORCHESTRATION_COLUMNS = {
+  host_operation_calls: [
+    "operation_record_id",
+    "project_id",
+    "run_id",
+    "state_id",
+    "attempt",
+    "operation_id",
+    "lifecycle",
+    "record_jcs",
+    "record_sha256",
+    "created_at",
+    "updated_at",
+  ],
   child_workflow_calls: [
     "call_id",
     "schema_version",
@@ -228,6 +254,7 @@ interface GateRow extends Record<string, SQLOutputValue> {
   gate_id: string;
   challenge: string;
   status: string;
+  response_digest: string | null;
   response_json: string | null;
 }
 
@@ -334,6 +361,8 @@ export interface TransitionChildWorkflowCallInput {
   readonly call_id: string;
   readonly from: ChildWorkflowLifecycleV1;
   readonly next: ChildWorkflowCallRecord;
+  /** Only the exact projected child gate may replace the parent suspension. */
+  readonly parentContext?: RunContext;
   /** Opaque runtime-verified artifact-store custody capability required before mutation. */
   readonly custody: unknown;
 }
@@ -347,9 +376,47 @@ export interface ConsumeChildWorkflowCallInput {
   readonly call_id: string;
   readonly next: ChildWorkflowCallRecord;
   readonly parentContext: RunContext;
+  readonly expected_parent_snapshot_sha256?: string;
   readonly eventType: string;
   readonly payload: Record<string, JsonValue>;
   /** Opaque runtime-verified artifact-store custody capability required before mutation. */
+  readonly custody: unknown;
+}
+
+export class HostOperationCallConflictError extends Error {
+  readonly code = "host_operation_call_conflict";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "HostOperationCallConflictError";
+  }
+}
+
+export interface ReserveHostOperationCallInput {
+  readonly record: HostOperationCallRecordV1;
+  readonly custody: unknown;
+}
+
+export type ReserveHostOperationCallOutcome =
+  | { readonly kind: "created"; readonly record: HostOperationCallRecordV1 }
+  | { readonly kind: "adopted"; readonly record: HostOperationCallRecordV1 };
+
+export interface TransitionHostOperationCallInput {
+  readonly operation_record_id: string;
+  readonly from: HostOperationLifecycleV1;
+  readonly expected_record_sha256: string;
+  readonly next: HostOperationCallRecordV1;
+  readonly custody: unknown;
+}
+
+export interface ConsumeHostOperationCallInput {
+  readonly operation_record_id: string;
+  readonly expected_record_sha256: string;
+  readonly next: HostOperationCallRecordV1;
+  readonly parentContext: RunContext;
+  readonly expected_parent_snapshot_sha256?: string;
+  readonly eventType: string;
+  readonly payload: Record<string, JsonValue>;
   readonly custody: unknown;
 }
 
@@ -679,6 +746,7 @@ function isSqliteRuntimeModule(value: unknown): value is SqliteRuntimeModule {
 }
 
 function sqliteModule(): SqliteRuntimeModule {
+  assertSupportedSqliteVersion(process.versions.sqlite);
   const module: unknown = process.getBuiltinModule("node:" + "sqlite");
   if (!isSqliteRuntimeModule(module)) {
     throw new Error("Node.js runtime does not provide node:sqlite");
@@ -738,6 +806,22 @@ function childWorkflowCallRow(row: SqliteRow): StoredChildWorkflowCallRowV1 {
   };
 }
 
+function hostOperationCallRow(row: SqliteRow): StoredHostOperationCallRowV1 {
+  return {
+    operation_record_id: row["operation_record_id"],
+    project_id: row["project_id"],
+    run_id: row["run_id"],
+    state_id: row["state_id"],
+    attempt: row["attempt"],
+    operation_id: row["operation_id"],
+    lifecycle: row["lifecycle"],
+    record_jcs: row["record_jcs"],
+    record_sha256: row["record_sha256"],
+    created_at: row["created_at"],
+    updated_at: row["updated_at"],
+  };
+}
+
 function receiptRow(row: SqliteRow): ReceiptRow {
   const label = "stored execution receipt";
   return {
@@ -752,6 +836,7 @@ function gateRow(row: SqliteRow): GateRow {
     gate_id: sqliteText(row, "gate_id", label),
     challenge: sqliteText(row, "challenge", label),
     status: sqliteText(row, "status", label),
+    response_digest: sqliteNullableText(row, "response_digest", label),
     response_json: sqliteNullableText(row, "response_json", label),
   };
 }
@@ -1149,8 +1234,6 @@ export class Checkpointer implements Disposable {
   readonly dbPath: string;
   private readonly db: DatabaseSync;
   private readonly maxRetainedRuns: number;
-  /** Private image used only by create-never status validation. */
-  private readonly validationSnapshot: ReadOnlySqliteSnapshot | undefined;
   private static expectedSchemaFingerprint: string | undefined;
   private kbRuntimeProjectRoot?: string;
 
@@ -1188,7 +1271,7 @@ export class Checkpointer implements Disposable {
     using _checkpointer = new Checkpointer(dbPath, undefined, options, "verify");
   }
 
-  /** Inspect one bound retained database on a private no-atime image without requiring current schema. */
+  /** Inspect one bound retained database using a SQLite-managed read transaction without requiring current schema. */
   static inspectExistingSchema(dbPath: string, projectId: string): OrchestrationSchemaInspection {
     using checkpointer = new Checkpointer(dbPath, undefined, { projectId }, "upgrade-inspect");
     const actualVersion = checkpointer.userVersion();
@@ -1211,7 +1294,7 @@ export class Checkpointer implements Disposable {
     dbPath: string,
     projectId: string,
     beforeMutation: (sourceVersion: number) => Promise<void>,
-    afterMigrationStep?: (targetVersion: 11 | 12) => Promise<void>
+    afterMigrationStep?: (targetVersion: 11 | 12 | 13) => Promise<void>
   ): Promise<OrchestrationSchemaUpgradeResult> {
     const inspection = Checkpointer.inspectExistingSchema(dbPath, projectId);
     if (!inspection.upgradeRequired) {
@@ -1256,16 +1339,11 @@ export class Checkpointer implements Disposable {
         throw new Error("opening an existing orchestration database requires its Penny project ID");
       }
     }
-    const validationSnapshot =
-      mode === "verify" || mode === "upgrade-inspect"
-        ? createReadOnlySqliteSnapshot(dbPath, "Penny orchestration database")
-        : undefined;
-    this.validationSnapshot = validationSnapshot;
     const { DatabaseSync } = sqliteModule();
-    this.db = new DatabaseSync(
-      validationSnapshot?.databasePath ?? dbPath,
-      mode === "verify" || mode === "upgrade-inspect" ? { readOnly: true } : {}
-    );
+    this.db =
+      mode === "verify" || mode === "upgrade-inspect"
+        ? openReadOnlySqliteDatabase(dbPath, "Penny orchestration database", DatabaseSync)
+        : new DatabaseSync(dbPath);
     if (mode !== "verify" && mode !== "upgrade-inspect") {
       // Connection-local settings do not alter retained database bytes. WAL is deliberately delayed
       // until migrate() has accepted the source version/fingerprint, so rejected state is untouched.
@@ -1312,7 +1390,6 @@ export class Checkpointer implements Disposable {
       }
     } catch (error) {
       this.db.close();
-      validationSnapshot?.close();
       throw error;
     }
     if (
@@ -1361,7 +1438,10 @@ export class Checkpointer implements Disposable {
     }
     if (
       databaseExists &&
-      (existingVersion === 9 || existingVersion === 10 || existingVersion === 11)
+      (existingVersion === 9 ||
+        existingVersion === 10 ||
+        existingVersion === 11 ||
+        existingVersion === 12)
     ) {
       this.assertMigrationSourceFingerprint(
         existingVersion,
@@ -1450,6 +1530,9 @@ export class Checkpointer implements Disposable {
     if (this.userVersion() < 12) {
       this.migrateV12();
     }
+    if (this.userVersion() < 13) {
+      this.migrateV13();
+    }
   }
 
   private assertMigrationSourceFingerprint(version: number, expected: string): void {
@@ -1461,8 +1544,13 @@ export class Checkpointer implements Disposable {
     }
   }
 
-  private expectedLegacySchemaFingerprint(version: 9 | 10 | 11): string {
+  private expectedLegacySchemaFingerprint(version: 9 | 10 | 11 | 12): string {
     using expected = Checkpointer.provision(":memory:");
+    expected.db.exec("DROP TABLE host_operation_calls;");
+    if (version === 12) {
+      expected.db.exec("PRAGMA user_version=12;");
+      return expected.schemaFingerprint();
+    }
     if (version === 11) {
       expected.db.exec(`
         DROP TABLE child_workflow_calls;
@@ -1955,13 +2043,45 @@ export class Checkpointer implements Disposable {
     else operation();
   }
 
+  /** v13 — generic asynchronous host-operation journal and exact parent consumption. */
+  private migrateV13(transactional = true): void {
+    const operation = () => {
+      this.db.exec(`
+        CREATE TABLE host_operation_calls (
+          operation_record_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+          state_id TEXT NOT NULL,
+          attempt INTEGER NOT NULL CHECK(attempt >= 1),
+          operation_id TEXT NOT NULL,
+          lifecycle TEXT NOT NULL CHECK(lifecycle IN (
+            'prepared','lease_acquired','submitting','submitted','fetched','persisting',
+            'persisted','verified','terminal','settled','consumed'
+          )),
+          record_jcs TEXT NOT NULL,
+          record_sha256 TEXT NOT NULL CHECK(length(record_sha256) = 64),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(run_id, state_id, attempt, operation_id)
+        );
+        CREATE INDEX idx_host_operation_calls_run_lifecycle
+          ON host_operation_calls(run_id, lifecycle, created_at);
+        CREATE UNIQUE INDEX one_unconsumed_host_operation_per_run
+          ON host_operation_calls(run_id) WHERE lifecycle <> 'consumed';
+        PRAGMA user_version=13;
+      `);
+    };
+    if (transactional) this.transaction(operation);
+    else operation();
+  }
+
   private assertUpgradeableSchema(projectId: string | undefined): void {
     const version = this.userVersion();
     if (version === ORCHESTRATION_DATABASE_SCHEMA_VERSION) {
       this.assertExistingSchema(projectId);
       return;
     }
-    if (version !== 10 && version !== 11) {
+    if (version !== 10 && version !== 11 && version !== 12) {
       throw new OrchestrationSchemaCompatibilityError(version);
     }
     const journal = this.db.prepare("PRAGMA journal_mode").get();
@@ -1971,21 +2091,13 @@ export class Checkpointer implements Disposable {
     }
     this.assertMigrationSourceFingerprint(version, this.expectedLegacySchemaFingerprint(version));
     this.assertProjectBinding(projectId);
-    const integrity = this.db.prepare("PRAGMA integrity_check").get();
-    if (integrity === undefined)
-      malformedSqliteColumn("orchestration integrity", "integrity_check");
-    if (sqliteText(integrity, "integrity_check", "orchestration integrity") !== "ok") {
-      throw new Error("orchestration database integrity check failed");
-    }
-    if (this.db.prepare("PRAGMA foreign_key_check").all().length !== 0) {
-      throw new Error("orchestration database foreign-key check failed");
-    }
+    assertSqliteHealthy(this.db, "orchestration");
   }
 
   private async upgradeExistingTransaction(
     projectId: string,
     beforeMutation: (sourceVersion: number) => Promise<void>,
-    afterMigrationStep?: (targetVersion: 11 | 12) => Promise<void>
+    afterMigrationStep?: (targetVersion: 11 | 12 | 13) => Promise<void>
   ): Promise<OrchestrationSchemaUpgradeResult> {
     this.db.exec("BEGIN EXCLUSIVE");
     try {
@@ -2007,6 +2119,10 @@ export class Checkpointer implements Disposable {
       if (sourceVersion < 12) {
         this.migrateV12(false);
         await afterMigrationStep?.(12);
+      }
+      if (sourceVersion < 13) {
+        this.migrateV13(false);
+        await afterMigrationStep?.(13);
       }
       this.assertExistingSchema(projectId);
       this.db.exec("COMMIT");
@@ -2067,22 +2183,20 @@ export class Checkpointer implements Disposable {
         "orchestration database schema does not match the current canonical definition"
       );
     }
-    const integrity = this.db.prepare("PRAGMA integrity_check").get();
-    if (integrity === undefined)
-      malformedSqliteColumn("orchestration integrity", "integrity_check");
-    if (sqliteText(integrity, "integrity_check", "orchestration integrity") !== "ok") {
-      throw new Error("orchestration database integrity check failed");
-    }
-    const foreignKeyViolations = this.db.prepare("PRAGMA foreign_key_check").all();
-    if (foreignKeyViolations.length !== 0) {
-      throw new Error("orchestration database foreign-key check failed");
-    }
+    assertSqliteHealthy(this.db, "orchestration");
     this.assertProjectBinding(projectId);
     const callIds = this.db
       .prepare("SELECT call_id FROM child_workflow_calls ORDER BY call_id")
       .all()
       .map((row) => sqliteText(row, "call_id", "stored child-workflow call index"));
     for (const callId of callIds) this.childWorkflowCall(callId);
+    const operationRecordIds = this.db
+      .prepare("SELECT operation_record_id FROM host_operation_calls ORDER BY operation_record_id")
+      .all()
+      .map((row) => sqliteText(row, "operation_record_id", "stored host-operation call index"));
+    for (const operationRecordId of operationRecordIds) {
+      this.hostOperationCall(operationRecordId);
+    }
   }
 
   private schemaFingerprint(): string {
@@ -2185,7 +2299,45 @@ export class Checkpointer implements Disposable {
 
   stateVisits(runId: string): StateVisitRef[] {
     const refs: StateVisitRef[] = [];
-    for (const event of this.events(runId)) {
+    // Progress/liveness events carry no visit evidence. Filter them in SQLite rather than
+    // hydrating the entire event history. Invalid JSON and non-object payloads still reach
+    // the ordinary validator, as do invalid SQLite column types. A malformed relevant
+    // field (including null) must never vanish. SQLite accepts overflowed JSON numbers
+    // that JavaScript decodes as Infinity; route those through the canonical validator too.
+    const rows = this.db
+      .prepare(
+        `SELECT sequence, event_type, payload_json, created_at FROM events WHERE run_id = ? AND (
+           typeof(sequence) <> 'integer' OR sequence NOT BETWEEN ? AND ? OR
+           typeof(event_type) <> 'text' OR typeof(created_at) <> 'text' OR
+           typeof(payload_json) <> 'text' OR
+           CASE WHEN json_valid(payload_json) THEN
+             json_type(payload_json) <> 'object' OR
+             json_type(payload_json, '$.state_visits_v1') IS NOT NULL OR
+             EXISTS (
+               SELECT 1 FROM json_tree(payload_json)
+               WHERE type IN ('integer', 'real') AND atom NOT BETWEEN ? AND ?
+             )
+           ELSE 1 END
+         ) ORDER BY sequence`
+      )
+      .all(
+        runId,
+        -Number.MAX_SAFE_INTEGER,
+        Number.MAX_SAFE_INTEGER,
+        -Number.MAX_VALUE,
+        Number.MAX_VALUE
+      );
+    for (const row of rows) {
+      const event = {
+        sequence: sqliteInteger(row, "sequence", "stored checkpoint event"),
+        eventType: sqliteText(row, "event_type", "stored checkpoint event"),
+        payload: validateContract(
+          CheckpointEventPayloadSchema,
+          JSON.parse(sqliteText(row, "payload_json", "stored checkpoint event")),
+          "stored checkpoint event payload"
+        ),
+        createdAt: sqliteText(row, "created_at", "stored checkpoint event"),
+      };
       const raw = event.payload.state_visits_v1;
       if (raw === undefined) continue;
       if (!Array.isArray(raw) || raw.length > 32) {
@@ -2373,11 +2525,16 @@ export class Checkpointer implements Disposable {
       );
       const highestVersion = Math.max(
         ...context.selectedArtifacts
-          .filter((candidate) => candidate.operation_id === artifact?.operation_id)
+          .filter(
+            (candidate) =>
+              candidate.run_id === context.identity.run_id &&
+              candidate.operation_id === artifact?.operation_id
+          )
           .map((candidate) => candidate.version)
       );
       if (
         artifact === undefined ||
+        artifact.run_id !== context.identity.run_id ||
         selected === undefined ||
         canonicalJson(artifact) !== canonicalJson(selected) ||
         artifact.content_digest !== envelope.latest_product.sha256 ||
@@ -2457,6 +2614,15 @@ export class Checkpointer implements Disposable {
     }
     this.assertChildWorkflowCallLinkage(record);
     return record;
+  }
+
+  childWorkflowCallForChild(childRunId: string): ChildWorkflowCallRecord | undefined {
+    const row = this.db
+      .prepare("SELECT call_id FROM child_workflow_calls WHERE child_run_id = ?")
+      .get(childRunId);
+    return row === undefined
+      ? undefined
+      : this.childWorkflowCall(sqliteText(row, "call_id", "child call lookup"));
   }
 
   childWorkflowCallForParent(
@@ -2541,7 +2707,8 @@ export class Checkpointer implements Disposable {
         const parent = this.contextForChildWorkflowCall(existing.parent_identity.run_id);
         if (
           existing.lifecycle !== "consumed" &&
-          canonicalJson(parent.pendingDirective) !== canonicalJson(existing.directive)
+          canonicalJson(parent.pendingDirective) !== canonicalJson(existing.directive) &&
+          !(existing.lifecycle === "waiting_user" && this.exactProjectedChildGate(existing, parent))
         ) {
           throw new CheckpointIdentityError(
             "adopted child-workflow call is not the parent's exact pending directive"
@@ -2784,6 +2951,44 @@ export class Checkpointer implements Disposable {
           `illegal child-workflow lifecycle transition '${current.lifecycle}' -> '${encoded.record.lifecycle}'`
         );
       }
+      if (next.lifecycle === "waiting_user" && input.parentContext === undefined)
+        throw new ChildWorkflowCallConflictError("child waits require atomic parent projection");
+      if (input.parentContext !== undefined) {
+        const parent = this.loadRun(current.parent_identity);
+        const childGate = this.loadRun(current.child_identity).pendingDirective;
+        if (
+          current.lifecycle !== "running" ||
+          next.lifecycle !== "waiting_user" ||
+          parent.terminalDirective !== null ||
+          childGate?.action !== "await_user" ||
+          canonicalJson(parent.pendingDirective) !== canonicalJson(current.directive) ||
+          canonicalJson(input.parentContext.pendingDirective) !==
+            canonicalJson(projectChildGate(current, childGate)) ||
+          input.parentContext.status !== "awaiting_user" ||
+          canonicalJson(input.parentContext.snapshot()) !==
+            canonicalJson({
+              ...parent.snapshot(),
+              status: "awaiting_user",
+              pending_directive: projectChildGate(current, childGate),
+            })
+        )
+          throw new ChildWorkflowCallConflictError(
+            "child gate projection lost its exact parent/child boundary"
+          );
+        this.assertIdentity(current.parent_identity, input.parentContext.identity);
+        this.updateRun(input.parentContext);
+        this.persistPendingGate(input.parentContext);
+        this.insertEvent(
+          current.parent_identity.run_id,
+          "child_workflow_waiting",
+          {
+            call_id: current.call_id,
+            child_run_id: current.child_identity.run_id,
+            gate_sha256: sha256(canonicalJson(childGate)),
+          },
+          now()
+        );
+      }
       const currentEncoded = encodeChildWorkflowCallRecord(current);
       const updated = this.db
         .prepare(
@@ -2805,6 +3010,17 @@ export class Checkpointer implements Disposable {
           "child-workflow lifecycle compare-and-set lost its durable owner"
         );
       }
+      this.insertEvent(
+        current.parent_identity.run_id,
+        "child_workflow_transition",
+        {
+          call_id: current.call_id,
+          from: current.lifecycle,
+          to: next.lifecycle,
+          terminal_sha256: next.terminal_sha256,
+        },
+        now()
+      );
       const stored = requiredCheckpointValue(
         this.childWorkflowCall(input.call_id),
         "transitioned child-workflow call"
@@ -2896,6 +3112,21 @@ export class Checkpointer implements Disposable {
         );
       }
       this.assertChildWorkflowCallLinkage(current);
+      const durableParent = this.loadRun(current.parent_identity);
+      if (
+        input.expected_parent_snapshot_sha256 !== undefined &&
+        sha256(canonicalJson(durableParent.snapshot())) !== input.expected_parent_snapshot_sha256
+      )
+        throw new ChildWorkflowCallConflictError(
+          "child consumption lost exact pending parent selections"
+        );
+      if (
+        durableParent.terminalDirective !== null ||
+        canonicalJson(durableParent.pendingDirective) !== canonicalJson(current.directive)
+      )
+        throw new ChildWorkflowCallConflictError(
+          "child consumption lost its pending parent or cancellation fence"
+        );
       if (
         childWorkflowCallImmutableJcs(current) !== childWorkflowCallImmutableJcs(next) ||
         current.terminal_action !== next.terminal_action ||
@@ -2953,6 +3184,432 @@ export class Checkpointer implements Disposable {
         now()
       );
       return requiredCheckpointValue(this.childWorkflowCall(input.call_id), "consumed child call");
+    });
+    input.parentContext.markCheckpointEvidencePersisted();
+    this.observe(input.parentContext, input.eventType, persistedPayload);
+    return consumed;
+  }
+
+  hostOperationCall(operationRecordId: string): HostOperationCallRecordV1 | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM host_operation_calls WHERE operation_record_id = ?")
+      .get(operationRecordId);
+    if (row === undefined) return undefined;
+    let record: HostOperationCallRecordV1;
+    try {
+      record = decodeStoredHostOperationCallRow(hostOperationCallRow(row));
+    } catch (error) {
+      throw new CheckpointIdentityError(
+        `stored host-operation call '${operationRecordId}' is malformed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+    const parent = this.contextForChildWorkflowCall(record.identity.run_id);
+    this.assertIdentity(record.identity, parent.identity);
+    this.assertRegistrationDigest(
+      parent,
+      record.registration_sha256,
+      "stored host-operation registration"
+    );
+    if (this.projectIdForChildWorkflowCall() !== record.project_id) {
+      throw new CheckpointIdentityError(
+        "stored host-operation project does not match the control-store project"
+      );
+    }
+    return record;
+  }
+
+  hostOperationCallForDirective(
+    runId: string,
+    stateId: string,
+    attempt: number,
+    operationId: string
+  ): HostOperationCallRecordV1 | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT operation_record_id FROM host_operation_calls
+         WHERE run_id = ? AND state_id = ? AND attempt = ? AND operation_id = ?`
+      )
+      .get(runId, stateId, attempt, operationId);
+    if (row === undefined) return undefined;
+    return requiredCheckpointValue(
+      this.hostOperationCall(
+        sqliteText(row, "operation_record_id", "stored host-operation logical lookup")
+      ),
+      "indexed host-operation call"
+    );
+  }
+
+  hostOperationCallsForRun(runId: string): readonly HostOperationCallRecordV1[] {
+    const rows = this.db
+      .prepare(
+        `SELECT operation_record_id FROM host_operation_calls
+         WHERE run_id = ? ORDER BY created_at, operation_record_id`
+      )
+      .all(runId);
+    return rows.map((row) =>
+      requiredCheckpointValue(
+        this.hostOperationCall(
+          sqliteText(row, "operation_record_id", "host-operation run call index")
+        ),
+        "indexed host-operation run call"
+      )
+    );
+  }
+
+  reserveHostOperationCall(input: ReserveHostOperationCallInput): ReserveHostOperationCallOutcome {
+    let encoded: ReturnType<typeof encodeHostOperationCallRecord>;
+    try {
+      encoded = encodeHostOperationCallRecord(input.record);
+    } catch (error) {
+      throw new HostOperationCallConflictError(
+        `host-operation reservation is invalid: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+    const requested = verifyHostOperationArtifactCustody(
+      input.custody,
+      this.projectIdForChildWorkflowCall(),
+      encoded.record
+    );
+    if (
+      requested.lifecycle !== "prepared" ||
+      requested.created_at !== requested.updated_at ||
+      requested.lease !== null ||
+      requested.disposition !== null
+    ) {
+      throw new HostOperationCallConflictError(
+        "a new host-operation reservation must be an initial prepared record"
+      );
+    }
+    return this.transaction((): ReserveHostOperationCallOutcome => {
+      const existing = this.hostOperationCallForDirective(
+        requested.identity.run_id,
+        requested.state_id,
+        requested.attempt,
+        requested.operation_id
+      );
+      if (existing !== undefined) {
+        if (hostOperationCallImmutableJcs(existing) !== hostOperationCallImmutableJcs(requested)) {
+          throw new HostOperationCallConflictError(
+            "host-operation logical call was already prepared with different immutable operands"
+          );
+        }
+        const parent = this.contextForChildWorkflowCall(existing.identity.run_id);
+        if (
+          existing.lifecycle !== "consumed" &&
+          canonicalJson(parent.pendingDirective) !== canonicalJson(existing.directive)
+        ) {
+          throw new CheckpointIdentityError(
+            "adopted host-operation call is not the parent's exact pending directive"
+          );
+        }
+        return { kind: "adopted", record: existing };
+      }
+      if (this.hostOperationCall(requested.operation_record_id) !== undefined) {
+        throw new HostOperationCallConflictError(
+          "host-operation record ID is already bound to another logical call"
+        );
+      }
+      const parent = this.contextForChildWorkflowCall(requested.identity.run_id);
+      this.assertIdentity(requested.identity, parent.identity);
+      this.assertRegistrationDigest(
+        parent,
+        requested.registration_sha256,
+        "host-operation reservation registration"
+      );
+      if (parent.status !== "running" || parent.stateId !== requested.state_id) {
+        throw new HostOperationCallConflictError(
+          "host-operation parent is not running at the prepared state"
+        );
+      }
+      const effectIdentity = requested.directive.effect_identity;
+      if (
+        effectIdentity !== undefined &&
+        this.stateVisits(parent.identity.run_id).filter(
+          (visit) => visit.state_id === parent.stateId
+        ).length !== effectIdentity.visit
+      )
+        throw new HostOperationCallConflictError(
+          "host-operation effect visit differs from durable current state visit"
+        );
+      if (canonicalJson(parent.pendingDirective) !== canonicalJson(requested.directive)) {
+        throw new CheckpointIdentityError(
+          "host-operation reservation requires the exact already-checkpointed pending directive"
+        );
+      }
+      if (this.projectIdForChildWorkflowCall() !== requested.project_id) {
+        throw new HostOperationCallConflictError(
+          "host-operation project does not match the control-store project"
+        );
+      }
+      this.db
+        .prepare(
+          `INSERT INTO host_operation_calls(
+             operation_record_id, project_id, run_id, state_id, attempt, operation_id,
+             lifecycle, record_jcs, record_sha256, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          requested.operation_record_id,
+          requested.project_id,
+          requested.identity.run_id,
+          requested.state_id,
+          requested.attempt,
+          requested.operation_id,
+          requested.lifecycle,
+          encoded.record_jcs,
+          encoded.record_sha256,
+          requested.created_at,
+          requested.updated_at
+        );
+      this.insertEvent(
+        requested.identity.run_id,
+        "host_operation_prepared",
+        this.checkpointPayload(parent, {
+          operation_record_id: requested.operation_record_id,
+          operation_id: requested.operation_id,
+          operation_kind: requested.operation_kind,
+          directive_sha256: requested.directive_sha256,
+          registration_sha256: requested.registration_sha256,
+          request_sha256: requested.request_sha256,
+        }),
+        requested.created_at
+      );
+      const stored = requiredCheckpointValue(
+        this.hostOperationCall(requested.operation_record_id),
+        "prepared host-operation call"
+      );
+      if (canonicalJson(stored) !== encoded.record_jcs) {
+        throw new CheckpointIdentityError("host-operation reservation did not round-trip exactly");
+      }
+      return { kind: "created", record: stored };
+    });
+  }
+
+  transitionHostOperationCall(input: TransitionHostOperationCallInput): HostOperationCallRecordV1 {
+    let encoded: ReturnType<typeof encodeHostOperationCallRecord>;
+    try {
+      encoded = encodeHostOperationCallRecord(input.next);
+    } catch (error) {
+      throw new HostOperationCallConflictError(
+        `host-operation transition is invalid: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+    const next = verifyHostOperationArtifactCustody(
+      input.custody,
+      this.projectIdForChildWorkflowCall(),
+      encoded.record
+    );
+    encoded = encodeHostOperationCallRecord(next);
+    if (next.operation_record_id !== input.operation_record_id || next.lifecycle === "consumed") {
+      throw new HostOperationCallConflictError(
+        "host-operation transition changed its identity or attempted direct consumption"
+      );
+    }
+    return this.transaction(() => {
+      const current = requiredCheckpointValue(
+        this.hostOperationCall(input.operation_record_id),
+        "host-operation transition call"
+      );
+      const currentEncoded = encodeHostOperationCallRecord(current);
+      if (
+        current.lifecycle !== input.from ||
+        currentEncoded.record_sha256 !== input.expected_record_sha256
+      ) {
+        throw new HostOperationCallConflictError(
+          "host-operation transition compare-and-set lost its durable owner"
+        );
+      }
+      if (hostOperationCallImmutableJcs(current) !== hostOperationCallImmutableJcs(next)) {
+        throw new HostOperationCallConflictError(
+          "host-operation transition changed immutable operands"
+        );
+      }
+      if (next.created_at !== current.created_at || next.updated_at < current.updated_at) {
+        throw new HostOperationCallConflictError(
+          "host-operation transition changed or regressed durable timestamps"
+        );
+      }
+      if (!isLegalHostOperationCallTransition(current.lifecycle, next.lifecycle)) {
+        throw new HostOperationCallConflictError(
+          `illegal host-operation lifecycle transition '${current.lifecycle}' -> '${next.lifecycle}'`
+        );
+      }
+      if (
+        current.result_wrapper !== undefined &&
+        (next.result_wrapper === undefined ||
+          canonicalJson(current.result_wrapper.plan) !== canonicalJson(next.result_wrapper.plan) ||
+          (current.result_wrapper.ref !== null &&
+            canonicalJson(current.result_wrapper.ref) !== canonicalJson(next.result_wrapper.ref)))
+      )
+        throw new HostOperationCallConflictError("host-operation wrapper milestone is immutable");
+      if (current.lifecycle === "settled")
+        for (const key of [
+          "operation_result_ref",
+          "output_artifacts",
+          "platform_result_ref",
+          "host_receipt_ref",
+          "disposition",
+          "persistence_plan",
+          "lease_disposition_receipt_id",
+        ] as const) {
+          if (canonicalJson(current[key]) !== canonicalJson(next[key]))
+            throw new HostOperationCallConflictError(
+              "host-operation settled evidence is immutable"
+            );
+        }
+      if (next.lifecycle === current.lifecycle && canonicalJson(next) === canonicalJson(current)) {
+        return current;
+      }
+      const updated = this.db
+        .prepare(
+          `UPDATE host_operation_calls SET lifecycle = ?, record_jcs = ?, record_sha256 = ?, updated_at = ?
+           WHERE operation_record_id = ? AND lifecycle = ? AND record_sha256 = ?`
+        )
+        .run(
+          next.lifecycle,
+          encoded.record_jcs,
+          encoded.record_sha256,
+          next.updated_at,
+          input.operation_record_id,
+          input.from,
+          input.expected_record_sha256
+        );
+      if (numberValue(updated.changes) !== 1) {
+        throw new HostOperationCallConflictError(
+          "host-operation transition compare-and-set lost its durable owner"
+        );
+      }
+      const stored = requiredCheckpointValue(
+        this.hostOperationCall(input.operation_record_id),
+        "transitioned host-operation call"
+      );
+      if (canonicalJson(stored) !== encoded.record_jcs) {
+        throw new CheckpointIdentityError("host-operation transition did not round-trip exactly");
+      }
+      return stored;
+    });
+  }
+
+  consumeHostOperationCall(input: ConsumeHostOperationCallInput): HostOperationCallRecordV1 {
+    let encoded: ReturnType<typeof encodeHostOperationCallRecord>;
+    try {
+      encoded = encodeHostOperationCallRecord(input.next);
+    } catch (error) {
+      throw new HostOperationCallConflictError(
+        `host-operation consumption is invalid: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+    const next = verifyHostOperationArtifactCustody(
+      input.custody,
+      this.projectIdForChildWorkflowCall(),
+      encoded.record
+    );
+    encoded = encodeHostOperationCallRecord(next);
+    if (next.operation_record_id !== input.operation_record_id || next.lifecycle !== "consumed") {
+      throw new HostOperationCallConflictError(
+        "host-operation consumption must retain its ID and use lifecycle 'consumed'"
+      );
+    }
+    let persistedPayload = input.payload;
+    const consumed = this.transaction(() => {
+      const current = requiredCheckpointValue(
+        this.hostOperationCall(input.operation_record_id),
+        "host-operation consumption call"
+      );
+      const currentEncoded = encodeHostOperationCallRecord(current);
+      if (current.lifecycle === "consumed") {
+        if (canonicalJson(current) === encoded.record_jcs) return current;
+        throw new HostOperationCallConflictError(
+          "host-operation call was already consumed with different operands"
+        );
+      }
+      if (
+        current.lifecycle !== "settled" ||
+        currentEncoded.record_sha256 !== input.expected_record_sha256
+      ) {
+        throw new HostOperationCallConflictError(
+          "host-operation call is not the exact settled record ready for consumption"
+        );
+      }
+      if (
+        hostOperationCallImmutableJcs(current) !== hostOperationCallImmutableJcs(next) ||
+        canonicalJson(current.lease) !== canonicalJson(next.lease) ||
+        canonicalJson(current.disposition) !== canonicalJson(next.disposition) ||
+        canonicalJson(current.operation_result_ref) !== canonicalJson(next.operation_result_ref) ||
+        canonicalJson(current.output_artifacts) !== canonicalJson(next.output_artifacts) ||
+        canonicalJson(current.result_wrapper ?? null) !==
+          canonicalJson(next.result_wrapper ?? null) ||
+        canonicalJson(current.platform_result_ref) !== canonicalJson(next.platform_result_ref) ||
+        canonicalJson(current.host_receipt_ref) !== canonicalJson(next.host_receipt_ref) ||
+        current.lease_disposition_receipt_id !== next.lease_disposition_receipt_id ||
+        next.created_at !== current.created_at ||
+        next.updated_at < current.updated_at
+      ) {
+        throw new HostOperationCallConflictError(
+          "host-operation consumption changed settled evidence"
+        );
+      }
+      this.assertIdentity(current.identity, input.parentContext.identity);
+      const storedParent = this.contextForChildWorkflowCall(current.identity.run_id);
+      if (
+        input.expected_parent_snapshot_sha256 !== undefined &&
+        sha256(canonicalJson(storedParent.snapshot())) !== input.expected_parent_snapshot_sha256
+      )
+        throw new HostOperationCallConflictError("host consumption lost current parent selections");
+      if (
+        storedParent.status !== "running" ||
+        storedParent.stateId !== current.state_id ||
+        canonicalJson(storedParent.pendingDirective) !== canonicalJson(current.directive)
+      ) {
+        throw new HostOperationCallConflictError(
+          "host-operation parent changed before atomic consumption"
+        );
+      }
+      this.assertRegistrationDigest(
+        input.parentContext,
+        current.registration_sha256,
+        "host-operation parent consumption registration"
+      );
+      this.validatePositiveTerminalWrite(input.parentContext);
+      persistedPayload = this.checkpointPayload(input.parentContext, input.payload);
+      this.updateRun(input.parentContext);
+      this.persistPendingGate(input.parentContext);
+      const updated = this.db
+        .prepare(
+          `UPDATE host_operation_calls SET lifecycle = ?, record_jcs = ?, record_sha256 = ?, updated_at = ?
+           WHERE operation_record_id = ? AND lifecycle = 'settled' AND record_sha256 = ?`
+        )
+        .run(
+          next.lifecycle,
+          encoded.record_jcs,
+          encoded.record_sha256,
+          next.updated_at,
+          input.operation_record_id,
+          input.expected_record_sha256
+        );
+      if (numberValue(updated.changes) !== 1) {
+        throw new HostOperationCallConflictError(
+          "host-operation consumption compare-and-set lost its durable owner"
+        );
+      }
+      this.insertEvent(
+        input.parentContext.identity.run_id,
+        input.eventType,
+        persistedPayload,
+        now()
+      );
+      return requiredCheckpointValue(
+        this.hostOperationCall(input.operation_record_id),
+        "consumed host-operation call"
+      );
     });
     input.parentContext.markCheckpointEvidencePersisted();
     this.observe(input.parentContext, input.eventType, persistedPayload);
@@ -5603,6 +6260,40 @@ export class Checkpointer implements Disposable {
     });
   }
 
+  /** Append bounded body-free host-operation metadata without mutating the run snapshot. */
+  appendHostOperationEvent(
+    runId: string,
+    eventType: string,
+    payload: Record<string, JsonValue>,
+    timestamp = now()
+  ): void {
+    if (
+      !Number.isFinite(Date.parse(timestamp)) ||
+      new Date(timestamp).toISOString() !== timestamp
+    ) {
+      throw new CheckpointIdentityError("host-operation event timestamp must be canonical UTC");
+    }
+    if (!eventType.startsWith("host_operation_")) {
+      throw new CheckpointIdentityError(
+        "host-operation event type must use the host_operation_ prefix"
+      );
+    }
+    const parsed = validateContract(
+      CheckpointEventPayloadSchema,
+      payload,
+      "host-operation event payload"
+    );
+    if (Buffer.byteLength(canonicalJson(parsed), "utf8") > 16_384) {
+      throw new CheckpointIdentityError("host-operation event payload exceeds 16384 bytes");
+    }
+    this.transaction(() => {
+      if (this.selectRun(runId) === undefined) {
+        throw new CheckpointIdentityError(`unknown run_id '${runId}'`);
+      }
+      this.insertEvent(runId, eventType, parsed, timestamp);
+    });
+  }
+
   saveRun(context: RunContext, eventType: string, payload: Record<string, JsonValue>): void {
     let persistedPayload: Record<string, JsonValue> = payload;
     this.transaction(() => {
@@ -5636,48 +6327,161 @@ export class Checkpointer implements Disposable {
     this.observe(context, eventType, persistedPayload);
   }
 
+  gateResponseBinding(
+    runId: string,
+    gateId: string
+  ):
+    | {
+        readonly challenge: string;
+        readonly status: "pending" | "answered";
+        readonly response_digest: string | null;
+      }
+    | undefined {
+    const value = this.db
+      .prepare(
+        "SELECT gate_id, challenge, status, response_digest, response_json FROM gates WHERE run_id = ? AND gate_id = ?"
+      )
+      .get(runId, gateId);
+    if (value === undefined) return undefined;
+    const row = gateRow(value);
+    if (row.status !== "pending" && row.status !== "answered") {
+      throw new GateConflictError(`gate '${gateId}' has invalid status`);
+    }
+    return {
+      challenge: row.challenge,
+      status: row.status,
+      response_digest: row.response_digest,
+    };
+  }
+
   saveGateResponse(
     context: RunContext,
     gateId: string,
     challenge: string,
     response: JsonValue,
     eventType: string,
-    payload: Record<string, JsonValue>
+    payload: Record<string, JsonValue>,
+    storageMode: GenericGateResponseStorageModeV1 = "full",
+    projectedCallId?: string,
+    expectedParentSnapshotSha256?: string
   ): void {
+    if (storageMode !== "full" && storageMode !== "digest-only") {
+      throw new GateConflictError("invalid generic gate response storage mode");
+    }
+    const responseJson = canonicalJson(response);
+    const responseDigest = sha256(responseJson);
+    // Do not allow a caller of the digest-only store to smuggle response text into
+    // the event or its observability mirror via an otherwise arbitrary payload.
+    if (storageMode === "digest-only") {
+      const identity = context.identity;
+      const safePayload: Record<string, JsonValue> = {
+        schema_version: identity.schema_version,
+        run_id: identity.run_id,
+        session_id: identity.session_id,
+        playbook: identity.playbook,
+        engine_owner: identity.engine_owner,
+        gate_id: gateId,
+        response_sha256: responseDigest,
+        state_id: context.stateId,
+      };
+      if (
+        eventType !== "user_gate_answered" ||
+        canonicalJson(payload) !== canonicalJson(safePayload)
+      ) {
+        throw new GateConflictError("digest-only generic gate event must be body-free");
+      }
+    }
     let persistedPayload: Record<string, JsonValue> = payload;
+    let duplicate = false;
     this.transaction(() => {
+      if (
+        expectedParentSnapshotSha256 !== undefined &&
+        sha256(canonicalJson(this.loadRun(context.identity).snapshot())) !==
+          expectedParentSnapshotSha256
+      )
+        throw new GateConflictError("gate response lost current parent selections");
+      if (projectedCallId !== undefined) {
+        const call = this.childWorkflowCall(projectedCallId);
+        if (
+          call === undefined ||
+          call.lifecycle !== "waiting_user" ||
+          call.parent_identity.run_id !== context.identity.run_id ||
+          !this.exactProjectedChildGate(call, this.loadRun(call.parent_identity)) ||
+          canonicalJson(context.pendingDirective) !== canonicalJson(call.directive)
+        )
+          throw new GateConflictError(
+            "projected reply lost its exact waiting child or parent fence"
+          );
+        const parent = this.loadRun(call.parent_identity);
+        const replyRef = context.selectedArtifacts.at(-1);
+        if (
+          replyRef === undefined ||
+          replyRef.run_id !== parent.identity.run_id ||
+          replyRef.kind !== "child-gate-response" ||
+          replyRef.producer !== "host:child-workflow-owner" ||
+          replyRef.operation_id !== `child-response:${gateId}` ||
+          replyRef.content_digest !== responseDigest ||
+          replyRef.byte_length !== Buffer.byteLength(responseJson, "utf8") ||
+          replyRef.content_schema?.schema_id !== "penny.projected-child-response.v1" ||
+          replyRef.content_schema.schema_version !== 1 ||
+          canonicalJson(context.snapshot()) !==
+            canonicalJson({
+              ...parent.snapshot(),
+              status: "running",
+              pending_directive: call.directive,
+              selected_artifacts: [...parent.selectedArtifacts, replyRef],
+            })
+        )
+          throw new GateConflictError(
+            "projected reply changed unrelated parent state or lacks its exact response ref"
+          );
+      }
       const rowValue = this.db
         .prepare(
-          "SELECT gate_id, challenge, status, response_json FROM gates WHERE run_id = ? AND gate_id = ?"
+          "SELECT gate_id, challenge, status, response_digest, response_json FROM gates WHERE run_id = ? AND gate_id = ?"
         )
         .get(context.identity.run_id, gateId);
       const row = rowValue === undefined ? undefined : gateRow(rowValue);
       if (row === undefined) {
         throw new GateConflictError(`unknown gate '${gateId}'`);
       }
-      const responseJson = canonicalJson(response);
       if (row.challenge !== challenge) {
         throw new GateConflictError(`challenge mismatch for gate '${gateId}'`);
       }
       if (row.status === "answered") {
-        if (row.response_json === responseJson) {
+        if (
+          storageMode === "digest-only"
+            ? row.response_json === null && row.response_digest === responseDigest
+            : row.response_json === responseJson
+        ) {
+          duplicate = true;
           return;
         }
         throw new GateConflictError(`gate '${gateId}' was already answered`);
       }
-      this.db
+      const updated = this.db
         .prepare(
           `UPDATE gates
            SET status='answered', response_digest=?, response_json=?, answered_at=?
            WHERE run_id=? AND gate_id=? AND status='pending'`
         )
-        .run(sha256(responseJson), responseJson, now(), context.identity.run_id, gateId);
+        .run(
+          responseDigest,
+          storageMode === "digest-only" ? null : responseJson,
+          now(),
+          context.identity.run_id,
+          gateId
+        );
+      if (storageMode === "digest-only" && numberValue(updated.changes) !== 1) {
+        throw new GateConflictError(`gate '${gateId}' is no longer pending`);
+      }
       this.validatePositiveTerminalWrite(context);
       persistedPayload = this.checkpointPayload(context, payload);
       this.updateRun(context);
       this.persistPendingGate(context);
       this.insertEvent(context.identity.run_id, eventType, persistedPayload, now());
     });
+    if (duplicate && storageMode === "digest-only") return;
     context.markCheckpointEvidencePersisted();
     this.observe(context, eventType, persistedPayload);
   }
@@ -5691,6 +6495,52 @@ export class Checkpointer implements Disposable {
     const context = this.contextFromRunRow(row);
     this.assertIdentity(identity, context.identity);
     return context;
+  }
+
+  /** Exact project binding for an owner sharing this control store with an artifact store. */
+  assertBoundProject(projectId: string): void {
+    this.assertProjectBinding(projectId);
+  }
+
+  /** Bounded exact-run owner evidence, precharged before JSON decoding or predicate evaluation. */
+  compositionEvidence(
+    runId: string,
+    maxRecords = 128,
+    maxBytes = 16 * 1024 * 1024
+  ): {
+    readonly events: readonly CheckpointEvent[];
+    readonly receipts: readonly { receipt_id: string; sha256: string }[];
+    readonly bytes: number;
+  } {
+    const size = this.db
+      .prepare(
+        `SELECT
+      (SELECT COUNT(*) FROM runs WHERE run_id = ?) +
+      (SELECT COUNT(*) FROM events WHERE run_id = ?) + (SELECT COUNT(*) FROM receipts WHERE run_id = ?) AS records,
+      (SELECT COALESCE(SUM(length(CAST(context_json AS BLOB))), 0) FROM runs WHERE run_id = ?) +
+      (SELECT COALESCE(SUM(length(CAST(payload_json AS BLOB))), 0) FROM events WHERE run_id = ?) +
+      (SELECT COALESCE(SUM(length(CAST(result_json AS BLOB))), 0) FROM receipts WHERE run_id = ?) AS bytes`
+      )
+      .get(runId, runId, runId, runId, runId, runId);
+    if (
+      size === undefined ||
+      sqliteInteger(size, "records", "composition evidence") > Math.min(maxRecords, 128) ||
+      sqliteInteger(size, "bytes", "composition evidence") > Math.min(maxBytes, 16 * 1024 * 1024)
+    ) {
+      throw new CheckpointIdentityError("SPECIFICATION_ASSURANCE_LIMIT_EXCEEDED: owner records");
+    }
+    const receipts = this.db
+      .prepare("SELECT receipt_id, result_json FROM receipts WHERE run_id = ? ORDER BY receipt_id")
+      .all(runId)
+      .map((row) => ({
+        receipt_id: sqliteText(row, "receipt_id", "composition receipt"),
+        sha256: sha256(sqliteText(row, "result_json", "composition receipt")),
+      }));
+    return {
+      events: this.events(runId),
+      receipts,
+      bytes: sqliteInteger(size, "bytes", "composition evidence"),
+    };
   }
 
   loadRunById(runId: string): RunContext | undefined {
@@ -5821,11 +6671,7 @@ export class Checkpointer implements Disposable {
   }
 
   close(): void {
-    try {
-      this.db.close();
-    } finally {
-      this.validationSnapshot?.close();
-    }
+    this.db.close();
   }
 
   [Symbol.dispose](): void {
@@ -5846,58 +6692,39 @@ export class Checkpointer implements Disposable {
    * exact deleted run IDs are exposed only after the deletion transaction commits.
    */
   pruneTerminalRuns(): readonly string[] {
+    // This method is synchronous and invokes no application callbacks: only other
+    // connections can change the store between planning and deletion. Capture the
+    // same-connection data_version BEFORE opening the read snapshot, then compare
+    // it AFTER acquiring the writer reservation. Any intervening commit invalidates
+    // the whole plan (including new consumers, custody holds, calls and keep order).
+    const version = this.retentionDataVersion();
+    this.db.exec("BEGIN DEFERRED");
+    let candidates: readonly string[];
+    try {
+      candidates = this.terminalRunRetentionPlan();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    if (candidates.length === 0) return [];
+
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const terminalStatuses = ["complete", "incomplete", "error", "cancelled"];
-      const placeholders = terminalStatuses.map(() => "?").join(", ");
-      // Keep the newest `maxRetainedRuns` terminal runs; delete the rest.
-      // DESC ordering selects the newest first; NOT IN excludes them from deletion.
-      const keep = this.db
-        .prepare(
-          `SELECT run_id FROM runs
-           WHERE status IN (${placeholders})
-           ORDER BY updated_at DESC, rowid DESC
-           LIMIT ?`
-        )
-        .all(...terminalStatuses, this.maxRetainedRuns);
-      const keepIds = keep.map((row) => sqliteText(row, "run_id", "retained orchestration run"));
-      const keepPlaceholders = keepIds.map(() => "?").join(", ");
-      const excess = this.db
-        .prepare(
-          `SELECT r.run_id FROM runs r
-           WHERE r.status IN (${placeholders})
-             AND r.run_id NOT IN (${keepPlaceholders})
-             AND NOT EXISTS (
-               SELECT 1 FROM private_inputs p
-               WHERE p.run_id = r.run_id AND p.state <> 'discarded'
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM start_admissions a
-               WHERE a.run_id = r.run_id AND a.state <> 'terminal'
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM operation_event_groups o
-               WHERE o.run_id = r.run_id
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM kb_run_artifacts a
-               WHERE a.run_id = r.run_id
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM child_workflow_calls c
-               WHERE c.child_run_id = r.run_id
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM child_workflow_calls c
-               WHERE c.parent_run_id = r.run_id AND c.lifecycle <> 'consumed'
-             )`
-        )
-        .all(...terminalStatuses, ...keepIds)
-        .map((row) => sqliteText(row, "run_id", "prunable orchestration run"));
+      if (this.retentionDataVersion() !== version) {
+        this.db.exec("ROLLBACK");
+        // Retention is opportunistic: a busy project must not spin through repeated
+        // full plans and delay service shutdown. The next retention pass replans;
+        // preserving excess runs is safe, deleting from a stale snapshot is not.
+        return [];
+      }
       const deleted: string[] = [];
       const deleteStmt = this.db.prepare("DELETE FROM runs WHERE run_id = ?");
-      for (const runId of excess) {
-        if (numberValue(deleteStmt.run(runId).changes) === 1) deleted.push(runId);
+      for (const runId of candidates) {
+        if (numberValue(deleteStmt.run(runId).changes) !== 1) {
+          throw new CheckpointIdentityError("retention candidate disappeared during deletion");
+        }
+        deleted.push(runId);
       }
       this.db.exec("COMMIT");
       return deleted;
@@ -5905,6 +6732,152 @@ export class Checkpointer implements Disposable {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  private retentionDataVersion(): number {
+    return sqliteInteger(
+      requiredCheckpointValue(this.db.prepare("PRAGMA main.data_version").get(), "data version"),
+      "data_version",
+      "retention data version"
+    );
+  }
+
+  /** Read-snapshot-only planning; no context hydration or history replay in the write phase. */
+  private terminalRunRetentionPlan(): readonly string[] {
+    const terminalStatuses = ["complete", "incomplete", "error", "cancelled"];
+    const placeholders = terminalStatuses.map(() => "?").join(", ");
+    // Most shutdowns have nothing to evict. Do not load contexts, calls or event history,
+    // and in particular do not compete for the writer reservation on this path.
+    if (
+      this.db
+        .prepare(`SELECT 1 FROM runs WHERE status IN (${placeholders}) LIMIT 1 OFFSET ?`)
+        .get(...terminalStatuses, this.maxRetainedRuns) === undefined
+    )
+      return [];
+    // Keep the newest `maxRetainedRuns` terminal runs; delete the rest.
+    // DESC ordering selects the newest first, with insertion order breaking timestamp ties.
+    const keep = this.db
+      .prepare(
+        `SELECT run_id FROM runs
+         WHERE status IN (${placeholders})
+         ORDER BY updated_at DESC, rowid DESC
+         LIMIT ?`
+      )
+      .all(...terminalStatuses, this.maxRetainedRuns);
+    const keepIds = keep.map((row) => sqliteText(row, "run_id", "retained orchestration run"));
+    // Keep linked parent/child control rows and catalog sessions as an indivisible cohort.
+    // No artifact objects are deleted here; immutable media remains under artifact custody.
+    const keepSet = new Set(keepIds);
+    const runs = this.db.prepare("SELECT run_id, status FROM runs ORDER BY rowid").all();
+    const blocked = new Set(
+      this.db
+        .prepare(
+          `
+      SELECT run_id FROM private_inputs WHERE state <> 'discarded'
+      UNION SELECT run_id FROM start_admissions WHERE state <> 'terminal'
+      UNION SELECT run_id FROM operation_event_groups
+      UNION SELECT run_id FROM kb_run_artifacts
+    `
+        )
+        .all()
+        .map((row) => sqliteText(row, "run_id", "retention custody blocker"))
+    );
+    const calls = this.db
+      .prepare("SELECT call_id FROM child_workflow_calls ORDER BY call_id")
+      .all()
+      .map((row) =>
+        requiredCheckpointValue(
+          this.childWorkflowCall(sqliteText(row, "call_id", "retained child call")),
+          "retained child call"
+        )
+      );
+    const parents = new Map(
+      calls.map((call) => [call.child_identity.run_id, call.parent_identity.run_id])
+    );
+    const rootFor = (runId: string): string => {
+      const seen = new Set<string>();
+      let current = runId;
+      while (parents.has(current)) {
+        if (seen.has(current))
+          throw new CheckpointIdentityError("retention child cohort contains a cycle");
+        seen.add(current);
+        current = requiredCheckpointValue(parents.get(current), "retention cohort parent");
+      }
+      return current;
+    };
+    const groups = new Map<string, string[]>();
+    for (const row of runs) {
+      const id = sqliteText(row, "run_id", "retention cohort run");
+      if (!terminalStatuses.includes(sqliteText(row, "status", "retention cohort status")))
+        blocked.add(id);
+      const root = rootFor(id);
+      const group = groups.get(root) ?? [];
+      group.push(id);
+      groups.set(root, group);
+    }
+    // Released, consumed effects are settled. A consumed remote-unknown/quarantine is not.
+    for (const row of this.db
+      .prepare("SELECT operation_record_id FROM host_operation_calls")
+      .all()) {
+      const effect = requiredCheckpointValue(
+        this.hostOperationCall(sqliteText(row, "operation_record_id", "retained host operation")),
+        "retained host operation"
+      );
+      if (effect.lifecycle !== "consumed" || effect.disposition?.lease_disposition !== "released")
+        blocked.add(effect.identity.run_id);
+    }
+    for (const call of calls) {
+      if (call.lifecycle === "consumed") continue;
+      const parent = this.loadRun(call.parent_identity);
+      const child = this.loadRun(call.child_identity);
+      const safelyAbandoned =
+        parent.terminalDirective?.action === "cancelled" &&
+        child.terminalDirective !== null &&
+        call.terminal_sha256 === sha256(canonicalJson(child.terminalDirective)) &&
+        ["cancelled", "failed", "terminal_recorded"].includes(call.lifecycle);
+      if (!safelyAbandoned) blocked.add(call.parent_identity.run_id);
+    }
+    // Exact cross-run handoffs pin producer control/gate/receipt evidence for as long as a
+    // retained consumer depends on it. Age alone cannot sever an approval/delivery chain.
+    const pendingRoots = [...groups]
+      .filter(([, members]) => members.some((id) => keepSet.has(id) || blocked.has(id)))
+      .map(([root]) => root);
+    const visitedRoots = new Set(pendingRoots);
+    for (let i = 0; i < pendingRoots.length; i++) {
+      const root = requiredCheckpointValue(pendingRoots[i], "retained dependency root");
+      for (const id of groups.get(root) ?? [])
+        for (const ref of this.retentionSelectedArtifacts(id)) {
+          const producerRoot = rootFor(ref.run_id);
+          if (!groups.has(producerRoot) || visitedRoots.has(producerRoot)) continue;
+          visitedRoots.add(producerRoot);
+          pendingRoots.push(producerRoot);
+          for (const producer of groups.get(producerRoot) ?? []) blocked.add(producer);
+        }
+    }
+    const candidates: string[] = [];
+    for (const [root, members] of groups) {
+      if (members.some((id) => keepSet.has(id) || blocked.has(id))) continue;
+      // Parent-first order removes the FK-linked calls before their child rows.
+      candidates.push(root, ...members.filter((id) => id !== root));
+    }
+    return candidates;
+  }
+
+  /**
+   * Validate the compact checkpoint with the canonical codec, without rehydrating a live run
+   * or restoring its state visits. Retention needs exact producer refs, not runtime state.
+   */
+  private retentionSelectedArtifacts(runId: string): readonly ArtifactRef[] {
+    const row = requiredCheckpointValue(this.selectRun(runId), "retained dependency run");
+    const parsed: unknown = JSON.parse(row.context_json);
+    const projection = orchestrationDurableStateCodec.decodeCheckpoint(parsed, {
+      playbook: row.playbook,
+      ...(this.kbRuntimeProjectRoot === undefined
+        ? {}
+        : { projectRoot: this.kbRuntimeProjectRoot }),
+    });
+    this.assertIdentityRow(projection.identity, row);
+    return projection.selected_artifacts;
   }
 
   private contextForChildWorkflowCall(runId: string): RunContext {
@@ -5934,6 +6907,15 @@ export class Checkpointer implements Disposable {
     ) {
       throw new CheckpointIdentityError(`${label} is absent or does not match the durable run`);
     }
+  }
+
+  private exactProjectedChildGate(record: ChildWorkflowCallRecord, parent: RunContext): boolean {
+    const gate = this.contextForChildWorkflowCall(record.child_identity.run_id).pendingDirective;
+    return (
+      parent.status === "awaiting_user" &&
+      gate?.action === "await_user" &&
+      canonicalJson(parent.pendingDirective) === canonicalJson(projectChildGate(record, gate))
+    );
   }
 
   private assertChildWorkflowCallLinkage(record: ChildWorkflowCallRecord): void {
@@ -5973,6 +6955,7 @@ export class Checkpointer implements Disposable {
         record.lifecycle === "waiting_user" ||
         record.lifecycle === "paused") &&
       canonicalJson(parent.pendingDirective) !== canonicalJson(record.directive) &&
+      !(record.lifecycle === "waiting_user" && this.exactProjectedChildGate(record, parent)) &&
       !parentCancellationIsDurable
     ) {
       throw new CheckpointIdentityError(

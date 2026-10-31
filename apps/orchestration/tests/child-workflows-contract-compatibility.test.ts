@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../src/canonical-json.js";
+import { canonicalJson, sha256 } from "../dist/canonical-json.js";
 import {
   childResourceReservationFitsRoot,
   childWorkflowCallId,
@@ -24,8 +24,8 @@ import {
   type HostAuthorityBindingV1,
   type InvokeChildWorkflowDirectiveV4,
   type RootNonTimeEnvelopeV1,
-} from "../src/child-workflows/contracts.js";
-import { validateDirective } from "../src/contracts.js";
+} from "../dist/child-workflows/contracts.js";
+import { validateDirective } from "../dist/contracts.js";
 import type {
   ArtifactRef,
   ChildWorkflowOutputContractV1,
@@ -34,7 +34,7 @@ import type {
   InvokeChildWorkflowDirective,
   LeaseBoundInvokeChildWorkflowDirectiveV1,
   RunIdentity,
-} from "../src/contracts.js";
+} from "../dist/contracts.js";
 
 const PARENT: RunIdentity = {
   schema_version: 2,

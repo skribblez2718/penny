@@ -1,4 +1,8 @@
 import { registerTool } from "../../lib/pi-tool-registration.js";
+import { fileURLToPath } from "node:url";
+
+/** Exact entry-file identity for trusted host source composition, not a tool policy. */
+export const memoryExtensionSource = fileURLToPath(import.meta.url);
 
 import type {
   ExtensionAPI,
@@ -58,8 +62,7 @@ interface AutoDiaryEvaluationFailure {
 type AutoDiaryEvaluationCompletion =
   | { kind: "candidate"; parameters: Awaited<ReturnType<AutoDiaryEvaluator>> }
   | { kind: "error"; error: unknown }
-  | { kind: "cancelled" }
-  | { kind: "timeout" };
+  | { kind: "cancelled" };
 
 function errorCodeFrom(value: unknown, fallback: string): string {
   return typeof value === "object" && value !== null && "code" in value
@@ -78,41 +81,27 @@ function currentEvaluationEntryId(reader: AutoDiarySessionReader): string | null
     : null;
 }
 
-async function evaluateWithDeadline(
+async function evaluateUntilCancelled(
   evaluator: AutoDiaryEvaluator,
   active: ActiveAutoDiaryEvaluation,
   reader: AutoDiarySessionReader,
-  context: ExtensionContext,
-  timeoutMs: number
+  context: ExtensionContext
 ): Promise<AutoDiaryEvaluationCompletion> {
   const completed = evaluator(active.evaluation, reader, context, active.controller.signal).then(
     (parameters): AutoDiaryEvaluationCompletion => ({ kind: "candidate", parameters }),
     (error: unknown): AutoDiaryEvaluationCompletion => ({ kind: "error", error })
   );
-  let timedOut = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const interrupted = new Promise<AutoDiaryEvaluationCompletion>((resolve) => {
-    onAbort = () => resolve({ kind: timedOut ? "timeout" : "cancelled" });
+    onAbort = () => resolve({ kind: "cancelled" });
     active.controller.signal.addEventListener("abort", onAbort, { once: true });
-    if (active.controller.signal.aborted) {
-      onAbort();
-      return;
-    }
-    timer = setTimeout(() => {
-      timedOut = true;
-      active.controller.abort();
-    }, timeoutMs);
+    if (active.controller.signal.aborted) onAbort();
   });
 
   try {
     const result = await Promise.race([completed, interrupted]);
-    if (active.controller.signal.aborted) {
-      return { kind: timedOut ? "timeout" : "cancelled" };
-    }
-    return result;
+    return active.controller.signal.aborted ? { kind: "cancelled" } : result;
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
     if (onAbort !== undefined) active.controller.signal.removeEventListener("abort", onAbort);
   }
 }
@@ -308,12 +297,11 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
         };
 
         try {
-          const completion = await evaluateWithDeadline(
+          const completion = await evaluateUntilCancelled(
             autoDiaryEvaluator,
             active,
             context.sessionManager,
-            context,
-            config.autoDiary.shutdownTimeoutMs
+            context
           );
           if (completion.kind === "cancelled") {
             fail(
@@ -321,10 +309,6 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
                 ? "shutdown_before_model_disposition"
                 : "evaluation_cancelled_for_primary_turn"
             );
-            return;
-          }
-          if (completion.kind === "timeout") {
-            fail("model_evaluation_timeout");
             return;
           }
           if (completion.kind === "error") {

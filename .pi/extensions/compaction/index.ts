@@ -1,3 +1,4 @@
+import type { CompactionProgress } from "../../lib/compaction-policy.mjs";
 /**
  * Penny Custom Compaction Extension
  *
@@ -74,7 +75,7 @@ import {
   type CatalogWorkerContinuityMetadataV1,
   type CatalogWorkerSessionMetadataV1,
   type OutputArtifactMetadata,
-} from "@penny/orchestration/source";
+} from "@penny/orchestration";
 
 const logger = createLogger("compaction");
 
@@ -1183,9 +1184,8 @@ function collectRunIdsFromParsedSkillResult(
   for (const node of collectValidatedSkillResultNodes(parsed)) {
     if (node.status === "unknown") continue;
     const details = node.details;
-    const pause = asRecord(details.dispatch_pause);
-    addCanonicalRunId(ids, pause.run_id);
-    addCanonicalRunId(ids, asRecord(pause.identity).run_id);
+    addCanonicalRunId(ids, details.dispatch_pause?.identity.run_id);
+    addCanonicalRunId(ids, details.continuation?.identity.run_id);
 
     addRunIdFromArtifactCandidate(ids, details.output_artifact_ref);
     for (const ref of asArray(details.best_partial_artifact_refs)) {
@@ -1196,11 +1196,6 @@ function collectRunIdsFromParsedSkillResult(
     addRunIdFromArtifactCandidate(ids, result.output_artifact_ref);
     for (const ref of asArray(result.best_partial_artifact_refs)) {
       addRunIdFromArtifactCandidate(ids, ref);
-    }
-
-    const escalation = asRecord(details.escalation);
-    for (const question of asArray(escalation.questions)) {
-      addCanonicalRunId(ids, asRecord(question).approval_run_id);
     }
   }
 }
@@ -1800,12 +1795,16 @@ let observabilityConfig: ObservabilityPostConfig;
 
 /**
  * POST compaction artifact to the observability REST API.
- * Throws on failure so the caller can decide visibility.
+ * Network failure is optional and logged locally: reporting it through the
+ * same black-holed observability backend would create another unbounded fetch.
  */
+const COMPACTION_TELEMETRY_DEADLINE_MS = 1_000;
+
 async function postCompactionArtifact(
   artifact: PennyCompactArtifact,
   firstKeptEntryId: string,
-  tokensBefore: number
+  tokensBefore: number,
+  signal?: AbortSignal
 ) {
   const url = `${observabilityConfig.baseUrl}/compactions`;
   const headers: Record<string, string> = {
@@ -1824,21 +1823,41 @@ async function postCompactionArtifact(
     tokens_before: tokensBefore,
   };
 
+  // Optional telemetry, NOT productive summary work: bound the entire request
+  // including response cleanup. Neither the timer nor a late post holds a child
+  // open indefinitely; native cancellation also aborts the request.
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-  const resp = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  });
-  clearTimeout(timeoutId);
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw Object.assign(new Error(`POST ${resp.status}: ${text.slice(0, 200)}`), {
-      code: "COMPACTION_POST_FAILED",
+  const onAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  const deadline = setTimeout(
+    () => controller.abort(new Error("compaction telemetry deadline exceeded")),
+    COMPACTION_TELEMETRY_DEADLINE_MS
+  );
+  deadline.unref?.();
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
     });
+    // No response payload is needed. Cancel/drain even an error response rather
+    // than waiting for an unbounded body just to decorate an optional diagnostic.
+    await resp.body?.cancel();
+    if (!resp.ok) {
+      throw Object.assign(new Error(`POST ${resp.status}`), {
+        code: "COMPACTION_POST_FAILED",
+      });
+    }
+  } catch {
+    // Never recursively report an unavailable telemetry sink through that sink.
+    createLogger("compaction", (entry) => {
+      process.stderr.write(`${entry}\n`);
+    }).warn("Optional compaction telemetry unavailable", { aborted: controller.signal.aborted });
+  } finally {
+    clearTimeout(deadline);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -2038,13 +2057,29 @@ function isSummarizerContext(value: unknown): value is SummarizerCtx {
   );
 }
 
-export default function compactionExtension(pi: CompactionExtensionAPI) {
+export function createCompactionHandler(
+  onSummaryProgress?: (progress: CompactionProgress) => void
+) {
   observabilityConfig = {
     baseUrl: getEnvVar("PI_OBSERVABILITY_REST_URL") || "http://localhost:8765",
     apiKey: getEnvVar("PI_OBSERVABILITY_API_KEY") || "",
   };
 
-  pi.on("session_before_compact", async (event: SessionBeforeCompactEvent, ctx: unknown) => {
+  return async (
+    event: SessionBeforeCompactEvent,
+    ctx: unknown,
+    ownerSummaryObserver?: (progress: CompactionProgress) => void,
+    ownerSignal?: AbortSignal
+  ) => {
+    // The owner cancellation also gates a later SDK cleanup/retry compaction.
+    // It adds no duration cap and never alters the native guarded stream path.
+    if (ownerSignal?.aborted) return { cancel: true };
+    const summarySignal =
+      ownerSignal === undefined
+        ? event.signal
+        : event.signal === undefined
+          ? ownerSignal
+          : AbortSignal.any([event.signal, ownerSignal]);
     const { preparation, branchEntries } = event;
     const projectRootValue = isRecord(ctx) ? ctx.cwd : undefined;
     if (typeof projectRootValue !== "string" || projectRootValue.length === 0) {
@@ -2131,23 +2166,34 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
 
     // Model-owned prose (the leverage path): the session model summarizes the
     // ACTUAL evicted conversation, given the previous brief + exact checkpoint
-    // digest. Returns null on ANY failure (no model/auth, timeout, abort,
+    // digest. Returns null on ANY failure (no model/auth, abort,
     // empty) → the deterministic LOAN fallback, or Pi's default when that loan
     // is ablated.
     const proseTokenTarget = Math.floor(resultBudget.maxEstimatedTokens * 0.66);
-    const modelResult = isSummarizerContext(ctx)
-      ? await generateModelSummary(
-          {
-            messages,
-            previousSummary: preparation.previousSummary,
-            digest: build.digest,
-            customInstructions: event.customInstructions,
-            proseTokenTarget,
-            signal: event.signal,
-          },
-          ctx
-        )
-      : null;
+    let summaryActive = true;
+    const modelResult = await (async () => {
+      try {
+        return isSummarizerContext(ctx)
+          ? await generateModelSummary(
+              {
+                messages,
+                previousSummary: preparation.previousSummary,
+                digest: build.digest,
+                customInstructions: event.customInstructions,
+                proseTokenTarget,
+                signal: summarySignal,
+                onProgress: (progress) => {
+                  if (summaryActive && !summarySignal?.aborted)
+                    (ownerSummaryObserver ?? onSummaryProgress)?.(progress);
+                },
+              },
+              ctx
+            )
+          : null;
+      } finally {
+        summaryActive = false;
+      }
+    })();
 
     let modelProse: string | null = null;
     if (modelResult) {
@@ -2263,7 +2309,12 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
 
     // Fire-and-forget: send FULL artifact to observability backend.
     // On the SUCCESS path this is completely silent — no console noise.
-    postCompactionArtifact(artifact, preparation.firstKeptEntryId, preparation.tokensBefore).then(
+    postCompactionArtifact(
+      artifact,
+      preparation.firstKeptEntryId,
+      preparation.tokensBefore,
+      summarySignal
+    ).then(
       () => {},
       (postErr) => {
         failLoudly(
@@ -2284,5 +2335,11 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
         details: artifact,
       },
     };
-  });
+  };
+}
+
+export default function compactionExtension(pi: CompactionExtensionAPI) {
+  // The owner may inject an observer into this exact loaded producer factory.
+  // No bus subscriber, reporter getter, tag or ambient extension receives it.
+  pi.on("session_before_compact", createCompactionHandler());
 }

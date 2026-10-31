@@ -2,30 +2,20 @@
 
 ## Runtime ownership
 
-The unmarked primary runtime owns the full durable-memory surface, including all
-writes and lifecycle hooks. Catalog workers may receive an owner-granted,
-YAML-declared bounded read-only recall/KG bundle; they receive no write,
-advisory-log, or lifecycle capabilities. Skill-driver processes expose no memory
-tools. Active workflow handoff uses immutable owner artifacts, and orchestration
-state uses the checkpointer.
+The unmarked primary runtime owns every memory write and lifecycle hook. Catalog workers may receive owner-granted, YAML-declared bounded read-only recall/KG, never writes, advisory logs, or lifecycle hooks. Skill drivers expose no memory tools. Immutable owner artifacts carry workflow handoff; the checkpointer owns run state.
 
-## Tiers
+## Ownership and lookup scope
 
-| Tier | Content                                   | Retrieval                                          |
-| ---- | ----------------------------------------- | -------------------------------------------------- |
-| T0   | Stable frame/identity                     | Always present.                                    |
-| T1   | Conversation + compact run state/refs     | Current context/checkpointer.                      |
-| T2   | Primary diary and warm classified data    | Bounded relevant primary or granted-worker recall. |
-| T3   | Curated durable knowledge and temporal KG | Explicit primary or granted-worker read.           |
-| T4   | Cold archive / legacy corpus              | Manual offline recovery only.                      |
+[Architecture](../../architecture/tiered-memory.md) owns tier/custody definitions; read it for architecture or lifecycle changes. For HTTP, role, automatic-retention, or continuation implementation work, read [Integration](../../memory/integration.md); for archival/legacy planning or apply, read [Retention](../../memory/schema.md). Simple recall needs no additional memory guide.
 
 ## Operational rules
 
 - Search only when prior context could materially affect the task.
-- Start with bounded summaries; use exact IDs and `next_range` only when needed.
+- Start with bounded summaries; fetch exact IDs only when needed. Continue memory reads with returned `continuation.cursor` as `cursor` until `truncated: false`; `continuation.next_range` is informational, not a memory input. Preserve exact UTF-8 reassembly and source digest/revision; expired, changed, stale, evicted, malformed, wrong-caller/query cursors fail with typed errors. Continuation never replays writes.
+- [Invocation](../../agents/invocation.md) owns artifact handoff: `artifact_read` uses explicit non-expiring byte ranges, unlike memory cursors. Memory is never handoff, checkpoint, or recovery authority.
 - Curate stable reusable results; skip routine/transient output.
 - Rely on write-path duplicate enforcement rather than a routine duplicate precheck.
-- Write the primary diary only from the primary runtime.
+- Write the primary diary only from the primary runtime. Automatic retention is separately default-off; retain requires the ordinary write gate plus exact source/provenance admission, not a model safety claim. See integration when changing or diagnosing that lifecycle. No persisted candidate restores authorization after restart; never blindly replay an ambiguous write.
 - Add KG facts only when future traversal/invalidation value justifies them.
 - Treat old skill rooms as legacy corpus, never active handoff or deletion authority.
 - Use one authenticated supervised MemPalace 3.7.1 HTTP hub; no production/admin raw fallback.
@@ -36,17 +26,7 @@ state uses the checkpointer.
 ## Verification
 
 - [ ] No retrieved memory appears in worker directives.
-- [ ] Workers receive only the owner-granted read-only memory bundle; no worker write/logstream tool or lifecycle hook exists.
-- [ ] Artifact continuation is complete and exact for workflow inputs.
 - [ ] Advisory list/wait enforces requested filters, anchor exclusion, unique IDs, and strict positive sequence order.
 - [ ] Advisory ack proves configured stream/principal/correlation under bounded reads.
 - [ ] Retention apply is reviewed, manifest-bound, archive-first, and journaled.
 - [ ] Offline byte access is receipt-bound to a copied target.
-
-## Files
-
-| File                                        | Purpose                     |
-| ------------------------------------------- | --------------------------- |
-| `docs/agents/architecture/tiered-memory.md` | Full architecture           |
-| `docs/agents/memory/integration.md`         | HTTP and role-scoped policy |
-| `docs/agents/memory/schema.md`              | Retention and legacy corpus |

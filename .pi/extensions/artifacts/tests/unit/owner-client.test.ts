@@ -1,12 +1,18 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { initializePennyState, resolvePennyProjectState } from "@penny/orchestration/source";
-import { afterEach, describe, expect, it } from "vitest";
+import { initializePennyState, resolvePennyProjectState } from "@penny/orchestration";
+import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
+
+import ts from "typescript";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ArtifactClientError,
+  canonicalArtifactJson,
+  expectedArtifactRef,
   parseArtifactRef,
   parseOutputArtifactMetadata,
   persistArtifactOutput,
@@ -18,6 +24,7 @@ import { outputMetadata } from "../fixtures.js";
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -30,6 +37,10 @@ function fixture(): { projectRoot: string; env: NodeJS.ProcessEnv } {
   const env = { PENNY_STATE_ROOT: join(root, "state") };
   initializePennyState(projectRoot, { env });
   return { projectRoot, env };
+}
+
+function isReaderFunction(value: unknown): value is (input: unknown) => Promise<unknown> {
+  return typeof value === "function";
 }
 
 describe("artifact owner client", () => {
@@ -49,32 +60,25 @@ describe("artifact owner client", () => {
     expect(direct.content.toString()).toBe("exact bytes");
   });
 
-  it("preserves structured stale-state cause through artifact configuration errors", () => {
+  it("reads exact artifacts independently of an unrelated stale checkpoint schema", async () => {
     const { projectRoot, env } = fixture();
+    const ref = await persistArtifactOutput({
+      metadata: outputMetadata(),
+      output: "still readable",
+      cwd: projectRoot,
+      env,
+    });
     const state = resolvePennyProjectState(projectRoot, { env });
     const sqlite = process.getBuiltinModule("node:sqlite");
     if (sqlite === undefined) throw new Error("node:sqlite unavailable");
     using database = new sqlite.DatabaseSync(state.paths.orchestration.database);
-    database.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
-
-    try {
-      resolveArtifactRoot(projectRoot, env);
-      throw new Error("stale state unexpectedly resolved an artifact root");
-    } catch (error) {
-      expect(error).toBeInstanceOf(ArtifactClientError);
-      if (!(error instanceof ArtifactClientError)) throw error;
-      expect(error.code).toBe("ARTIFACT_CONFIG_INVALID");
-      expect(error.message).toContain("schema 10 is not current");
-      expect(error.metadata).toEqual({
-        state_error_code: "STATE_SCHEMA_INCOMPATIBLE",
-        component: "orchestration",
-        actual_schema_version: 10,
-        required_schema_version: 12,
-        upgrade_supported: true,
-        recovery_action: "penny-state-upgrade",
-      });
-      expect(error.message).not.toContain(projectRoot);
-    }
+    database.exec(
+      "DROP TABLE host_operation_calls; DROP TABLE child_workflow_calls; PRAGMA user_version=10;"
+    );
+    expect(resolveArtifactRoot(projectRoot, env)).toBe(state.paths.artifacts.root);
+    expect(
+      (await readArtifactById({ artifactId: ref.artifact_id, projectRoot, env })).content.toString()
+    ).toBe("still readable");
   });
 
   it("rejects a retired schema-v1 ref", () => {
@@ -107,5 +111,80 @@ describe("artifact owner client", () => {
         consumer_scope: ["state:any"],
       })
     ).toThrow(/unsupported output_artifact schema version/);
+  });
+  it.each([false, true])(
+    "forwards real reader call options with env present=%s",
+    async (present) => {
+      // Module-local calls cannot be intercepted by ESM export spies. Compile the actual
+      // two function declarations with only the downstream reader boundary substituted.
+      const filename = fileURLToPath(new URL("../../owner-client.ts", import.meta.url));
+      const source = readFileSync(filename, "utf8");
+      const parsed = ts.createSourceFile(filename, source, ts.ScriptTarget.ES2022, true);
+      for (const name of ["readArtifactById", "readArtifactOutput"]) {
+        const declaration = parsed.statements.find(
+          (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === name
+        );
+        if (declaration === undefined) throw new Error(`missing real reader ${name}`);
+        const javascript = ts.transpileModule(declaration.getText(parsed).replace(/^export /, ""), {
+          compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+        }).outputText;
+        const calls: unknown[] = [];
+        const ref = expectedArtifactRef(outputMetadata(), "call bytes");
+        const read = { ref, content: Buffer.from("call bytes") };
+        const invoke: unknown = runInNewContext(`${javascript}; ${name}`, {
+          readArtifactsById: (options: unknown) => {
+            calls.push(options);
+            return Promise.resolve([read]);
+          },
+          readArtifactById: (options: unknown) => {
+            calls.push(options);
+            return Promise.resolve(read);
+          },
+          parseArtifactRef,
+          canonicalArtifactJson,
+          ArtifactClientError,
+        });
+        if (!isReaderFunction(invoke)) throw new Error("compiled reader is not callable");
+        const env = { PENNY_STATE_ROOT: "isolated-test-state" };
+        const projectRoot = "isolated-test-project";
+        const result = await invoke({
+          artifactId: ref.artifact_id,
+          ref,
+          projectRoot,
+          ...(present ? { env } : {}),
+        });
+        expect(result).toEqual(name === "readArtifactById" ? read : read.content);
+        expect(calls).toEqual([
+          {
+            ...(name === "readArtifactById"
+              ? { artifactIds: [ref.artifact_id] }
+              : { artifactId: ref.artifact_id }),
+            projectRoot,
+            ...(present ? { env } : {}),
+          },
+        ]);
+        if (present) {
+          const options = calls[0];
+          if (options === null || typeof options !== "object" || !("env" in options))
+            throw new Error("forwarded env missing");
+          expect(options.env).toBe(env);
+        }
+      }
+    }
+  );
+
+  it("uses the default environment when omitted and still rejects substituted ref metadata", async () => {
+    const { projectRoot, env } = fixture();
+    vi.stubEnv("PENNY_STATE_ROOT", env.PENNY_STATE_ROOT);
+    const ref = await persistArtifactOutput({
+      metadata: outputMetadata(),
+      output: "default env bytes",
+      cwd: projectRoot,
+    });
+    expect((await readArtifactById({ artifactId: ref.artifact_id, projectRoot })).ref).toEqual(ref);
+    expect((await readArtifactOutput({ ref, projectRoot })).toString()).toBe("default env bytes");
+    await expect(
+      readArtifactOutput({ ref: { ...ref, producer: "agent:foreign" }, projectRoot })
+    ).rejects.toMatchObject({ code: "ARTIFACT_REF_INVALID" });
   });
 });

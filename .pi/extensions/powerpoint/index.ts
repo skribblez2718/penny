@@ -76,7 +76,6 @@ export function adaptPowerpointResultEnvelope(value: unknown): PowerpointToolRes
   return value;
 }
 
-const DEFAULT_TIMEOUT_MS = 90_000;
 const MAX_STAGING_ATTEMPTS = 10;
 const EXTENSION_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DISCOVERED_PROJECT_ROOT = path.resolve(EXTENSION_DIR, "../../..");
@@ -165,13 +164,9 @@ export interface GeneratorOutcome {
 }
 
 export interface GeneratorRunOptions {
+  /** @deprecated Elapsed-time ceilings are ignored; cancellation is signal-owned. */
   timeoutMs?: number;
   hooks?: GeneratorHooks;
-}
-
-function generatorTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = Number(env.PENNY_DOCGEN_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 }
 
 export async function runGenerator(
@@ -188,30 +183,20 @@ export async function runGenerator(
 
   const stagingPath = reserveStagingPath(outputPath);
   const preparedSpec = { ...spec, staging_path: stagingPath };
-  const timeoutMs = options.timeoutMs ?? generatorTimeoutMs();
   const internalController = new AbortController();
-  let timedOut = false;
 
-  const forwardAbort = () => internalController.abort();
+  const forwardAbort = () => internalController.abort(signal?.reason);
   signal?.addEventListener("abort", forwardAbort, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    internalController.abort();
-  }, timeoutMs);
 
   try {
     const result = await generate(preparedSpec, internalController.signal, options.hooks ?? {});
     return { cancelled: false, result };
   } catch (error) {
-    if (timedOut) {
-      throw new Error(`Presentation generator timed out after ${timeoutMs}ms`);
-    }
     if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
       return { cancelled: true };
     }
     throw error;
   } finally {
-    clearTimeout(timer);
     signal?.removeEventListener("abort", forwardAbort);
     fs.rmSync(stagingPath, { force: true });
   }
@@ -525,7 +510,7 @@ export default function powerpointExtension(pi: ExtensionAPI): void {
     promptSnippet:
       "powerpoint_generate: render structured slides or markdown into a professionally styled PowerPoint (.pptx)",
     parameters: powerpointGenerateParams,
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, onUpdate) {
       try {
         if (signal?.aborted) {
           return {
@@ -536,7 +521,19 @@ export default function powerpointExtension(pi: ExtensionAPI): void {
         const projectRoot = getProjectRoot();
         const spec = buildSpec(params, projectRoot);
         fs.mkdirSync(path.dirname(spec.output_path), { recursive: true });
-        const outcome = await runGenerator(spec, signal);
+        const reportActivity = (stage: "render" | "pack" | "publish"): void => {
+          onUpdate?.({
+            content: [{ type: "text" as const, text: `PowerPoint generation progress: ${stage}` }],
+            details: { stage },
+          });
+        };
+        const outcome = await runGenerator(spec, signal, {
+          hooks: {
+            before_render: () => reportActivity("render"),
+            before_pack: () => reportActivity("pack"),
+            before_publish: () => reportActivity("publish"),
+          },
+        });
         if (outcome.cancelled) {
           return {
             content: [{ type: "text" as const, text: "Cancelled" }],

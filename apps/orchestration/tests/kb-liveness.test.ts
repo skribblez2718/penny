@@ -4,13 +4,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { canonicalJson, Checkpointer } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { validateDirective } from "../src/contracts.js";
-import { kbLivenessPolicy, LivenessController, LivenessExhaustedError } from "../src/liveness.js";
-import type { KbIngestPlaneV1 } from "../src/kb/ingest-plane.js";
-import { operationEventForResult, replayableResultFromRun } from "../src/kb/operation-receipts.js";
-import { KnowledgeBasePlaybook } from "../src/playbooks/knowledge-base.js";
+import { canonicalJson, Checkpointer } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { validateDirective } from "../dist/contracts.js";
+import { kbLivenessPolicy, LivenessController } from "../dist/liveness.js";
+import type { KbIngestPlaneV1 } from "../dist/kb/ingest-plane.js";
+import { operationEventForResult, replayableResultFromRun } from "../dist/kb/operation-receipts.js";
+import { KnowledgeBasePlaybook } from "../dist/playbooks/knowledge-base.js";
 
 const directories: string[] = [];
 
@@ -53,27 +53,21 @@ const SAFE_HANDLE = {
 };
 
 describe("KB liveness and negative delivery", () => {
-  it("uses a V2 active-work envelope independent of reader-call input", () => {
-    const ingest = kbLivenessPolicy({ action: "ingest", readerMaxCallsPerPhase: 16 });
-    expect(ingest).toMatchObject({
-      schema_version: 2,
-      preset: "kb-ingest",
-      worker_active_work_budget_ms: 900_000,
-      run_active_work_budget_ms: 5_400_000,
-    });
-    expect(kbLivenessPolicy({ action: "save", readerMaxCallsPerPhase: 100 })).toMatchObject({
-      run_active_work_budget_ms: 5_400_000,
-    });
-    expect(kbLivenessPolicy({ action: "query", readerMaxCallsPerPhase: 1 })).toMatchObject({
-      run_active_work_budget_ms: 2_700_000,
-    });
-    expect(kbLivenessPolicy({ action: "promote", readerMaxCallsPerPhase: 64 })).toMatchObject({
-      run_active_work_budget_ms: 2_700_000,
-    });
-    expect("tool_calls_per_worker" in ingest).toBe(false);
+  it("uses current renewable leases without inferred reader, session or error-count quotas", () => {
+    for (const action of ["ingest", "save", "query", "promote"] as const) {
+      const policy = kbLivenessPolicy({ action, readerMaxCallsPerPhase: 16 });
+      expect(policy).toMatchObject({
+        schema_version: 3,
+        preset: `kb-${action}`,
+        malformed_results_per_state_branch: null,
+        protocol_errors_per_worker: null,
+      });
+      expect("tool_calls_per_worker" in policy).toBe(false);
+      expect("run_active_work_budget_ms" in policy).toBe(false);
+    }
   });
 
-  it("aborts on a second identical content-free KB protocol digest", () => {
+  it("retains repeated content-free KB protocol errors without a guessed count cutoff", () => {
     const root = temporaryDirectory();
     const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
     const run = context("kb-protocol-run");
@@ -109,7 +103,7 @@ describe("KB liveness and negative delivery", () => {
         tool_name: "read_phase_brief",
         error_code: "schema_invalid",
       })
-    ).toThrowError(new LivenessExhaustedError("identical_error_stall"));
+    ).not.toThrow();
     expect(liveness.snapshot(run.identity.run_id).protocol_errors).toBe(2);
     expect(canonicalJson(checkpointer.events(run.identity.run_id))).not.toContain(
       "PRIVATE_SENTINEL_BODY"

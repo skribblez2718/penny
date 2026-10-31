@@ -1,6 +1,6 @@
 # Penny
 
-Penny is a personal AI assistant built on [Pi](https://github.com/earendil-works/pi). She can handle a task directly, ask one of ten general-purpose agents for focused help, or run a reusable multi-step skill. A core [MemPalace](https://github.com/milla-jovovich/mempalace) service provides memory across sessions while workflow checkpoints and exact artifacts remain independently durable.
+Penny is a personal AI assistant built on [Pi](https://github.com/earendil-works/pi). She can handle a task directly, send focused work to a catalog agent, or run a reusable multi-step skill. [MemPalace](https://github.com/milla-jovovich/mempalace) supports durable recall across sessions, while workflow checkpoints and exact artifacts remain separate. Start with the [human documentation hub](docs/humans/index.md) or the [glossary](docs/humans/glossary.md).
 
 <p align="center">
   <img src="img/penny.png" width="55%" style="border-radius: 12px" alt="Penny" />
@@ -9,14 +9,10 @@ Penny is a personal AI assistant built on [Pi](https://github.com/earendil-works
 ## Table of Contents
 
 - [Overview](#overview)
-- [Requirements](#requirements)
-- [Quick Start](#quick-start)
 - [Agents and Skills](#agents-and-skills)
-- [How Penny Works](#how-penny-works)
+- [Architecture at a Glance](#architecture-at-a-glance)
 - [Progress and Limits](#progress-and-limits)
 - [Memory and Observability](#memory-and-observability)
-- [Development](#development)
-- [TLS and Certificate Trust](#tls-and-certificate-trust)
 - [Documentation](#documentation)
 
 ## Overview
@@ -28,32 +24,6 @@ Penny has three ways to do work:
 - **Skill:** Penny runs a tested sequence of steps that can save progress, retry a failed step, run work in parallel, and resume later.
 
 Penny uses the simplest option that fits the task. Skill results pass directly between steps without relying on memory.
-
-## Requirements
-
-- **Pi 0.85.1:** the supported agent runtime. It must match the Pi SDK version pinned in this repository. See [Pi on GitHub](https://github.com/earendil-works/pi).
-- **Node.js 22.19.0 or newer**
-- **Python 3.12 or newer**
-- **Bun 1.0 or newer:** JavaScript runtime and package manager
-- **uv:** Python package manager. See [docs.astral.sh/uv](https://docs.astral.sh/uv).
-
-## Quick Start
-
-```bash
-git clone https://github.com/skribblez2718/penny.git
-cd penny
-cp .env.example .env
-# Edit .env and create a private hub config from
-# scripts/setup/mempalace-hub.config.json.in, then start that supervised hub.
-make setup STATE_MODE=fresh MEMORY_HUB_CONFIG=/absolute/private/hub.json
-pi
-```
-
-MemPalace hub memory is enabled by default. The hub configuration, token, roots, and service remain caller-owned and outside the repository; setup validates them but never discovers, creates, migrates, repairs, or deletes a palace. Memory writes remain disabled until the separate canary and accepted-write reconciliation gates pass.
-
-`STATE_MODE=fresh` is explicit authorization to initialize only a genuinely fresh canonical Penny state target. Existing installations use `STATE_MODE=existing` (the default). Missing, incomplete, incompatible, or retained state never falls through as successful setup; retained state uses the documented migration or recovery flow.
-
-`make setup` performs frozen, offline dependency installs from local caches, builds orchestration and observability once, and exits zero only after state, artifacts, checkpoints, receipt authority, observability, authenticated memory, and provider-free extension loading pass the setup doctor. A missing cache entry is an error rather than permission to resolve or download a package. Setup does not install or update Pi, Node, Bun, Python, or uv.
 
 ## Agents and Skills
 
@@ -69,6 +39,7 @@ Agents are named for the kind of work they do, not for a subject area. The same 
 | `echo`     | Explore an unfamiliar topic, codebase, document set, or external source.       |
 | `ida`      | Generate a varied set of ideas, options, or hypotheses.                        |
 | `piper`    | Plan how to move from the current state to a goal.                             |
+| `rhea`     | Turn a bounded brief and admitted evidence into a complete specification.      |
 | `skribble` | Create files or other requested work products from a clear specification.      |
 | `synthia`  | Combine several sources or findings into one clear account.                    |
 | `tabitha`  | Turn an approved plan or specification into dependency-ordered tasks.          |
@@ -86,17 +57,47 @@ Skills are reusable multi-step jobs that work across subject areas. Most use the
 | `knowledge-base` | `knowledge_base` | Manages a private knowledge base under host-controlled access.                      |
 | `assess`         | `skill`          | Assesses submitted work against supplied criteria and evidence.                     |
 | `decide`         | `skill`          | Selects or ranks supplied options, or reports that no sound choice can yet be made. |
+| `define`         | `skill`          | Creates or fully revises a planning-ready cross-domain specification.               |
 | `diagnose`       | `skill`          | Assesses likely causes from supplied symptoms and evidence.                         |
-| `plan`           | `skill`          | Produces a strategy for reaching a stated goal.                                     |
+| `plan`           | `skill`          | Produces a strategy, with exact specification traceability when supplied.           |
 | `produce`        | `skill`          | Produces one reviewed text or code artifact from a complete brief.                  |
+| `sca`            | `skill`          | Runs scanner/graph-led security analysis and independently reviewed reporting.      |
 
-## How Penny Works
+## Architecture at a Glance
 
-System rules define Penny's standing behavior and safety limits. Agent definitions set each agent's role and maximum tool access. Skills add step-specific instructions, while [`AGENTS.md`](AGENTS.md) files direct Penny to the project guidance relevant to the current task. The user's request supplies the goal and task-specific constraints.
+Penny chooses the least-complex path expected to succeed:
 
-Agents work in separate sessions. Their results receive exact artifact IDs so another agent or skill step can read the same saved bytes. Skills keep checkpoints in SQLite, which lets an interrupted run resume without reconstructing earlier work from memory.
+| Path                    | What happens                                                                                                                    | Best fit                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Direct**              | The primary Penny session uses its current context and tools.                                                                   | The task is clear and does not need separate context or durable workflow. |
+| **Catalog agent**       | A named capability role runs in a fresh session. An ordinary catalog invocation receives exactly the role's YAML `tools:` list. | Focused analysis, generation, parallel exploration, or separate review.   |
+| **Engine-backed skill** | A registered playbook coordinates stages, exact handoffs, checkpoints, retries, gates, and resume behavior.                     | An established workflow needs durable control state or recovery.          |
 
-Five on-demand protocols cover artifact access, clarification, compaction recovery, routing and delegation, and tool use. They are indexed in [`docs/penny/AGENTS.md`](docs/penny/AGENTS.md).
+Tool profiles describe and lint a catalog role's declared tool surface; they are not a sandbox. Penny provides no filesystem, path, or process isolation. Primary and worker processes run within the invoking host's permissions, so an operator must supply an external container or VM when isolation is required. See [agent security](docs/humans/agents/system-prompt-security.md).
+
+### Five conceptual prompt layers
+
+| Layer                  | Practical purpose                                                             |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| **Cognitive Frame**    | Stable operating policy, trust boundaries, and completion discipline.         |
+| **Role Definition**    | A catalog agent's capability role and declared tool surface.                  |
+| **Domain Guidance**    | Static task-family criteria and the expected output contract.                 |
+| **Project Index**      | Typed `AGENTS.md` routes to the guidance relevant to the task.                |
+| **Invocation Context** | The current goal, constraints, exact artifact IDs, and caller-supplied paths. |
+
+`AGENTS.md` files route readers and runtimes to applicable guidance; they do not grant tools or permissions. Prompt markers are parsing aids, not enforcement: `<system_boundary>` ends system-role content before the separate user-role task. Enforcement comes from the actual tool surface, approval and receipt checks, artifact validation, and host OS or container boundaries. See the [prompt architecture overview](docs/humans/prompts/overview.md).
+
+### Three continuity planes
+
+| Plane                    | What it preserves                                                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| **Exact artifacts**      | Immutable output bytes addressed by exact ID for handoff, evidence, and later reads.                                     |
+| **Workflow checkpoints** | Compact control state and selected artifact references so a playbook can resume without guessing.                        |
+| **Durable memory**       | Optional, curated cross-session recall. It is advisory and never substitutes for required artifacts or checkpoint state. |
+
+Agents work in separate sessions, but exact artifacts—not memory or a name-only pointer—carry required work between them. Skills recover from checkpoints that retain artifact references rather than payload copies. See [skills](docs/humans/skills/overview.md), [state management](docs/humans/state-management/state-management.md), and [memory](docs/humans/memory/integration.md).
+
+Special operating protocols for artifact access, clarification, compaction recovery, routing, and tool use are indexed in [`docs/penny/AGENTS.md`](docs/penny/AGENTS.md).
 
 ## Progress and Limits
 
@@ -104,56 +105,16 @@ Skills report when a step starts and when a worker finishes or fails. Separate l
 
 ## Memory and Observability
 
-MemPalace is a core, default-enabled service. Create a private hub configuration from `scripts/setup/mempalace-hub.config.json.in`, start it with your preferred service manager, and set the matching `PENNY_MEMORY_*` values described in `.env.example`. `make setup` requires `MEMORY_HUB_CONFIG=/absolute/private/hub.json` and verifies supervisor identity, liveness, and authenticated status. It never opens palace bytes directly. Memory writes remain disabled until the checks listed in `.env.example` pass.
+Memory gives Penny selective continuity across sessions. MemPalace holds curated reusable knowledge, preferences, diary continuity, and temporal relationships. The primary Penny session controls durable writes, while workers can use bounded read-only recall when it is relevant. Memory remains advisory: it cannot replace an exact workflow artifact, determine checkpoint state, or turn an old claim into a currently verified fact.
 
-An explicit `make setup MEMORY_MODE=disabled` remains available for degraded recovery or testing, but `.env` must also explicitly set `PENNY_MEMORY_MODE=disabled` and the result is labeled as a no-memory profile. Memory remains separate from workflow artifacts and checkpoints, so disabling it does not grant setup permission to alter either persistence plane.
+Observability explains how the system behaved. Structured health, component, progress, and failure records support diagnosis and operational review without becoming workflow authority. Penny's observability database does not copy conversation transcripts; conversation history remains in Pi's session files and is read through the dedicated history surface when needed.
 
-Observability is enabled by default. Setup validates the canonical database and exercises the built service against disposable owner-only state on an ephemeral loopback port, including health and authentication behavior; it does not leave a background process running. Penny stores local diagnostic logs but does not copy conversation transcripts into its log database. Conversation history remains in Pi's local session files.
-
-## Development
-
-```bash
-make doctor            # Read-only core readiness check (never initializes state)
-make state-status      # Read-only canonical state and persistence check
-make verify-runtime    # Rebuild, then check retained invocation state (no model calls)
-make memory-status     # Read-only supervised/authenticated hub check
-make setup-browser     # Explicitly provision optional Playwright Chromium
-make setup-dev         # Install development/check dependency extras
-make test              # Run default fast tests and repository guards
-make test-integration  # Include heavier integration, network, slow, and end-to-end tests
-make lint              # Run lint and formatting checks
-make format            # Format supported files
-make clean             # Remove code dependencies but preserve memory data
-bun run pi:update      # Validate and update Pi safely
-```
-
-After orchestration changes, run `make verify-runtime` before declaring the installation ready for agent or skill calls. Run it when workflow workers and tests using the compiled runtime are stopped: the build replaces `dist`, and separate build processes are not serialized. It uses the shared frozen/offline build path, then checks the actual retained checkpoint, artifact, and receipt state against that build. It fails on missing or incompatible state without initializing, upgrading, or repairing it. A successful build or isolated test suite is not evidence that an existing installation's state is compatible. This check makes no model calls; provider execution and complete workflow behavior still need separately authorized live smoke tests.
-
-For `STATE_SCHEMA_INCOMPATIBLE`, stop active workflow writers and follow the reported explicit `penny-state upgrade --project-root=PATH --backup-dir=PATH` recovery action with a caller-selected private backup directory outside both the project and state roots. Then rerun `make verify-runtime`. Do not reset retained state or change its version marker by hand to bypass the error.
-
-Use `bun run pi:update` instead of running `pi update` directly from this repository. The updater checks the published Pi package in a clean temporary project, tests the candidate against Penny, and changes the global installation only when those checks pass. It does not add missing upstream dependencies or commit files.
-
-Normal startup only compares the running Pi version with the version pinned in this repository. It does not install packages or contact a package registry. See the [environment extension guide](.pi/extensions/environment/README.md) for details.
-
-## TLS and Certificate Trust
-
-Most users can launch Penny with plain `pi`, as shown in Quick Start. If Penny connects to a service that uses a custom or internal certificate authority, set the required Node.js environment variable before starting Pi. Loading it later from `.env` will not work.
-
-```bash
-# Trust system certificate authorities
-NODE_USE_SYSTEM_CA=1 pi
-
-# Trust one additional certificate authority
-NODE_EXTRA_CA_CERTS=/path/to/custom-ca.pem pi
-
-# Disable certificate checks for development only; not recommended
-NODE_TLS_REJECT_UNAUTHORIZED=0 pi
-```
-
-To keep one of these settings, export it from your shell profile such as `~/.bashrc` or `~/.zshrc`.
+Together, these capabilities keep long-term context and operational evidence available without mixing them with the exact artifacts and checkpoints that control active work. See [memory integration](docs/humans/memory/integration.md) and the [observability service](docs/humans/observability-server/observability-server.md).
 
 ## Documentation
 
+- The [human documentation hub](docs/humans/index.md) provides reading paths and routes to every human-facing domain.
+- The [glossary](docs/humans/glossary.md) defines Penny's runtime, workflow, persistence, and evidence terms.
 - The [documentation guide](docs/humans/documentation/overview.md) explains the human, agent, and protocol documentation areas.
 - [`docs/agents/AGENTS.md`](docs/agents/AGENTS.md) routes maintainers to the technical instructions for changing Penny.
 - [`docs/penny/AGENTS.md`](docs/penny/AGENTS.md) indexes Penny's on-demand operating protocols.

@@ -9,10 +9,12 @@ Use explicit state IDs and a successor table when each phase has one clear prede
 The engine checkpoints every accepted phase result and supplies the next worker only the
 selected exact refs.
 
-## Bounded repair
+## Policy-led repair
+
+Derive values from actual operator policy, not test constants or model guesses. An unspecified limit is not a finite default; productive work continues under cancellation, progress/inactivity and measured-error controls.
 
 Verifier failures return a typed cause and strategy delta, not a target. The engine selects
-the unique registered origin/cause route, consumes a finite budget, and re-enters verification.
+the unique registered origin/cause route, applies any actual operator-supplied limit, and re-enters verification.
 Budget exhaustion follows the registered honest successor. Checkpoint evidence contains only
 route hashes and counters, not findings or product bodies.
 
@@ -41,7 +43,7 @@ inline predecessor text. Chain checkpoints preserve exact refs across restart.
 
 ## Child reservation and active depth-one dispatch
 
-Penny now has the durable storage seam for a possible parent/child call. It verifies the canonical
+Penny has a durable storage seam for registered parent/child calls, separate from runtime dispatch. It verifies the canonical
 request and inputs in a concrete artifact store bound to the same project as the checkpointer. One
 transaction suspends the parent on its exact pending directive, creates an ordinary unstarted child
 run, and records both the call and initial events. Repeating the same immutable call adopts the
@@ -52,11 +54,12 @@ An ordinary service constructs the child owner by default, making an authorized 
 call executable; a host can explicitly disable it. The owner runs the reserved child through the
 same engine/runner, validates the terminal core, and atomically continues the parent exactly once.
 It enforces fixed project/call admission, uses the child's registered repair/liveness policy and
-service-wide step backstop instead of a guessed per-call resource allocation, and applies a
-content-free inactivity lease plus runner/parent cancellation forwarding. Child gates, arbitrary
-post-capture restart reconciliation, integrated artifact/receipt/session retention, promotion, and
-live qualification remain separate. Gate 2 is unrun. Only call/run rows receive the current
-linkage-based retention pin.
+operator-supplied service step limit, if present instead of a guessed per-call resource allocation, and applies a
+content-free inactivity lease plus runner/parent cancellation forwarding. Parent-mediated child
+gates/replies, waiting/captured-terminal recovery and linked control/gate/receipt/session retention
+are implemented under frozen bindings and cancellation/selection fences. Immutable artifact bytes
+are preserved. Provider promotion/live qualification remain separate; Gate 2 stays `not_run`.
+See [current status](state-management.md#current-child-workflow-status).
 
 ## Testing
 

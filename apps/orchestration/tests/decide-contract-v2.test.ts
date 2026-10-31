@@ -21,7 +21,7 @@ import {
   validateDecisionDraft,
   validateDecisionRequest,
   type DecisionDraftV2,
-} from "../src/index.js";
+} from "../dist/index.js";
 import {
   decisionDraft,
   decisionRequest,

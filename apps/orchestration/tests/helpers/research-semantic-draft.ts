@@ -1,10 +1,11 @@
-import type { ArtifactStore } from "../../src/artifact-store.js";
-import type { ArtifactRef } from "../../src/contracts.js";
-import type { AgentInvocation } from "../../src/model-client.js";
+import type { ArtifactStore } from "../../dist/artifact-store.js";
+import type { ArtifactRef } from "../../dist/contracts.js";
+import { requireRecord, requireRecordArray, requireValue } from "./narrowing.js";
+import type { AgentInvocation } from "../../dist/model-client.js";
 import {
   validateResearchSemanticDraft,
   type ResearchSemanticDraftV1,
-} from "../../src/skill-contracts/research.js";
+} from "../../dist/skill-contracts/research.js";
 
 export interface ResearchSemanticDraftFixtureOptions {
   readonly title?: string;
@@ -15,16 +16,22 @@ export interface ResearchSemanticDraftFixtureOptions {
   readonly qualified?: boolean;
   readonly blocking?: boolean;
   readonly absentExcerpt?: boolean;
+  readonly citedSlots?: readonly number[];
 }
 
-function orderedEvidenceArtifacts(refs: readonly ArtifactRef[]): ArtifactRef[] {
-  return refs
-    .filter((artifact) => artifact.phase === "researching" && artifact.kind === "agent-output")
-    .sort((left, right) =>
-      `${left.branch_id ?? ""}/${left.operation_id}/${left.artifact_id}`.localeCompare(
-        `${right.branch_id ?? ""}/${right.operation_id}/${right.artifact_id}`
-      )
+function orderedEvidenceArtifacts(invocation: AgentInvocation): ArtifactRef[] {
+  const text = requireValue(
+    invocation.task.match(/OWNER_SELECTED_EVIDENCE_SLOTS:(\{[^\n]+\})/u)?.[1],
+    "owner evidence slots"
+  );
+  const table = requireRecord(JSON.parse(text), "owner evidence slots");
+  return requireRecordArray(table["evidence_artifacts"], "evidence slots").map((entry, index) => {
+    if (entry["evidence_artifact_slot"] !== index) throw new Error("noncontiguous slot table");
+    return requireValue(
+      invocation.inputArtifacts.find((ref) => ref.artifact_id === entry["artifact_id"]),
+      "exact slot ref"
     );
+  });
 }
 
 function containedExcerpt(artifact: ArtifactRef, artifacts: ArtifactStore): string {
@@ -39,16 +46,17 @@ export function researchSemanticDraftFixture(
   artifacts: ArtifactStore,
   options: ResearchSemanticDraftFixtureOptions = {}
 ): ResearchSemanticDraftV1 {
-  const evidenceArtifacts = orderedEvidenceArtifacts(invocation.inputArtifacts);
+  const evidenceArtifacts = orderedEvidenceArtifacts(invocation);
   if (evidenceArtifacts.length === 0) throw new Error("semantic draft fixture has no evidence");
-  const evidence = evidenceArtifacts.map((artifact, index) => ({
+  const slots = options.citedSlots ?? evidenceArtifacts.map((_ref, slot) => slot);
+  const evidence = slots.map((slot, index) => ({
     source_index: index,
-    evidence_artifact_slot: index,
+    evidence_artifact_slot: slot,
     locator: `fixture-${index + 1}`,
     excerpt:
       options.absentExcerpt === true
         ? `absent-excerpt-${index + 1}`
-        : containedExcerpt(artifact, artifacts),
+        : containedExcerpt(requireValue(evidenceArtifacts[slot], "cited slot"), artifacts),
     relation: "supports" as const,
   }));
   return validateResearchSemanticDraft({

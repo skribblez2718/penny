@@ -4,16 +4,16 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { privateInputRoot } from "../src/private-inputs.js";
-import { CapabilityStore, capabilityStoreDirectory } from "../src/kb/capabilities.js";
+import { privateInputRoot } from "../dist/private-inputs.js";
+import { CapabilityStore, capabilityStoreDirectory } from "../dist/kb/capabilities.js";
 import {
   hostGrantAuthorityDir,
   kbHostStatePaths,
   kbProfileRegistryPath,
-} from "../src/kb/host-state.js";
-import { operationReceiptRoot } from "../src/kb/operation-receipts.js";
-import { approvalRootFor } from "../src/kb/promotion.js";
-import { saveClaimStoreDir } from "../src/kb/save-claim.js";
+} from "../dist/kb/host-state.js";
+import { operationReceiptRoot } from "../dist/kb/operation-receipts.js";
+import { approvalRootFor } from "../dist/kb/promotion.js";
+import { saveClaimStoreDir } from "../dist/kb/save-claim.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const roots: string[] = [];

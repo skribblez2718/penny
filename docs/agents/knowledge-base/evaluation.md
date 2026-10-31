@@ -1,36 +1,14 @@
 # Evaluation
 
-## Why some numbers were frozen before implementation
+## Current regression baseline
 
-Three values could not be chosen honestly after seeing results: the **package surface**, the
-**retrieval quality bar**, and the **research observation window**. If any had been selected after
-observing an outcome, the "gate" would have measured nothing — it would only have described what
-happened.
-
-For the completed implementation gate sequence, each was fixed in an explicit, operator-approved,
-independently reviewed decision receipt written before its boundary and digest-recorded:
-
-| Receipt              | Approved | Must predate                                        |
-| -------------------- | -------- | --------------------------------------------------- |
-| Package surface      | After G2 | The first app-package source write                  |
-| Retrieval baseline   | After G6 | Any retrieval implementation, tuning, or result run |
-| Research observation | After G5 | The first canary result                             |
-
-Those implementation-time receipts were strict canonical JSON in an ignored, owner-only store. The
-approver and independent reviewer were **different** identities, and the review hashed the complete
-decision. A model-authored or unreviewed file was not approval. Changing a frozen field invalidated
-the implementation evidence gathered under it.
-
-The completed receipts are historical decision evidence, not runtime state and not inputs to the
-current test suite. Current regression coverage is self-contained in tracked code and fixtures:
+Current regression coverage is self-contained in tracked code and fixtures; no owner-local legacy decision receipt is a current test input:
 
 - package-surface tests retain the receipt parser, validator, and exact-comparison unit contracts;
-- retrieval scoring reads `apps/orchestration/tests/fixtures/kb-retrieval.json` directly with
-  tracked `k = 10` and hit@k/MRR/contradiction-recall floors of `1 / 1 / 1`;
-- deterministic answer-quality execution reads the same fixture directly with `k = 10` and a
-  maximum bad-answer rate of `0`.
+- retrieval scoring reads `apps/orchestration/tests/fixtures/kb-retrieval.json` directly with tracked `k = 10` and hit@k/MRR/contradiction-recall floors of `1 / 1 / 1`;
+- deterministic answer-quality execution reads the same fixture directly with `k = 10` and a maximum bad-answer rate of `0`.
 
-No current regression test requires an owner-local legacy decision receipt.
+For a new implementation comparison, freeze the package surface before its first app-package source write, the retrieval baseline before retrieval implementation/tuning/result runs, and the observation cohort before the first canary result. Each decision requires explicit operator approval, an independent reviewer distinct from the approver, and a digest over the complete decision in strict canonical JSON. A model-authored or unreviewed file is not approval. Changing a frozen field invalidates the evidence collected under it. Historical implementation receipts do not supply runtime state or present-day qualification.
 
 ## Objective oracles
 
@@ -74,27 +52,9 @@ cost — so two engines are compared on behavior, not on incidental identifiers.
 Privacy incidents, recovery failures, and unexplained parity mismatches all have a maximum of
 **zero**. Later gates cannot infer, exclude, or weaken an absent value.
 
-## The gate ladder
+## Implementation history versus current gates
 
-| Gate | Established                                                                            |
-| ---- | -------------------------------------------------------------------------------------- |
-| G0   | External dirty-worktree baseline; no project mutation                                  |
-| G1   | Root bootstrap grammar and repository-wide nested `AGENTS.md` purity                   |
-| G2   | Canonical KB docs, exact five-file scaffold, privacy admission; no executable KB claim |
-| G3   | Compiled Node TypeScript shell and durable checkpointer                                |
-| G4   | Frozen research contract/trace parity and complete legacy-test disposition             |
-| G5   | Typed terminating results are the sole control boundary; no prose parsing              |
-| G6   | One thin two-tool adapter; research canary, rollback, owner-stickiness, privacy        |
-| G7   | Profiles, policy, capabilities, storage, generations, retrieval floor, lint floor      |
-| G8   | Artifact plane, stateful flows, skill, semantic lint, prepare-only end-to-end          |
-| G9   | Signed host-only promotion apply; package and copy-surface hardening                   |
-| G10  | Research cutover, owner drain, fresh consumer inventory, evidence-mapped retirement    |
-| G11  | Clean-clone release and capability ratchet                                             |
-
-**G6 is non-negotiable.** No stateful KB source, test, workflow, or implementation begins before it.
-The reason is ordering, not ceremony: the KB inherits the orchestration engine's typed result
-boundary, session isolation, and recovery semantics. Building KB state on an unproven engine would
-mean debugging two unproven layers at once and would make a privacy failure impossible to localize.
+The G0–G11 sequence records implementation chronology, not a present-day bootstrap prohibition. Its former pre-G6 ordering rule is not a gate on maintaining the completed KB. Current changes must preserve the typed engine-result boundary, session isolation, recovery, privacy, approval, and metric requirements below and supply current evidence; a historical milestone cannot substitute for it.
 
 ## Capability tests, not implementation tests
 

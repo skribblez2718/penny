@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { ContractValidationError } from "../dist/contracts.js";
 import {
   validateClaimRecord,
   validateDecisionRecord,
@@ -8,9 +9,19 @@ import {
   validateGateResult,
   validateManifest,
   validateTaskRecord,
-} from "../src/sca/contracts.js";
+} from "../dist/sca/contracts.js";
 import { requireValue } from "./helpers/narrowing.js";
 import { createValidScaDomainFixture } from "./helpers/sca-domain-fixtures.js";
+
+function schemaIssues(validate: () => unknown): readonly string[] {
+  try {
+    validate();
+  } catch (error) {
+    if (error instanceof ContractValidationError) return error.issues;
+    throw error;
+  }
+  throw new Error("expected malformed SCA input to fail schema validation");
+}
 
 function jsonRoundTrip(value: unknown): unknown {
   const parsed: unknown = JSON.parse(JSON.stringify(value));
@@ -92,15 +103,29 @@ describe("S-01 closed SCA ledger contracts", () => {
     const gate = requireValue(bundle.gates[0], "gate");
     const { title: _title, ...taskWithoutTitle } = task;
 
-    expect(() => validateTaskRecord(taskWithoutTitle)).toThrow(/title/u);
-    expect(() => validateClaimRecord({ ...claim, schema_version: 2 })).toThrow(/constant/u);
-    expect(() => validateEvidenceRef({ ...evidence, evidence_kind: "prose" })).toThrow();
-    expect(() => validateFindingRecord({ ...finding, status: "verified" })).toThrow();
-    expect(() => validateDecisionRecord({ ...decision, outcome: "allow" })).toThrow();
-    expect(() => validateGateResult({ ...gate, status: "success" })).toThrow();
-    expect(() =>
-      validateManifest({ ...bundle.manifest, schema_id: "penny.sca-manifest.v2" })
-    ).toThrow(/constant/u);
+    expect(schemaIssues(() => validateTaskRecord(taskWithoutTitle))).toContain(
+      "/: must have required properties title"
+    );
+    expect(schemaIssues(() => validateClaimRecord({ ...claim, schema_version: 2 }))).toContain(
+      "/schema_version: const constraint failed"
+    );
+    expect(
+      schemaIssues(() => validateEvidenceRef({ ...evidence, evidence_kind: "prose" }))
+    ).toContain("/evidence_kind: const constraint failed");
+    expect(schemaIssues(() => validateFindingRecord({ ...finding, status: "verified" }))).toContain(
+      "/status: const constraint failed"
+    );
+    expect(schemaIssues(() => validateDecisionRecord({ ...decision, outcome: "allow" }))).toContain(
+      "/outcome: const constraint failed"
+    );
+    expect(schemaIssues(() => validateGateResult({ ...gate, status: "success" }))).toContain(
+      "/status: const constraint failed"
+    );
+    expect(
+      schemaIssues(() =>
+        validateManifest({ ...bundle.manifest, schema_id: "penny.sca-manifest.v2" })
+      )
+    ).toContain("/schema_id: const constraint failed");
     expect(() =>
       validateEvidenceRef({
         ...evidence,

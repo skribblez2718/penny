@@ -1,4 +1,4 @@
-import type { Directive } from "../../src/contracts.js";
+import type { Directive } from "../../dist/contracts.js";
 
 type TerminalDirective = Extract<Directive, { result: Record<string, unknown> }>;
 type DirectiveForAction<Action extends Directive["action"]> =

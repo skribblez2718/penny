@@ -37,7 +37,8 @@ vi.mock("@earendil-works/pi-tui", () => ({
   Text: vi.fn().mockImplementation((text: string) => ({ text, x: 0, y: 0 })),
 }));
 
-import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 
 interface RegisteredSubagentTool {
   name: string;
@@ -137,7 +138,7 @@ describe("Subagent Integration — Tool Registration", () => {
     expect(subagent.description).toContain("use the skill tool instead");
   });
 
-  it("should discover all 8 agents from .pi/agents/", async () => {
+  it("should discover every agent from .pi/agents/", async () => {
     const projectRoot = path.resolve(process.cwd(), "../../..");
     const agentsDir = path.join(projectRoot, ".pi/agents");
     const files = fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md"));

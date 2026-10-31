@@ -30,8 +30,3 @@ Changing registries, install/build scripts, CI credentials, artifacts, provenanc
 
 - [Dependencies](dependencies.md) owns package admission.
 - [Secrets](secrets.md), [incident response](incident-response.md), and [security verification](security-verification.md) own related controls.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

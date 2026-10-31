@@ -84,12 +84,18 @@ function safeSleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function readBoundedResponse(response: Response, maximumBytes: number): Promise<Buffer> {
+async function readBoundedResponse(
+  response: Response,
+  maximumBytes: number,
+  onActivity: () => void
+): Promise<Buffer> {
+  onActivity();
   if (!response.body) {
     const bytes = Buffer.from(await response.arrayBuffer());
     if (bytes.length > maximumBytes) {
       throw new PlatformMemoryError("MEMORY_INTEGRITY", "memory response exceeded its hard bound");
     }
+    if (bytes.length > 0) onActivity();
     return bytes;
   }
 
@@ -109,6 +115,7 @@ async function readBoundedResponse(response: Response, maximumBytes: number): Pr
           "memory response exceeded its hard bound"
         );
       }
+      if (chunk.length > 0) onActivity();
       chunks.push(chunk);
     }
   } finally {
@@ -427,13 +434,18 @@ export class PlatformMemoryClientV1 {
 
     const controller = new AbortController();
     let timedOut = false;
+    let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
     const onCallerAbort = () => controller.abort();
+    const renewInactivity = (): void => {
+      if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, config.transport.requestTimeoutMs);
+      inactivityTimer.unref?.();
+    };
     callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, config.transport.requestTimeoutMs);
-    timer.unref?.();
+    renewInactivity();
 
     try {
       const response = await this.fetchImpl(config.target.endpoint, {
@@ -459,7 +471,11 @@ export class PlatformMemoryClientV1 {
           requestId
         );
       }
-      const raw = await readBoundedResponse(response, config.transport.maxResponseBytes);
+      const raw = await readBoundedResponse(
+        response,
+        config.transport.maxResponseBytes,
+        renewInactivity
+      );
       return {
         contractVersion: PLATFORM_MEMORY_CONTRACT_VERSION,
         operation,
@@ -479,7 +495,7 @@ export class PlatformMemoryClientV1 {
       if (timedOut) {
         throw new PlatformMemoryError(
           "MEMORY_TIMEOUT",
-          "memory service request timed out",
+          "memory service request became inactive",
           true,
           requestId
         );
@@ -492,7 +508,7 @@ export class PlatformMemoryClientV1 {
         requestId
       );
     } finally {
-      clearTimeout(timer);
+      if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
       callerSignal?.removeEventListener("abort", onCallerAbort);
     }
   }

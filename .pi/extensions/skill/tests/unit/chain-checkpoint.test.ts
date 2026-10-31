@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializePennyState } from "@penny/orchestration/source";
+import { initializePennyState } from "@penny/orchestration";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { expectedArtifactRef, type OutputArtifactMetadata } from "../../artifact-client.js";

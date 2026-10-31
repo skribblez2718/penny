@@ -16,7 +16,7 @@ import {
   type ArtifactRef,
   type AssessmentDraftV1,
   type AssessmentRequestV1,
-} from "../src/index.js";
+} from "../dist/index.js";
 
 const RUN_ID = "run-assess-contract";
 

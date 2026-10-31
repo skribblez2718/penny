@@ -17,9 +17,9 @@ import {
   resolveGrantedProfile,
   validateProfile,
   ProfileRegistryError,
-} from "../src/kb/profile-registry.js";
-import type { KbProfile, KbProfileRegistry } from "../src/kb/contracts.js";
-import { KbSessionProfileGrantStore } from "../src/kb/profile-grants.js";
+} from "../dist/kb/profile-registry.js";
+import type { KbProfile, KbProfileRegistry } from "../dist/kb/contracts.js";
+import { KbSessionProfileGrantStore } from "../dist/kb/profile-grants.js";
 
 const dirs: string[] = [];
 function tmp(): string {

@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 
-import { KbSessionProfileGrantStore } from "../../src/kb/profile-grants.js";
+import { KbSessionProfileGrantStore } from "../../dist/kb/profile-grants.js";
 import { installTestProjectState } from "./penny-state-fixture.js";
 
 /** Install an owner-only synthetic profile registry and active session grant. */

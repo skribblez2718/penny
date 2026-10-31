@@ -15,6 +15,8 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { ESLint } from "eslint";
+import { runEslintSuppressionAudit } from "./typescript-eslint-worker.mjs";
 import {
   analyzeTypeScriptGuard,
   MANDATORY_COMPILER_OPTIONS,
@@ -25,7 +27,11 @@ import {
   runTypeScriptLintFiles,
   validateTypeAwareTargets,
 } from "./typescript-lint.mjs";
-import { collectTypeScriptTestTargets, runTypeScriptTests } from "./typescript-tests.mjs";
+import {
+  collectTypeScriptTestTargets,
+  runTypeScriptTests,
+  vitestConfigFromScript,
+} from "./typescript-tests.mjs";
 
 const SCOPED_ROOTS = [
   ".pi/extensions",
@@ -368,6 +374,241 @@ async function withNegativeFixture(name, mutate, expected) {
 
 try {
   buildPositiveFixture(baseFixture);
+
+  await test("suppression worker uses a fixed Node entrypoint and data-only stdin", () => {
+    const filePath = path.join(baseFixture, ".pi/lib/fresh-untracked.ts");
+    const text =
+      '// eslint-disable-next-line no-console\nexport const value = "$(not-a-command)";\n';
+    const message = { message: "Unused eslint-disable directive.", line: 1, column: 1 };
+    let calls = 0;
+    const messages = runEslintSuppressionAudit(baseFixture, filePath, text, {
+      run(command, args, options) {
+        calls += 1;
+        assert.equal(command, process.execPath);
+        assert.deepEqual(args, [
+          path.join(projectRoot, "scripts/system/checks/typescript-eslint-worker.mjs"),
+          filePath,
+        ]);
+        assert.equal(options.cwd, baseFixture);
+        assert.equal(options.input, text);
+        assert.equal(options.shell, undefined);
+        assert.equal(options.killSignal, "SIGKILL");
+        assert(options.timeout > 0 && options.maxBuffer > 0);
+        return {
+          status: 0,
+          stdout: JSON.stringify({ version: 1, filePath, messages: [message] }),
+        };
+      },
+    });
+    assert.equal(calls, 1);
+    assert.deepEqual(messages, [message]);
+  });
+
+  await test("suppression worker rejects malformed, mismatched and incomplete responses", () => {
+    const filePath = path.join(baseFixture, ".pi/lib/fresh-untracked.ts");
+    for (const stdout of [
+      "not-json",
+      "null",
+      "[]",
+      JSON.stringify({ version: 1, filePath }),
+      JSON.stringify({ version: 2, filePath, messages: [] }),
+      JSON.stringify({ version: 1, filePath: `${filePath}.other`, messages: [] }),
+      JSON.stringify({ version: 1, filePath, messages: [], extra: true }),
+      JSON.stringify({ version: 1, filePath, messages: [null] }),
+      JSON.stringify({
+        version: 1,
+        filePath,
+        messages: [{ message: "other", line: 1, column: 1 }],
+      }),
+      JSON.stringify({
+        version: 1,
+        filePath,
+        messages: [{ message: "Unused eslint-disable directive.", line: 0, column: 1 }],
+      }),
+      JSON.stringify({
+        version: 1,
+        filePath,
+        messages: [{ message: "Unused eslint-disable directive.", line: 1, column: "1" }],
+      }),
+    ]) {
+      assert.throws(
+        () =>
+          runEslintSuppressionAudit(baseFixture, filePath, "", {
+            run: () => ({ status: 0, stdout }),
+          }),
+        /invalid|mismatched/u
+      );
+    }
+  });
+
+  await test("suppression worker failures cannot become successful empty diagnostics", () => {
+    const filePath = path.join(baseFixture, ".pi/lib/fresh-untracked.ts");
+    const scenarios = [
+      [{ error: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }) }, /ENOENT/u],
+      [
+        { error: Object.assign(new Error("expired"), { code: "ETIMEDOUT" }), signal: "SIGKILL" },
+        /timed out after 25 ms/u,
+      ],
+      [
+        { error: Object.assign(new Error("output exceeded"), { code: "ENOBUFS" }) },
+        /output exceeded/u,
+      ],
+      [{ status: null, signal: "SIGABRT" }, /terminated by signal SIGABRT/u],
+      [{ status: 2, stderr: "fixture failure" }, /status 2: fixture failure/u],
+    ];
+    for (const [result, expected] of scenarios) {
+      assert.throws(
+        () =>
+          runEslintSuppressionAudit(baseFixture, filePath, "", {
+            run: () => result,
+            timeoutMs: 25,
+          }),
+        expected
+      );
+    }
+    assert.deepEqual(
+      runEslintSuppressionAudit(baseFixture, filePath, "", {
+        run: () => ({ status: 0, stdout: JSON.stringify({ version: 1, filePath, messages: [] }) }),
+      }),
+      []
+    );
+  });
+
+  await test("suppression worker validates source bounds, paths and timeout before spawning", () => {
+    const filePath = path.join(baseFixture, ".pi/lib/fresh-untracked.ts");
+    const run = () => assert.fail("invalid audit must not spawn a worker");
+    for (const invalidPath of [
+      "relative.ts",
+      baseFixture,
+      path.join(baseFixture, "../outside.ts"),
+    ]) {
+      assert.throws(
+        () => runEslintSuppressionAudit(baseFixture, invalidPath, "", { run }),
+        /file/u
+      );
+    }
+    for (const text of [null, "\u00e9".repeat(8 * 1024 * 1024 + 1)]) {
+      assert.throws(
+        () => runEslintSuppressionAudit(baseFixture, filePath, text, { run }),
+        /envelope/u
+      );
+    }
+    for (const timeoutMs of [0, -1, Infinity, 1.5]) {
+      assert.throws(
+        () => runEslintSuppressionAudit(baseFixture, filePath, "", { run, timeoutMs }),
+        /timeout/u
+      );
+    }
+  });
+
+  await test("guard suppression analysis never loads typed ESLint programs in the parent", async () => {
+    const fixture = cloneFixture("isolated-suppression-audit");
+    const originalLintText = ESLint.prototype.lintText;
+    try {
+      write(
+        fixture,
+        ".pi/lib/fresh-untracked.ts",
+        '// eslint-disable-next-line @typescript-eslint/no-explicit-any\nexport const clean: string = "ok";\n'
+      );
+      ESLint.prototype.lintText = () => {
+        throw new Error("typed ESLint must run in a child");
+      };
+      const report = await analyzeTypeScriptGuard(guardOptions(fixture));
+      assert.deepEqual(
+        report.violations.map((violation) => violation.code),
+        ["ESLINT_CONTRACT_SUPPRESSION", "ESLINT_UNUSED_SUPPRESSION"]
+      );
+      assert(
+        report.violations.every(
+          (violation) => violation.path === ".pi/lib/fresh-untracked.ts" && violation.line === 1
+        )
+      );
+      assert.equal(report.evaluation.exitPass, false);
+    } finally {
+      ESLint.prototype.lintText = originalLintText;
+      rmSync(fixture, { recursive: true, force: true });
+      assert.equal(existsSync(fixture), false);
+      cleanupChecks += 1;
+    }
+  });
+
+  await test("guard fails closed when the real suppression worker exits", async () => {
+    const fixture = cloneFixture("suppression-worker-exit");
+    try {
+      const config = readFileSync(path.join(fixture, "eslint.config.mjs"), "utf8");
+      write(
+        fixture,
+        "eslint.config.mjs",
+        `if (process.argv[1]?.endsWith("typescript-eslint-worker.mjs")) { process.stderr.write("intentional worker exit"); process.exit(23); }\n${config}`
+      );
+      write(
+        fixture,
+        ".pi/lib/fresh-untracked.ts",
+        "// eslint-disable-next-line no-console\nexport const clean = true;\n"
+      );
+      const report = await analyzeTypeScriptGuard(guardOptions(fixture));
+      const finding = report.violations.find(
+        (violation) => violation.code === "ESLINT_CONFIG_ERROR"
+      );
+      assert(finding, "worker failure must be a guard failure");
+      assert.equal(finding.path, ".pi/lib/fresh-untracked.ts");
+      assert.match(finding.detail, /status 23: intentional worker exit/u);
+      assert.equal(report.evaluation.exitPass, false);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+      assert.equal(existsSync(fixture), false);
+      cleanupChecks += 1;
+    }
+  });
+
+  await test("real suppression worker rejects fatal parsing, ignored files and oversized input", () => {
+    const filePath = path.join(baseFixture, ".pi/lib/fresh-untracked.ts");
+    assert.throws(
+      () => runEslintSuppressionAudit(baseFixture, filePath, "export const broken = ;\n"),
+      /ESLint could not parse the file/u
+    );
+    assert.throws(
+      () =>
+        runEslintSuppressionAudit(
+          baseFixture,
+          path.join(baseFixture, "node_modules/ignored.ts"),
+          ""
+        ),
+      /exactly one result/u
+    );
+    const result = spawnSync(
+      process.execPath,
+      [path.join(projectRoot, "scripts/system/checks/typescript-eslint-worker.mjs"), filePath],
+      {
+        cwd: baseFixture,
+        input: "x".repeat(16 * 1024 * 1024 + 1),
+        encoding: "utf8",
+        timeout: 10_000,
+      }
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /source exceeds.*envelope/u);
+    assert.equal(result.stdout, "");
+  });
+
+  await test("real suppression worker enforces timeout and rejects outside-root files", () => {
+    const filePath = path.join(baseFixture, ".pi/lib/fresh-untracked.ts");
+    assert.throws(
+      () => runEslintSuppressionAudit(baseFixture, filePath, "", { timeoutMs: 1 }),
+      /timed out after 1 ms/u
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(projectRoot, "scripts/system/checks/typescript-eslint-worker.mjs"),
+        path.join(temporaryParent, "outside.ts"),
+      ],
+      { cwd: baseFixture, input: "", encoding: "utf8" }
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /within the configured project root/u);
+    assert.equal(result.stdout, "");
+  });
 
   await test("positive fixture discovers exactly the caller-supplied roots and certifies direct no-baseline compliance", async () => {
     write(baseFixture, "outside-scope/not-owned.ts", "export const outside: any = 1;\n");
@@ -1118,6 +1359,66 @@ try {
         )
       );
       assert.equal(report.evaluation.exitPass, true);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+      assert.equal(existsSync(fixture), false);
+      cleanupChecks += 1;
+    }
+  });
+
+  await test("runner mapping rejects formatter and quoted mentions but admits actual CLI commands", () => {
+    const directory = path.join(temporaryParent, "runner-command-parsing");
+    for (const script of [
+      "prettier --check src tests vitest.config.ts",
+      'echo "vitest run --config fake.ts"',
+      'echo "please; vitest run --config fake.ts"',
+      "node not-vitest.mjs run --config fake.ts",
+    ]) {
+      assert.equal(vitestConfigFromScript(script, directory), undefined, script);
+    }
+    for (const script of [
+      "vitest run --config tests/real.config.ts",
+      "bunx vitest run --config tests/real.config.ts",
+      "npx vitest run --config tests/real.config.ts",
+      "node ./node_modules/vitest/vitest.mjs run --config tests/real.config.ts",
+      'node "./space dir/vitest.mjs" run --config tests/real.config.ts',
+      "prettier --config wrong.ts vitest.config.ts && vitest run --config tests/real.config.ts",
+      'echo "not a test; vitest run --config fake.ts"; vitest run --config tests/real.config.ts',
+    ]) {
+      assert.equal(
+        vitestConfigFromScript(script, directory),
+        path.join(directory, "tests/real.config.ts"),
+        script
+      );
+    }
+    assert.equal(
+      vitestConfigFromScript("vitest run && prettier --config unrelated.ts", directory),
+      path.join(directory, "vitest.config.ts")
+    );
+  });
+
+  await test("aggregate chooses the actual service runner instead of its earlier formatter script", () => {
+    const fixture = path.join(temporaryParent, "runner-format-not-tests");
+    try {
+      buildRunnerFixture(fixture);
+      updateJson(fixture, "apps/sca-service/package.json", (manifest) => {
+        manifest.scripts["format:check"] = "echo prettier --check src tests vitest.config.ts";
+        manifest.scripts["test:all"] = "bun run format:check && bun run test";
+      });
+      const target = collectTypeScriptTestTargets(fixture).find(
+        (entry) => entry.package === "apps/sca-service"
+      );
+      assert.equal(target?.script, "test");
+      const negative = "apps/sca-service/tests/formatter-false-green.test.ts";
+      write(
+        fixture,
+        negative,
+        'import { it } from "vitest"; it("SERVICE_MUST_ACTUALLY_RUN", () => { throw new Error("SERVICE_MUST_ACTUALLY_RUN"); });\n'
+      );
+      assert.throws(
+        () => runTypeScriptTests(fixture, { captureOutput: true, quiet: true }),
+        /SERVICE_MUST_ACTUALLY_RUN/u
+      );
     } finally {
       rmSync(fixture, { recursive: true, force: true });
       assert.equal(existsSync(fixture), false);

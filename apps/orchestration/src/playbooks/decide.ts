@@ -1,9 +1,10 @@
-import { Type } from "typebox";
+import { sealAttempt } from "./seal-attempt.js";
+import { Type, type TSchema } from "typebox";
 
-import type {
-  ArtifactHostStore,
-  ArtifactReader,
-  ArtifactRevisionLookup,
+import {
+  type ArtifactHostStore,
+  type ArtifactReader,
+  type ArtifactRevisionLookup,
 } from "../artifact-store.js";
 import { canonicalJson, sha256 } from "../checkpointer.js";
 import {
@@ -11,9 +12,9 @@ import {
   type ArtifactRef,
   type Confidence,
   type Directive,
-  type EvaluationResultV2,
+  type EvaluationResult,
   type JsonValue,
-  type LivenessPolicyV3,
+  type LivenessPolicy,
   type LivenessSnapshotV1,
   type LivenessTerminalReason,
   type OutputArtifactMetadata,
@@ -22,6 +23,7 @@ import {
 } from "../contracts.js";
 import { RunContext } from "../context.js";
 import { ordinaryLivenessPolicy } from "../liveness.js";
+import { validateSourceRoutingSummary } from "../source-routing-summary.js";
 import {
   assertDecisionLineage,
   DecisionRequestConstraintsV1Schema,
@@ -34,12 +36,12 @@ import {
   parsePersistedDecisionDraft,
   sealDecisionDraft,
   validateCanonicalDecisionBytes,
+  validateDecision,
   validateDecisionProductEnvelope,
   validateDecisionProductIntegrity,
   validateDecisionRequest,
   validateDecisionSealFeedback,
   DecisionDraftValidationError,
-  type DecisionDraftV2,
   type DecisionProductEnvelopeV1,
   type DecisionProductIntegrityV1,
   type DecisionRequestV1,
@@ -60,19 +62,30 @@ import {
   type ReviewSubjectV1,
 } from "../skill-contracts/review.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
+import type { SealProjectionV1 } from "./seal-attempt.js";
+import {
+  sealDiagnosticsProjection,
+  sealPolicySha256,
+  runSealPolicy,
+  validateSealDiagnostic,
+  type SealDiagnosticV1,
+  type SealIssueV1,
+  type SealPolicyV1,
+} from "../skill-contracts/sealing.js";
 import {
   hostContinuation,
   type CompletionReceiptPredicateV1,
   type HostContinuationCapabilityV1,
   type HostContinuationStepV1,
   type LivenessTerminalCapabilityV1,
-  type PlaybookCoreV1,
-  type PlaybookStepOutcomeV1,
+  type PlaybookCore,
+  type PlaybookStepOutcome,
   type RepairExhaustionCapabilityV1,
+  type RepairProgressCapabilityV1,
   type RoutingRepairCapabilityV1,
   type StateAwareRepairCapabilityV1,
 } from "./playbook.js";
-import type { PlaybookRegistrationV1, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
+import type { PlaybookRegistration, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
 
 export const DECIDE_PLAYBOOK_NAME = "decide";
 
@@ -128,10 +141,24 @@ export const DECIDE_FLOW = {
   ],
 } as const;
 
+export const DECIDE_SEAL_POLICY: SealPolicyV1 = {
+  schema_id: "penny.seal-policy.v1",
+  schema_version: 1,
+  skill: "decide",
+  draft_phase: "deciding",
+  seal_phase: "sealing_decision",
+  draft_schema: "penny.decision-draft.v2",
+  draft_schema_version: 2,
+  draft_kind: "decision-draft",
+  product_kind: "semantic-core",
+  correction_limit: null,
+  diagnostic_schema: "penny.seal-diagnostic.v1",
+};
+
 export const DECIDE_LIVENESS_POLICY = ordinaryLivenessPolicy({
   scope: "orchestrated-decide-workflow",
   preset: "ordinary-progress-lease-v3",
-}) satisfies LivenessPolicyV3;
+}) satisfies LivenessPolicy;
 
 const FindingSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const StrategyDeltaSchema = Type.String({ minLength: 1, maxLength: 4_096 });
@@ -215,6 +242,17 @@ const VerificationSummarySchema = Type.Union([
       gap_kind: Type.Literal("none"),
       repair_owner: Type.Literal("none"),
       findings: FindingsSchema,
+      evidence: EvidenceChecksSchema,
+      strategy_delta: StrategyDeltaSchema,
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      verdict: Type.Literal("UNVERIFIABLE"),
+      gap_kind: Type.Literal("verification_incomplete"),
+      repair_owner: Type.Literal("none"),
+      findings: Type.Array(FindingSchema, { minItems: 1, maxItems: 32 }),
       evidence: EvidenceChecksSchema,
       strategy_delta: StrategyDeltaSchema,
     },
@@ -415,13 +453,9 @@ function selectedLatest(
   predicate: (artifact: ArtifactRef) => boolean
 ): ArtifactRef | undefined {
   return [...context.selectedArtifacts]
-    .filter(predicate)
-    .sort(
-      (left, right) =>
-        right.version - left.version || right.artifact_id.localeCompare(left.artifact_id)
-    )[0];
+    .reverse()
+    .find((artifact) => artifact.run_id === context.identity.run_id && predicate(artifact));
 }
-
 function addSelectedArtifact(context: RunContext, artifact: ArtifactRef): boolean {
   const selected = context.selectedArtifacts.find(
     (candidate) => candidate.artifact_id === artifact.artifact_id
@@ -501,14 +535,16 @@ function latestDecisionDraftArtifact(context: RunContext): ArtifactRef | undefin
 }
 
 function latestDecisionArtifact(context: RunContext): ArtifactRef | undefined {
-  return selectedLatest(
-    context,
-    (artifact) =>
-      artifact.kind === "semantic-core" &&
-      artifact.phase === "sealing_decision" &&
-      artifact.content_schema?.schema_id === "penny.decision.v2" &&
-      artifact.content_schema.schema_version === 2
-  );
+  return [...context.selectedArtifacts]
+    .reverse()
+    .find(
+      (artifact) =>
+        artifact.run_id === context.identity.run_id &&
+        artifact.kind === "semantic-core" &&
+        artifact.phase === "sealing_decision" &&
+        artifact.content_schema?.schema_id === "penny.decision.v2" &&
+        artifact.content_schema.schema_version === 2
+    );
 }
 
 function latestReviewReportArtifact(
@@ -531,14 +567,41 @@ function latestReviewReceiptArtifact(
   );
 }
 
-function selectedDecisionSealFeedbackArtifact(context: RunContext): ArtifactRef | undefined {
-  return selectedLatest(
-    context,
-    (artifact) =>
-      artifact.kind === "decision-seal-feedback" &&
-      artifact.phase === "sealing_decision" &&
-      artifact.content_schema?.schema_id === "penny.decision-seal-feedback.v2"
-  );
+export function decideCurrentSealDiagnosticRef(context: RunContext): ArtifactRef | undefined {
+  const anchor = latestDecisionArtifact(context);
+  const after =
+    anchor === undefined
+      ? 0
+      : context.selectedArtifacts.findIndex(
+          (artifact) => artifact.artifact_id === anchor.artifact_id
+        ) + 1;
+  return [...context.selectedArtifacts.slice(after)]
+    .reverse()
+    .find(
+      (artifact) =>
+        artifact.run_id === context.identity.run_id &&
+        artifact.kind === "seal-diagnostic" &&
+        artifact.phase === "sealing_decision" &&
+        artifact.content_schema?.schema_id === "penny.seal-diagnostic.v1"
+    );
+}
+
+function currentSealDiagnostic(context: RunContext, store: ArtifactHostStore) {
+  const ref = decideCurrentSealDiagnosticRef(context);
+  if (ref === undefined) return undefined;
+  const bytes = store.readById(ref.artifact_id);
+  const parsed: unknown = JSON.parse(bytes.toString("utf8"));
+  const diagnostic = validateSealDiagnostic(parsed, runSealPolicy(context, DECIDE_SEAL_POLICY));
+  if (
+    canonicalJson(diagnostic) !== bytes.toString("utf8") ||
+    canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+    diagnostic.rejected_draft_ref.run_id !== context.identity.run_id ||
+    canonicalJson(diagnostic.epoch_anchor_ref) !==
+      canonicalJson(latestDecisionArtifact(context) ?? null)
+  ) {
+    throw new Error("current seal diagnostic custody or epoch mismatch");
+  }
+  return { ref, diagnostic };
 }
 
 function latestIntegrityArtifact(context: RunContext): ArtifactRef | undefined {
@@ -694,11 +757,11 @@ function refsForState(context: RunContext, state: DecideWorkerState): readonly A
   const carrenReport = latestReviewReportArtifact(context, "critiquing_decision");
   const validityReceipt = latestReviewReceiptArtifact(context, "validity");
   if (state === "analyzing_decision") {
-    return uniqueRefs([request, ...inputs, evidence, analysis, veraReport, carrenReport]);
+    return uniqueRefs([request, ...inputs, evidence, analysis, product, veraReport, carrenReport]);
   }
   if (state === "gathering_decision_evidence") {
     if (analysis === undefined) throw new Error("Echo requires the exact Annie analysis");
-    return uniqueRefs([request, ...inputs, analysis, admission, veraReport, carrenReport]);
+    return uniqueRefs([request, ...inputs, analysis, admission, product, veraReport, carrenReport]);
   }
   if (state === "deciding") {
     if (analysis === undefined) throw new Error("Demetri requires the exact Annie analysis");
@@ -709,7 +772,8 @@ function refsForState(context: RunContext, state: DecideWorkerState): readonly A
       evidence,
       ...inputs,
       draft,
-      selectedDecisionSealFeedbackArtifact(context),
+      decideCurrentSealDiagnosticRef(context),
+      product,
       veraReport,
       carrenReport,
     ]);
@@ -725,7 +789,17 @@ function refsForState(context: RunContext, state: DecideWorkerState): readonly A
     );
   }
   if (state === "verifying_decision") {
-    return uniqueRefs([request, analysis, admission, draft, product, evidence, ...inputs]);
+    return uniqueRefs([
+      request,
+      analysis,
+      admission,
+      draft,
+      product,
+      evidence,
+      ...inputs,
+      veraReport,
+      carrenReport,
+    ]);
   }
   if (veraReport === undefined || validityReceipt === undefined) {
     throw new Error("Carren requires Vera's exact report and host validity receipt");
@@ -739,6 +813,7 @@ function refsForState(context: RunContext, state: DecideWorkerState): readonly A
     evidence,
     ...inputs,
     veraReport,
+    carrenReport,
     validityReceipt,
   ]);
 }
@@ -746,6 +821,7 @@ function refsForState(context: RunContext, state: DecideWorkerState): readonly A
 function slotForRef(ref: ArtifactRef): string {
   if (ref.kind === "decision-request") return "decision-request";
   if (ref.kind === "decision-draft") return "latest-decision-draft";
+  if (ref.kind === "seal-diagnostic") return "seal-diagnostic";
   if (ref.kind === "decision-seal-feedback") return "decision-seal-feedback";
   if (ref.kind === "review-receipt") return `prior-${ref.branch_id ?? "review"}-receipt`;
   if (ref.kind === "evidence-admission") return "decision-evidence-admission";
@@ -761,9 +837,9 @@ function slotForRef(ref: ArtifactRef): string {
   return `input-${ref.artifact_id.slice(-12)}`;
 }
 
-function taskForState(context: RunContext, state: DecideWorkerState): string {
+function taskForState(state: DecideWorkerState): string {
   const common =
-    "artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. If an exact EvidenceContextV1 is supplied, read it and any needed source_ref artifacts through artifact_read; treat it only as contextual input and never copy the packet into task prose or relabel it as native EvidenceAdmissionV1, gathered evidence, approval, or proof. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not bypass host-owned evidence admission. The owner captures and re-reads complete bytes; do not claim persistence.";
+    "artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. If an exact EvidenceContextV1 is supplied, read it and any needed source_ref artifacts through artifact_read; treat it only as contextual input and never copy the packet into task prose or relabel it as native EvidenceAdmissionV1, gathered evidence, approval, or proof. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not bypass host-owned evidence admission. On repair, the latest same-run sealed DecisionV2 is the exact previously reviewed product; use it and the latest reports from both review stages to fix the whole reported contract, not just one example. Reports about earlier product versions are historical feedback, never approval or evidence for a newly sealed product. Recheck the current sealed product; a current-product Vera PASS and its host validity receipt support validity only, not automatic quality approval. The owner captures and re-reads complete bytes; do not claim persistence.";
   switch (state) {
     case "analyzing_decision":
       return [
@@ -786,7 +862,7 @@ function taskForState(context: RunContext, state: DecideWorkerState): string {
       return [
         common,
         "Verify the exact latest sealed DecisionV2 against the exact request, Annie analysis, Demetri draft, optional admitted evidence, and GroundedSynthesis inputs. Check all constraints, feasibility, complete comparison, no invented preference, disposition consistency, evidence fidelity, sensitivity, lineage-relevant source use, and no execution. PASS only when valid.",
-        "On FAIL emit exactly one gap_kind and repair_owner: evidence_gap/echo, analysis_gap/annie, or product_gap/demetri. On PASS use none/none. Never emit a target state.",
+        "On FAIL emit exactly one gap_kind and repair_owner: evidence_gap/echo, analysis_gap/annie, or product_gap/demetri. On PASS use none/none. If the available evidence cannot establish validity, emit UNVERIFIABLE/verification_incomplete/none with findings and evidence limitations, never an author repair. A valid unresolved decision is distinct from verification inability. HOST_MECHANICAL_CHECKS is scoped host evidence, not semantic approval or proof of effect absence. Integrity/envelope artifacts are post-review and are not author deliverables. Never emit a target state.",
       ].join("\n\n");
     case "critiquing_decision":
       return [
@@ -928,11 +1004,8 @@ function persistDecisionEvidenceAdmission(input: {
   return { ...persisted, value };
 }
 
-function decisionSealFeedbackOperationId(context: RunContext): string {
-  return `decision-seal-feedback:${sha256(context.identity.run_id).slice(0, 32)}`;
-}
-
-function readDecisionSealFeedback(
+/** Legacy feedback reader for historical artifacts; new correction authority is SealDiagnosticV1. */
+export function readDecisionSealFeedback(
   store: ArtifactHostStore,
   artifact: ArtifactRef
 ): DecisionSealFeedbackV2 {
@@ -950,168 +1023,61 @@ function readDecisionSealFeedback(
   return feedback;
 }
 
-function persistDecisionSealFeedback(input: {
-  readonly context: RunContext;
-  readonly store: ArtifactHostStore;
-  readonly draftArtifact: ArtifactRef;
-  readonly failure: DecisionDraftValidationError;
-}): { readonly artifact: ArtifactRef; readonly added: boolean } {
-  if (input.failure.failureClass === "LINEAGE_INVALID") {
-    throw new Error("DecisionDraftV2 lineage failures are not model-correctable");
+function boundedSealDetail(issue: string): string {
+  if (Buffer.byteLength(issue, "utf8") <= 512) return issue;
+  let detail = "";
+  let bytes = 0;
+  for (const character of issue) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > 509) break;
+    detail += character;
+    bytes += size;
   }
-  const feedback = validateDecisionSealFeedback({
-    schema_id: "penny.decision-seal-feedback.v2",
-    schema_version: 2,
-    attempt: 1,
-    rejected_draft_artifact_id: input.draftArtifact.artifact_id,
-    failure_class: input.failure.failureClass,
-    issues: input.failure.issues,
-  });
-  const operationId = decisionSealFeedbackOperationId(input.context);
-  const metadata: OutputArtifactMetadata = {
-    schema_version: 2,
-    run_id: input.context.identity.run_id,
-    phase: "sealing_decision",
-    branch_id: null,
-    kind: "decision-seal-feedback",
-    operation_id: operationId,
-    version: 1,
-    producer: "host:decision-sealer",
-    media_type: "application/json",
-    content_schema: { schema_id: "penny.decision-seal-feedback.v2", schema_version: 2 },
-    parent_ref: null,
-    upstream_refs: [input.draftArtifact],
-  };
-  const existing = input.store.refFor(
-    input.context.identity.run_id,
-    "sealing_decision",
-    null,
-    "decision-seal-feedback",
-    operationId,
-    1
-  );
-  const content = canonicalJson(feedback);
-  const artifact = existing ?? input.store.persist({ metadata, content });
-  if (
-    canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
-    input.store.readById(artifact.artifact_id).toString("utf8") !== content ||
-    canonicalJson(readDecisionSealFeedback(input.store, artifact)) !== canonicalJson(feedback)
-  ) {
-    throw new Error("DecisionSealFeedbackV2 deterministic persistence diverged");
-  }
-  const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("DecisionSealFeedbackV2 manifest re-read failed");
-  input.store.select(reread);
-  return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
+  return `${detail}…`;
 }
 
-function persistSealedDecision(input: {
+function sealIssues(error: { failureClass: string; issues: readonly string[] }): SealIssueV1[] {
+  // Keep diagnostics bounded and avoid copying an authored payload into a public error.
+  if (error.issues.length === 0 || error.issues.length > 1024)
+    throw new Error("seal diagnostic issue bound violated");
+  return error.issues.map((issue, index) => ({
+    code: `${error.failureClass}_${index}`,
+    path: "/draft",
+    detail: boundedSealDetail(issue),
+    source_ordinals: [],
+  }));
+}
+
+/** Seal-attempt-compatible adapter for the artifact owner's revision-chain CAS.
+ * It requires one stable operation ID per phase/kind; the checkpointed anchor/draft
+ * determine the next revision, and exact metadata/readback enforce adopt-or-conflict. */
+function persistSealOperation(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
-  readonly requestArtifact: ArtifactRef;
-  readonly analysisArtifact: ArtifactRef;
-  readonly admissionArtifact: ArtifactRef;
-  readonly evidenceRefs: readonly ArtifactRef[];
-  readonly inputRefs: readonly ArtifactRef[];
-  readonly draftArtifact: ArtifactRef;
-  readonly draft: DecisionDraftV2;
-}): { readonly artifact: ArtifactRef; readonly added: boolean } {
-  const request = canonicalDecisionRequest(input.store, input.context);
-  const decision = sealDecisionDraft({
-    request,
-    draft: input.draft,
-    requestSha256: decisionRequestSha256(request),
-    sourceRequestArtifactId: input.requestArtifact.artifact_id,
-    sourceDraftArtifactId: input.draftArtifact.artifact_id,
-    exactInputArtifactIds: input.inputRefs.map((artifact) => artifact.artifact_id),
-  });
-  const content = canonicalJson(decision);
-  const operationId = `sealed-decision:${sha256(input.context.identity.run_id).slice(0, 32)}`;
-  const parent = latestDecisionArtifact(input.context);
-  const storedVersion = input.store.lastVersion(
-    input.context.identity.run_id,
-    "sealing_decision",
-    null,
-    "semantic-core",
-    operationId
-  );
-  const upstreamRefs = [
-    input.requestArtifact,
-    input.analysisArtifact,
-    input.admissionArtifact,
-    ...input.evidenceRefs,
-    ...input.inputRefs,
-    input.draftArtifact,
-  ];
-  const interrupted =
-    storedVersion === 0
-      ? null
-      : input.store.refFor(
-          input.context.identity.run_id,
-          "sealing_decision",
-          null,
-          "semantic-core",
-          operationId,
-          storedVersion
-        );
-  if (
-    interrupted !== null &&
-    input.store.readById(interrupted.artifact_id).toString("utf8") === content &&
-    canonicalJson(input.store.metadata(interrupted).upstream_refs) === canonicalJson(upstreamRefs)
-  ) {
-    input.store.select(interrupted);
-    validateCanonicalDecisionBytes(input.store.readById(interrupted.artifact_id), interrupted);
-    return { artifact: interrupted, added: addSelectedArtifact(input.context, interrupted) };
-  }
-  const version = Math.max(parent?.version ?? 0, storedVersion) + 1;
-  const parentRef =
-    version === 1
-      ? null
-      : input.store.refFor(
-          input.context.identity.run_id,
-          "sealing_decision",
-          null,
-          "semantic-core",
-          operationId,
-          version - 1
-        );
-  if (version > 1 && parentRef === null) {
-    throw new Error("DecisionV2 revision chain is missing its preceding product");
-  }
-  const metadata: OutputArtifactMetadata = {
-    schema_version: 2,
+  readonly draft: ArtifactRef;
+  readonly anchor: ArtifactRef | null;
+  readonly previous: ReturnType<typeof currentSealDiagnostic>;
+  readonly project: (bytes: Buffer) => SealProjectionV1;
+  readonly validateProduct: (bytes: Buffer, ref: ArtifactRef) => void;
+}):
+  | { status: "sealed"; product_ref: ArtifactRef }
+  | { status: "rejected"; diagnostic_ref: ArtifactRef; diagnostic: SealDiagnosticV1 } {
+  const result = sealAttempt({
+    store: input.store,
+    policy: runSealPolicy(input.context, DECIDE_SEAL_POLICY),
+    registered_policy_sha256: sealPolicySha256(runSealPolicy(input.context, DECIDE_SEAL_POLICY)),
     run_id: input.context.identity.run_id,
-    phase: "sealing_decision",
     branch_id: null,
-    kind: "semantic-core",
-    operation_id: operationId,
-    version,
-    producer: "host:decision-sealer",
-    media_type: "application/json",
-    content_schema: { schema_id: "penny.decision.v2", schema_version: 2 },
-    parent_ref: parentRef,
-    upstream_refs: upstreamRefs,
-  };
-  const orphan = input.store.refFor(
-    input.context.identity.run_id,
-    "sealing_decision",
-    null,
-    "semantic-core",
-    operationId,
-    version
-  );
-  const artifact = orphan ?? input.store.persist({ metadata, content });
-  if (
-    canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
-    input.store.readById(artifact.artifact_id).toString("utf8") !== content
-  ) {
-    throw new Error("DecisionV2 host artifact diverged from deterministic sealing");
-  }
-  const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("DecisionV2 host artifact failed manifest re-read");
-  input.store.select(reread);
-  validateCanonicalDecisionBytes(input.store.readById(reread.artifact_id), reread);
-  return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
+    phase: runSealPolicy(input.context, DECIDE_SEAL_POLICY).seal_phase,
+    draft_ref: input.draft,
+    epoch_anchor_ref: input.anchor,
+    previous_diagnostic_ref: input.previous?.ref ?? null,
+    rejection_ordinal: input.previous?.diagnostic.rejection_ordinal ?? 0,
+    project: input.project,
+    validate_product_bytes: input.validateProduct,
+  });
+  if (result.status === "fault") throw new Error(`decide seal host fault: ${result.code}`);
+  return result;
 }
 
 function eventString(value: JsonValue | undefined): string | undefined {
@@ -1377,46 +1343,9 @@ function exactExecutionReceiptIds(input: {
   if (new Set(artifactIds).size !== artifactIds.length) {
     throw new Error("decision execution-evidence artifacts must be unique");
   }
-  const events = input.checkpointer.events(input.context.identity.run_id);
-  const groups = input.artifacts.map((artifact) => {
-    const matches: string[][] = [];
-    for (const event of events) {
-      const acceptedId = eventString(event.payload.receipt_id);
-      if (acceptedId !== undefined) {
-        const result = input.checkpointer.receiptResultById(acceptedId);
-        if (
-          result !== undefined &&
-          result.worker_receipt.receipt_id === acceptedId &&
-          canonicalJson(result.output_artifact) === canonicalJson(artifact)
-        ) {
-          matches.push([acceptedId]);
-        }
-      }
-      const sourceId = eventString(event.payload.source_receipt_id);
-      const repairId = eventString(event.payload.repair_receipt_id);
-      if (sourceId !== undefined && repairId !== undefined) {
-        const source = input.checkpointer.receiptResultById(sourceId);
-        const repair = input.checkpointer.receiptResultById(repairId);
-        if (
-          source !== undefined &&
-          repair !== undefined &&
-          source.worker_receipt.receipt_id === sourceId &&
-          repair.worker_receipt.receipt_id === repairId &&
-          canonicalJson(source.output_artifact) === canonicalJson(artifact) &&
-          repair.output_artifact.kind === "routing-metadata"
-        ) {
-          matches.push([sourceId, repairId]);
-        }
-      }
-    }
-    if (matches.length !== 1) {
-      throw new Error(
-        `decision artifact '${artifact.artifact_id}' requires exactly one accepted execution-evidence group`
-      );
-    }
-    return matches[0] ?? [];
-  });
-  const ids = groups.flat();
+  const ids = input.artifacts.flatMap(
+    (artifact) => exactAcceptedExecutionGroup({ ...input, artifact }).receiptIds
+  );
   if (new Set(ids).size !== ids.length) {
     throw new Error("decision execution receipt IDs must map one-to-one to exact artifacts");
   }
@@ -1642,8 +1571,10 @@ function gapOwner(kind: RepairGapKind): RepairOwner {
 function reviewEvaluation(
   state: ReviewState,
   details: Record<string, JsonValue>
-): EvaluationResultV2 | null {
+): EvaluationResult | null {
   const verdict = details.verdict;
+  // Inability to verify is not a repairable defect in an otherwise valid product.
+  if (state === "verifying_decision" && verdict === "UNVERIFIABLE") return null;
   const rawKind = details.gap_kind;
   const rawOwner = details.repair_owner;
   const findings =
@@ -1710,11 +1641,12 @@ function bestPartial(context: RunContext): ArtifactRef | undefined {
 
 export class DecidePlaybook
   implements
-    PlaybookCoreV1,
+    PlaybookCore,
     HostContinuationCapabilityV1,
     LivenessTerminalCapabilityV1,
     StateAwareRepairCapabilityV1,
     RepairExhaustionCapabilityV1,
+    RepairProgressCapabilityV1,
     RoutingRepairCapabilityV1
 {
   constructor(
@@ -1747,6 +1679,23 @@ export class DecidePlaybook
         : (() => {
             throw new Error(`unknown decide state '${context.stateId}'`);
           })();
+    let task = taskForState(state);
+    if (state === "verifying_decision") {
+      try {
+        task += `\n\nHOST_MECHANICAL_CHECKS:${this.mechanicalChecks(context)}`;
+      } catch {
+        return this.terminal(
+          context,
+          "incomplete",
+          false,
+          ["host mechanical validation failed"],
+          undefined,
+          {
+            incomplete_reason: "host_mechanical_validation_failed",
+          }
+        );
+      }
+    }
     const refs = refsForState(context, state);
     const next = validateDirective({
       schema_version: 2,
@@ -1756,7 +1705,7 @@ export class DecidePlaybook
       agent: DECIDE_AGENT_BY_STATE[state],
       attempt: context.stepCount,
       trust_profile: context.trustProfile,
-      task: taskForState(context, state),
+      task,
       input_artifacts: {
         schema_version: 2,
         artifacts: refs.map((ref) => ({ slot: slotForRef(ref), ref })),
@@ -1772,7 +1721,7 @@ export class DecidePlaybook
     _context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResultV2 | null {
+  ): EvaluationResult | null {
     if (state === "analyzing_decision") {
       if (details.analysis_complete === true) {
         if (details.gap_kind !== "none" || details.repair_owner !== "none") {
@@ -1804,10 +1753,183 @@ export class DecidePlaybook
     return null;
   }
 
+  /** Recomputed before dispatch and recovery. The signed task hash binds this exact
+   * product/source statement; none of these checks establishes semantic approval or
+   * absence of external effects. Post-review receipts/envelopes do not exist yet. */
+  private mechanicalChecks(context: RunContext): string {
+    const store = this.artifactStore;
+    const checkpointer = this.checkpointer;
+    if (store === undefined || checkpointer === undefined)
+      throw new Error("host mechanical validation dependencies unavailable");
+    const subject = currentReviewSubject(context);
+    const refs = uniqueRefs([...reviewSubjectUpstreamRefs(subject)]);
+    for (const ref of refs) {
+      const bytes = store.readById(ref.artifact_id);
+      if (
+        canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+        bytes.byteLength !== ref.byte_length ||
+        sha256(bytes) !== ref.content_digest
+      )
+        throw new Error("host mechanical input custody mismatch");
+    }
+    const request = canonicalDecisionRequest(store, context);
+    const imported = exactDecisionInputRefs(context);
+    const draft = parsePersistedDecisionDraft(store.readById(subject.draft_ref.artifact_id), {
+      request,
+      exactInputArtifactIds: imported.map((ref) => ref.artifact_id),
+    }).draft;
+    const decision = validateCanonicalDecisionBytes(
+      store.readById(subject.product_ref.artifact_id),
+      subject.product_ref
+    );
+    assertDecisionLineage({
+      decision,
+      request,
+      draft,
+      requestArtifactId: subject.request_ref.artifact_id,
+      draftArtifactId: subject.draft_ref.artifact_id,
+      exactInputArtifactIds: imported.map((ref) => ref.artifact_id),
+    });
+    const admission = assertEvidenceAdmissionExecutionBinding({
+      context,
+      reader: store,
+      checkpointer,
+      admissionRef: subject.admission_ref,
+      analysisRef: subject.analysis_ref,
+    });
+    if (admission.evidence_required && subject.evidence_refs.length !== 1)
+      throw new Error("host mechanical admission lacks evidence");
+    return canonicalJson({
+      schema_version: 1,
+      product_ref: subject.product_ref,
+      source_refs: refs.filter((ref) => ref.artifact_id !== subject.product_ref.artifact_id),
+      checks: [
+        "exact_ref_bytes_sha256",
+        "canonical_request",
+        "parsed_draft_schema_and_coverage",
+        "canonical_decision",
+        "exact_parsed_draft_lineage",
+        "accepted_evidence_admission_binding",
+      ],
+      draft_digest: {
+        kind: "canonical_parsed_decision_draft",
+        sha256: sha256(canonicalJson(draft)),
+      },
+      scope: "host_mechanical_only_not_semantic_or_effect_absence",
+    });
+  }
+
+  /** Measure exact semantic report content, not artifact/revision/receipt identities.
+   * Unparseable source judgment cannot support a recurrence measurement. */
+  private progressReport(
+    context: RunContext,
+    ref: ArtifactRef,
+    schema: TSchema
+  ): JsonValue | undefined {
+    const store = this.artifactStore;
+    if (store === undefined || this.checkpointer === undefined) return undefined;
+    const bytes = store.readById(ref.artifact_id);
+    if (
+      canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+      bytes.byteLength !== ref.byte_length ||
+      sha256(bytes) !== ref.content_digest
+    )
+      return undefined;
+    const { routed } = exactAcceptedExecutionGroup({
+      context,
+      checkpointer: this.checkpointer,
+      artifact: ref,
+    });
+    const source = validateSourceRoutingSummary(bytes, schema, routed);
+    if (source === undefined) return undefined;
+    const lines = bytes.toString("utf8").split("\n");
+    if (lines.at(-1) === "") lines.pop();
+    lines.pop(); // The validator established exactly one final SUMMARY line.
+    const { strategy_delta: _strategyDelta, ...details } = source.details;
+    return { report: lines.join("\n"), confidence: source.confidence, details };
+  }
+
+  repairProgressFingerprint(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>
+  ): string | null {
+    if (state !== "verifying_decision" && state !== "critiquing_decision") return null;
+    try {
+      // Request, imported and contextual inputs are frozen for the run. Native analysis,
+      // admission and gathered evidence can change on repair; historical feedback and
+      // host lineage/receipt identities must not manufacture a changed measurement.
+      this.mechanicalChecks(context);
+      const draftRef = latestDecisionDraftArtifact(context);
+      if (draftRef === undefined || this.artifactStore === undefined) return null;
+      const draft = parsePersistedDecisionDraft(this.artifactStore.readById(draftRef.artifact_id), {
+        request: canonicalDecisionRequest(this.artifactStore, context),
+        exactInputArtifactIds: exactDecisionInputRefs(context).map((ref) => ref.artifact_id),
+      }).draft;
+      const subject = currentReviewSubject(context);
+      const analysis = this.progressReport(context, subject.analysis_ref, AnalysisSummarySchema);
+      const evidence = subject.evidence_refs.map((ref) =>
+        this.progressReport(context, ref, EvidenceSummarySchema)
+      );
+      const validityRef = latestReviewReportArtifact(context, "verifying_decision");
+      const validity =
+        state === "critiquing_decision" && validityRef !== undefined
+          ? this.progressReport(context, validityRef, VerificationSummarySchema)
+          : null;
+      if (
+        analysis === undefined ||
+        evidence.some((value) => value === undefined) ||
+        (state === "critiquing_decision" && (validityRef === undefined || validity === undefined))
+      )
+        return null;
+      const admission = readCanonicalJson(
+        this.artifactStore,
+        subject.admission_ref,
+        validateEvidenceAdmission
+      );
+      const { strategy_delta: _strategyDelta, ...failedChecks } = details;
+      return sha256(
+        canonicalJson({
+          candidate: draft,
+          analysis,
+          evidence,
+          admission: {
+            classification: admission.classification,
+            evidence_required: admission.evidence_required,
+          },
+          validity_review: validity,
+          failed_checks: failedChecks,
+        })
+      );
+    } catch {
+      // Missing/unverifiable measurement is not evidence of a stall (or of success).
+      return null;
+    }
+  }
+
+  terminalizeRepairStall(
+    context: RunContext,
+    state: string,
+    evaluation: EvaluationResult
+  ): Directive {
+    return this.terminal(
+      context,
+      "incomplete",
+      false,
+      [`repair stalled at ${state}:${evaluation.kind}`, ...evaluation.findings],
+      undefined,
+      {
+        incomplete_reason: "repair_stalled",
+        stalled: true,
+        stall_reason: `${state}:${evaluation.kind}`,
+      }
+    );
+  }
+
   terminalizeRepairExhaustion(
     context: RunContext,
     state: string,
-    evaluation: EvaluationResultV2
+    evaluation: EvaluationResult
   ): Directive {
     return this.terminal(
       context,
@@ -1827,7 +1949,7 @@ export class DecidePlaybook
     context: RunContext,
     details: Record<string, JsonValue>,
     _confidence: Confidence
-  ): PlaybookStepOutcomeV1 {
+  ): PlaybookStepOutcome {
     switch (context.stateId) {
       case "analyzing_decision":
         if (details.analysis_complete !== true) {
@@ -1843,6 +1965,20 @@ export class DecidePlaybook
         context.transition("sealing_decision");
         return hostContinuation();
       case "verifying_decision":
+        if (details.verdict === "UNVERIFIABLE") {
+          return this.terminal(
+            context,
+            "incomplete",
+            false,
+            ["verification incomplete"],
+            undefined,
+            {
+              incomplete_reason: "verification_incomplete",
+              verification_findings: details.findings ?? [],
+              evidence_limitations: details.evidence ?? [],
+            }
+          );
+        }
         if (details.verdict !== "PASS") {
           throw new Error("Vera gap reached happy routing without engine-owned repair");
         }
@@ -1870,7 +2006,7 @@ export class DecidePlaybook
     ) {
       throw new Error("routing_repair_binding_invalid");
     }
-    if (context.stepCount >= context.maxSteps) {
+    if (context.maxSteps !== null && context.stepCount >= context.maxSteps) {
       throw new Error(`run exceeded max_steps=${context.maxSteps}`);
     }
     const binding = {
@@ -1936,6 +2072,27 @@ export class DecidePlaybook
     if (pending.execution_purpose === "routing_repair") return pending;
     if (!isDecideWorkerState(pending.state_id)) return pending;
     const state = pending.state_id;
+    if (state === "verifying_decision") {
+      try {
+        const statement = `HOST_MECHANICAL_CHECKS:${this.mechanicalChecks(context)}`;
+        const lines = pending.task
+          .split("\n")
+          .filter((line) => line.includes("HOST_MECHANICAL_CHECKS:"));
+        if (lines.length !== 1 || lines[0] !== statement)
+          throw new Error("mechanical statement diverged");
+      } catch {
+        return this.terminal(
+          context,
+          "incomplete",
+          false,
+          ["host mechanical validation failed"],
+          undefined,
+          {
+            incomplete_reason: "host_mechanical_validation_failed",
+          }
+        );
+      }
+    }
     return validateDirective({
       ...pending,
       output_artifact: outputMetadata(
@@ -2142,47 +2299,83 @@ export class DecidePlaybook
     }
     const inputRefs = exactDecisionInputRefs(context);
     const evidenceRefs = uniqueRefs([latestEvidenceArtifact(context)]);
+    const admissionArtifact = latestEvidenceAdmissionArtifact(context);
+    if (admissionArtifact === undefined) throw new Error("exact evidence admission is absent");
+    // Host operands are trusted exact inputs. A bad request/import is not an author retry.
     const request = canonicalDecisionRequest(store, context);
-    let draft: DecisionDraftV2;
-    try {
-      draft = parsePersistedDecisionDraft(store.readById(draftArtifact.artifact_id), {
-        request,
-        exactInputArtifactIds: inputRefs.map((artifact) => artifact.artifact_id),
-      }).draft;
-    } catch (error) {
-      if (!(error instanceof DecisionDraftValidationError)) throw error;
-      if (error.failureClass === "LINEAGE_INVALID") {
-        return {
-          event_type: "decide_seal_nonrepairable_lineage",
-          payload: {
-            run_id: context.identity.run_id,
-            failure_sha256: sha256(canonicalJson(error.issues)),
-          },
-          directive: this.terminal(
-            context,
-            "incomplete",
-            false,
-            ["non-repairable decision lineage defect"],
-            undefined,
-            {
-              incomplete_reason: "non_repairable_lineage_defect",
-              failure_class: error.failureClass,
-            }
-          ),
-        };
-      }
-      if (selectedDecisionSealFeedbackArtifact(context) !== undefined) {
+    const anchor = latestDecisionArtifact(context);
+    const previous = currentSealDiagnostic(context, store);
+    if (previous !== undefined && previous.diagnostic.disposition !== "correction_offered")
+      throw new Error("exhausted seal diagnostic cannot authorize another draft");
+    const attempt = persistSealOperation({
+      context,
+      store,
+      draft: draftArtifact,
+      anchor: anchor ?? null,
+      previous,
+      project: (bytes) => {
+        try {
+          const draft = parsePersistedDecisionDraft(bytes, {
+            request,
+            exactInputArtifactIds: inputRefs.map((ref) => ref.artifact_id),
+          }).draft;
+          const product = sealDecisionDraft({
+            request,
+            draft,
+            requestSha256: decisionRequestSha256(request),
+            sourceRequestArtifactId: requestArtifact.artifact_id,
+            sourceDraftArtifactId: draftArtifact.artifact_id,
+            exactInputArtifactIds: inputRefs.map((ref) => ref.artifact_id),
+          });
+          return {
+            status: "sealed",
+            content: canonicalJson(product),
+            content_schema: { schema_id: "penny.decision.v2", schema_version: 2 },
+            upstream_refs: [
+              requestArtifact,
+              analysisArtifact,
+              admissionArtifact,
+              ...evidenceRefs,
+              ...inputRefs,
+            ],
+            revision_parent_ref: anchor ?? null,
+          };
+        } catch (error) {
+          if (!(error instanceof DecisionDraftValidationError)) throw error;
+          if (error.failureClass === "LINEAGE_INVALID") throw error;
+          return {
+            status: "rejected",
+            failure_class: error.failureClass,
+            issues: sealIssues(error),
+          };
+        }
+      },
+      validateProduct: (bytes, ref) => {
+        const value: unknown = JSON.parse(bytes.toString("utf8"));
+        if (canonicalJson(validateDecision(value)) !== bytes.toString("utf8"))
+          throw new Error("noncanonical decision product");
+        validateCanonicalDecisionBytes(bytes, ref);
+      },
+    });
+    if (attempt.status === "rejected") {
+      const added = addSelectedArtifact(context, attempt.diagnostic_ref);
+      if (added) this.hostFault?.("sealing_decision:feedback-persistence");
+      if (attempt.diagnostic.disposition === "exhausted") {
         return {
           event_type: "decide_seal_repair_exhausted",
           payload: {
             run_id: context.identity.run_id,
-            failure_sha256: sha256(canonicalJson(error.issues)),
+            diagnostic_artifact_id: attempt.diagnostic_ref.artifact_id,
+            rejected_draft_artifact_id: draftArtifact.artifact_id,
           },
           directive: this.terminal(
             context,
             "incomplete",
             false,
-            [`seal repair exhausted: ${error.failureClass}`],
+            [
+              `seal repair exhausted: ${attempt.diagnostic.failure_class}`,
+              `latest seal diagnostic: ${attempt.diagnostic_ref.artifact_id}`,
+            ],
             undefined,
             {
               incomplete_reason: "seal_repair_exhausted",
@@ -2192,13 +2385,6 @@ export class DecidePlaybook
           ),
         };
       }
-      const feedback = persistDecisionSealFeedback({
-        context,
-        store,
-        draftArtifact,
-        failure: error,
-      });
-      if (feedback.added) this.hostFault?.("sealing_decision:feedback-persistence");
       context.transition("deciding");
       const next = this.dispatch(context);
       return {
@@ -2206,27 +2392,13 @@ export class DecidePlaybook
         payload: {
           run_id: context.identity.run_id,
           rejected_draft_artifact_id: draftArtifact.artifact_id,
-          feedback_artifact_id: feedback.artifact.artifact_id,
+          feedback_artifact_id: attempt.diagnostic_ref.artifact_id,
         },
         directive: next,
       };
     }
-    const admissionArtifact = latestEvidenceAdmissionArtifact(context);
-    if (analysisArtifact === undefined || admissionArtifact === undefined) {
-      throw new Error("sealed DecisionV2 requires exact Annie analysis and evidence admission");
-    }
-    const sealed = persistSealedDecision({
-      context,
-      store,
-      requestArtifact,
-      analysisArtifact,
-      admissionArtifact,
-      evidenceRefs,
-      inputRefs,
-      draftArtifact,
-      draft,
-    });
-    if (sealed.added) this.hostFault?.("sealing_decision:artifact-persistence");
+    const added = addSelectedArtifact(context, attempt.product_ref);
+    if (added) this.hostFault?.("sealing_decision:artifact-persistence");
     context.transition("verifying_decision");
     const next = this.dispatch(context);
     return {
@@ -2234,7 +2406,7 @@ export class DecidePlaybook
       payload: {
         run_id: context.identity.run_id,
         draft_artifact_id: draftArtifact.artifact_id,
-        decision_artifact_id: sealed.artifact.artifact_id,
+        decision_artifact_id: attempt.product_ref.artifact_id,
       },
       directive: next,
     };
@@ -2249,13 +2421,24 @@ export class DecidePlaybook
     extraResult: Readonly<Record<string, JsonValue>> = {}
   ): Directive {
     const origin = context.stateId;
-    const output = met ? latestDecisionArtifact(context) : bestPartial(context);
+    const sealFailure =
+      action === "incomplete" && extraResult.incomplete_reason === "seal_repair_exhausted"
+        ? this.artifactStore === undefined
+          ? undefined
+          : currentSealDiagnostic(context, this.artifactStore)
+        : undefined;
+    const output =
+      sealFailure === undefined
+        ? met
+          ? latestDecisionArtifact(context)
+          : bestPartial(context)
+        : latestDecisionDraftArtifact(context);
     if (met && output === undefined) throw new Error("positive decide terminal has no product");
-    const graph = met
-      ? this.positiveTerminalArtifacts(context)
-      : output === undefined
-        ? []
-        : [output];
+    const reports = uniqueRefs([
+      latestReviewReportArtifact(context, "verifying_decision"),
+      latestReviewReportArtifact(context, "critiquing_decision"),
+    ]);
+    const graph = met ? this.positiveTerminalArtifacts(context) : uniqueRefs([output, ...reports]);
     context.previousState = origin;
     context.stateId = action;
     context.status = action;
@@ -2273,6 +2456,17 @@ export class DecidePlaybook
         best_partial_artifact_refs: met || output === undefined ? [] : [output],
         execution_started: false,
         execution_authorized: false,
+        ...(sealFailure === undefined
+          ? {}
+          : {
+              seal_diagnostics: sealDiagnosticsProjection(
+                sealFailure.diagnostic,
+                sealFailure.ref,
+                runSealPolicy(context, DECIDE_SEAL_POLICY)
+              ),
+              output_artifact_label: "rejected draft (not a sealed product)",
+            }),
+        ...(met ? {} : { feedback_report_refs: reports }),
         ...extraResult,
         ...(liveness === undefined ? {} : { liveness }),
       },
@@ -2517,7 +2711,7 @@ export const DECIDE_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<
 function decideRegistration(input: {
   readonly name: string;
   readonly contract: SkillContract;
-}): PlaybookRegistrationV1 {
+}): PlaybookRegistration {
   const phases = new Map([
     [
       "analyzing_decision",
@@ -2553,6 +2747,7 @@ function decideRegistration(input: {
         result_schema_id: "penny.decide.verification-summary.v1",
         result_schema_version: 1 as const,
         schema: VerificationSummarySchema,
+        routing_repair_policy: "preserve_source_summary_v1" as const,
       },
     ],
     [
@@ -2562,6 +2757,7 @@ function decideRegistration(input: {
         result_schema_id: "penny.decide.critique-summary.v1",
         result_schema_version: 1 as const,
         schema: CritiqueSummarySchema,
+        routing_repair_policy: "preserve_source_summary_v1" as const,
       },
     ],
   ]);
@@ -2594,6 +2790,8 @@ function decideRegistration(input: {
       resolve: () => DECIDE_LIVENESS_POLICY,
       thinking_policy: "agent_ssot",
     },
+    repair_progress_policy: "exact_fingerprint_v1",
+    seal_policy: DECIDE_SEAL_POLICY,
     host_states: ["decision_evidence_gate", "sealing_decision", "admitting_decision"],
     worker: {
       kind: "catalog-agent",

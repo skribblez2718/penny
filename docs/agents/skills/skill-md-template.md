@@ -32,7 +32,10 @@ with `next_range` until `truncated` is false, return complete stage content, and
 only the active state's routing `SUMMARY`. The owner persists and re-reads exact bytes
 before parsing routing.
 
-Durable memory is optional, primary-owned, and never workflow handoff or run state.
+If a required ID/path is absent, return `missing_input:`; never discover predecessors through
+memory, temporary files, repository search, or another channel. Workers do not claim persistence.
+Durable memory is optional advisory recall, never workflow handoff or run state; writes remain
+primary-owned and memory absence cannot change correctness.
 
 ## Output
 
@@ -47,11 +50,8 @@ and unresolved issues.]
 ## Constraints
 
 - Replace every bracketed placeholder.
-- Keep the description under the 1,024-character hard limit and near the 500-character preferred target unless extra routing detail materially helps.
-- Keep `engine: orchestration` and remove the legacy state-machine key.
-- Omit `disable-model-invocation` for a model-visible package. Declare it only as `true`, and only
-  when the package must be hidden; never declare redundant `false`.
-- Do not add a top-level `license`; Penny's repository-level license governs tracked skills.
+- Apply [SKILL.md Format](skill-md-format.md) for description bounds, YAML keys, visibility,
+  and license rules. The visible-package template intentionally omits the disable flag.
 - Do not add a room-manifest requirement.
 - Do not add worker memory tools in a skill manifest. Bounded read-only recall is
   declared only by agent YAML; never add memory-write/logstream, session-room, or

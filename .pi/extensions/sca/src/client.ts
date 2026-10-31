@@ -1,18 +1,20 @@
 import { createConnection, type Socket } from "node:net";
+import { performance } from "node:perf_hooks";
 
 import type { ScaClientConfig } from "./config.js";
 import {
   SCA_BROKER_CONTRACT_LIMITS_V1,
   ScaBrokerContractError,
+  classifyScaBrokerJobProgressV1,
   scaBrokerExecuteRequestSha256,
   validateScaBrokerCancelRequestV1,
   validateScaBrokerCancelResultV1,
   validateScaBrokerCapabilityRequestV1,
   validateScaBrokerCapabilityResultV1,
-  validateScaBrokerExecuteAcceptedResultV1,
+  validateScaBrokerExecuteAcceptedResult,
   validateScaBrokerExecuteRequestV1,
   validateScaBrokerPollRequestV1,
-  validateScaBrokerPollResultV1,
+  validateScaBrokerPollResult,
   validateScaBrokerReceiptV1,
   validateScaBrokerTypedErrorV1,
   type ScaBrokerCancelRequestV1,
@@ -20,10 +22,11 @@ import {
   type ScaBrokerCapabilityRequestV1,
   type ScaBrokerCapabilityResultV1,
   type ScaBrokerErrorCode,
-  type ScaBrokerExecuteAcceptedResultV1,
+  type ScaBrokerExecuteAcceptedResult,
+  type ScaBrokerJobProgressV1,
   type ScaBrokerExecuteRequestV1,
   type ScaBrokerPollRequestV1,
-  type ScaBrokerPollResultV1,
+  type ScaBrokerPollResult,
   type ScaBrokerReceiptV1,
 } from "./contracts.js";
 
@@ -33,6 +36,10 @@ type ScaServiceAction = "capability" | "execute" | "poll" | "cancel";
 
 export interface ScaClientCallOptions {
   readonly signal?: AbortSignal;
+}
+
+export interface ScaClientRuntime {
+  readonly monotonicNow: () => number;
 }
 
 export interface ScaTerminalExecutionResult {
@@ -74,7 +81,7 @@ function publicMessageForCode(code: ScaBrokerErrorCode): string {
     case "cancelled":
       return "SCA operation was cancelled";
     case "timeout":
-      return "SCA operation did not reach a terminal result before its deadline";
+      return "SCA operation or transport became inactive";
     case "output_truncated":
       return "SCA operation returned only bounded partial output";
     case "failed":
@@ -155,12 +162,8 @@ function remainingMilliseconds(deadlineAt: string): number {
   return Math.floor(Date.parse(deadlineAt) - Date.now());
 }
 
-function boundedTimeout(config: ScaClientConfig, deadlineAt: string): number {
-  const remaining = remainingMilliseconds(deadlineAt);
-  if (remaining <= 0) {
-    throw new ScaClientError("timeout", "failed");
-  }
-  return Math.max(1, Math.min(config.responseTimeoutMs, remaining));
+function responseInactivityTimeout(config: ScaClientConfig): number {
+  return Math.max(1, config.responseTimeoutMs);
 }
 
 function frameFor(token: string, action: ScaServiceAction, request: unknown): string {
@@ -183,7 +186,7 @@ async function readOneResponseFrame(
   config: ScaClientConfig,
   action: ScaServiceAction,
   request: unknown,
-  deadlineAt: string,
+  absoluteTimeoutMs: number,
   signal?: AbortSignal
 ): Promise<string> {
   if (signal?.aborted === true) {
@@ -194,7 +197,10 @@ async function readOneResponseFrame(
   if (Buffer.byteLength(frame, "utf8") > SCA_BROKER_CONTRACT_LIMITS_V1.max_request_bytes) {
     throw new ScaClientError("quota_exceeded", "failed");
   }
-  const timeoutMs = boundedTimeout(config, deadlineAt);
+  if (!Number.isFinite(absoluteTimeoutMs) || absoluteTimeoutMs <= 0) {
+    throw new ScaClientError("timeout", "failed");
+  }
+  const timeoutMs = responseInactivityTimeout(config);
 
   return await new Promise<string>((resolve, reject) => {
     let settled = false;
@@ -203,8 +209,10 @@ async function readOneResponseFrame(
     const lineChunks: Buffer[] = [];
     const socket: Socket = createConnection({ path: config.socketPath, allowHalfOpen: true });
 
+    let inactivityTimer: NodeJS.Timeout | undefined;
     const cleanup = (): void => {
-      clearTimeout(timer);
+      clearTimeout(absoluteTimer);
+      if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
       signal?.removeEventListener("abort", onAbort);
     };
     const fail = (error: unknown): void => {
@@ -217,9 +225,19 @@ async function readOneResponseFrame(
     const onAbort = (): void => {
       fail(new ScaClientError("cancelled", "failed"));
     };
-    const timer = setTimeout(() => {
-      fail(new ScaClientError("timeout", "failed"));
-    }, timeoutMs);
+    const absoluteTimer = setTimeout(
+      () => {
+        fail(new ScaClientError("timeout", "failed"));
+      },
+      Math.max(1, Math.ceil(absoluteTimeoutMs))
+    );
+    const renewInactivity = (): void => {
+      if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        fail(new ScaClientError("timeout", "failed"));
+      }, timeoutMs);
+    };
+    renewInactivity();
 
     signal?.addEventListener("abort", onAbort, { once: true });
     socket.on("connect", () => {
@@ -227,6 +245,7 @@ async function readOneResponseFrame(
     });
     socket.on("data", (chunk: Buffer) => {
       if (settled) return;
+      if (chunk.byteLength > 0) renewInactivity();
       receivedBytes += chunk.byteLength;
       if (receivedBytes > config.maxResponseBytes) {
         fail(new ScaClientError("quota_exceeded", "failed"));
@@ -278,6 +297,21 @@ function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
 
+function remainingJobInactivity(
+  lastProgressAtMs: number,
+  inactivityMs: number,
+  currentMs: number
+): number {
+  if (
+    !Number.isFinite(lastProgressAtMs) ||
+    !Number.isFinite(currentMs) ||
+    currentMs < lastProgressAtMs
+  ) {
+    throw new ScaClientError("failed", "failed");
+  }
+  return inactivityMs - (currentMs - lastProgressAtMs);
+}
+
 function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted === true) {
     return Promise.reject(new ScaClientError("cancelled", "failed"));
@@ -320,10 +354,10 @@ function capabilityRequestFor(
 
 function pollRequestFor(
   executeRequest: ScaBrokerExecuteRequestV1,
-  accepted: ScaBrokerExecuteAcceptedResultV1,
-  pollTimeoutMs: number,
-  lifecycleDeadlineAt: string
+  accepted: ScaBrokerExecuteAcceptedResult,
+  pollTimeoutMs: number
 ): ScaBrokerPollRequestV1 {
+  const requestedAt = isoNow();
   return validateScaBrokerPollRequestV1({
     schema_id: "penny.sca-broker-poll-request.v1",
     schema_version: 1,
@@ -336,14 +370,23 @@ function pollRequestFor(
     tool_name: executeRequest.tool_name,
     operation: executeRequest.operation,
     request_sha256: accepted.request_sha256,
-    requested_at: isoNow(),
-    deadline_at: lifecycleDeadlineAt,
+    requested_at: requestedAt,
+    deadline_at: new Date(Date.parse(requestedAt) + pollTimeoutMs).toISOString(),
     poll_timeout_ms: pollTimeoutMs,
   });
 }
 
 export class ScaServiceClient {
-  constructor(private readonly config: ScaClientConfig) {}
+  private readonly runtime: ScaClientRuntime;
+
+  constructor(
+    private readonly config: ScaClientConfig,
+    runtime: Partial<ScaClientRuntime> = {}
+  ) {
+    this.runtime = {
+      monotonicNow: runtime.monotonicNow ?? (() => performance.now()),
+    };
+  }
 
   async capability(
     requestValue: ScaBrokerCapabilityRequestV1,
@@ -354,7 +397,7 @@ export class ScaServiceClient {
       this.config,
       "capability",
       request,
-      request.deadline_at,
+      remainingMilliseconds(request.deadline_at),
       options.signal
     );
     return parseResponseEnvelope(text, "capability", (value) =>
@@ -362,20 +405,49 @@ export class ScaServiceClient {
     );
   }
 
-  async execute(
+  private async executeWithin(
     requestValue: ScaBrokerExecuteRequestV1,
-    options: ScaClientCallOptions = {}
-  ): Promise<ScaBrokerExecuteAcceptedResultV1> {
+    absoluteTimeoutMs: number,
+    options: ScaClientCallOptions
+  ): Promise<ScaBrokerExecuteAcceptedResult> {
     const request = validateScaBrokerExecuteRequestV1(requestValue);
     const text = await readOneResponseFrame(
       this.config,
       "execute",
       request,
-      request.deadline_at,
+      absoluteTimeoutMs,
       options.signal
     );
     return parseResponseEnvelope(text, "execute", (value) =>
-      validateScaBrokerExecuteAcceptedResultV1(value, request)
+      validateScaBrokerExecuteAcceptedResult(value, request)
+    );
+  }
+
+  async execute(
+    requestValue: ScaBrokerExecuteRequestV1,
+    options: ScaClientCallOptions = {}
+  ): Promise<ScaBrokerExecuteAcceptedResult> {
+    const request = validateScaBrokerExecuteRequestV1(requestValue);
+    return await this.executeWithin(request, remainingMilliseconds(request.deadline_at), options);
+  }
+
+  private async pollWithin(
+    requestValue: ScaBrokerPollRequestV1,
+    executeRequestValue: ScaBrokerExecuteRequestV1,
+    absoluteTimeoutMs: number,
+    options: ScaClientCallOptions
+  ): Promise<ScaBrokerPollResult> {
+    const request = validateScaBrokerPollRequestV1(requestValue);
+    const executeRequest = validateScaBrokerExecuteRequestV1(executeRequestValue);
+    const text = await readOneResponseFrame(
+      this.config,
+      "poll",
+      request,
+      absoluteTimeoutMs,
+      options.signal
+    );
+    return parseResponseEnvelope(text, "poll", (value) =>
+      validateScaBrokerPollResult(value, request, executeRequest)
     );
   }
 
@@ -383,18 +455,13 @@ export class ScaServiceClient {
     requestValue: ScaBrokerPollRequestV1,
     executeRequestValue: ScaBrokerExecuteRequestV1,
     options: ScaClientCallOptions = {}
-  ): Promise<ScaBrokerPollResultV1> {
+  ): Promise<ScaBrokerPollResult> {
     const request = validateScaBrokerPollRequestV1(requestValue);
-    const executeRequest = validateScaBrokerExecuteRequestV1(executeRequestValue);
-    const text = await readOneResponseFrame(
-      this.config,
-      "poll",
+    return await this.pollWithin(
       request,
-      request.deadline_at,
-      options.signal
-    );
-    return parseResponseEnvelope(text, "poll", (value) =>
-      validateScaBrokerPollResultV1(value, request, executeRequest)
+      executeRequestValue,
+      remainingMilliseconds(request.deadline_at),
+      options
     );
   }
 
@@ -409,7 +476,7 @@ export class ScaServiceClient {
       this.config,
       "cancel",
       request,
-      request.deadline_at,
+      remainingMilliseconds(request.deadline_at),
       options.signal
     );
     return parseResponseEnvelope(text, "cancel", (value) =>
@@ -419,7 +486,7 @@ export class ScaServiceClient {
 
   private async bestEffortCancel(
     executeRequest: ScaBrokerExecuteRequestV1,
-    accepted: ScaBrokerExecuteAcceptedResultV1,
+    accepted: ScaBrokerExecuteAcceptedResult,
     cause: ScaBrokerErrorCode
   ): Promise<void> {
     const requestedAt = isoNow();
@@ -459,10 +526,10 @@ export class ScaServiceClient {
   ): Promise<ScaTerminalExecutionResult> {
     const request = validateScaBrokerExecuteRequestV1(requestValue);
     const requestSha256 = scaBrokerExecuteRequestSha256(request);
-    const lifecycleDeadlineAt = new Date(
+    const admissionDeadlineAt = new Date(
       Math.min(Date.parse(request.deadline_at), Date.now() + request.limits.timeout_ms)
     ).toISOString();
-    let accepted: ScaBrokerExecuteAcceptedResultV1 | undefined;
+    let accepted: ScaBrokerExecuteAcceptedResult | undefined;
     let terminalReceipt: ScaBrokerReceiptV1 | undefined;
 
     try {
@@ -470,7 +537,7 @@ export class ScaServiceClient {
         throw new ScaClientError("cancelled", "failed");
       }
       const capability = await this.capability(
-        capabilityRequestFor(request, lifecycleDeadlineAt),
+        capabilityRequestFor(request, admissionDeadlineAt),
         options
       );
       if (capability.status !== "available") {
@@ -478,30 +545,65 @@ export class ScaServiceClient {
         throw new ScaClientError(capability.error.code, "failed");
       }
 
-      accepted = await this.execute(request, options);
+      accepted = await this.executeWithin(
+        request,
+        remainingMilliseconds(admissionDeadlineAt),
+        options
+      );
+      const progressProtocol = accepted.schema_version;
+      let lastProgress: ScaBrokerJobProgressV1 | undefined =
+        accepted.schema_version === 2 ? accepted.progress : undefined;
+      let lastNonterminalStatus: "accepted" | "running" = "accepted";
+      let lastProgressAtMs = this.runtime.monotonicNow();
 
-      for (let attempt = 0; attempt < this.config.maxPollAttempts; attempt += 1) {
+      for (;;) {
         if (isAborted(options.signal)) {
           throw new ScaClientError("cancelled", "failed");
         }
-        const remaining = remainingMilliseconds(lifecycleDeadlineAt);
-        if (remaining <= 0) throw new ScaClientError("timeout", "failed");
+        const inactivityRemaining = remainingJobInactivity(
+          lastProgressAtMs,
+          request.limits.timeout_ms,
+          this.runtime.monotonicNow()
+        );
+        if (inactivityRemaining <= 0) throw new ScaClientError("timeout", "failed");
         const pollTimeoutMs = Math.max(
           1,
           Math.min(
             this.config.responseTimeoutMs,
-            remaining,
-            SCA_BROKER_CONTRACT_LIMITS_V1.max_poll_timeout_ms
+            SCA_BROKER_CONTRACT_LIMITS_V1.max_poll_timeout_ms,
+            Math.floor(inactivityRemaining)
           )
         );
-        const pollResult = await this.poll(
-          pollRequestFor(request, accepted, pollTimeoutMs, lifecycleDeadlineAt),
+        const pollResult = await this.pollWithin(
+          pollRequestFor(request, accepted, pollTimeoutMs),
           request,
+          Math.min(inactivityRemaining, pollTimeoutMs),
           options
         );
 
         if (isAborted(options.signal)) {
           throw new ScaClientError("cancelled", "failed");
+        }
+        if (pollResult.schema_version !== progressProtocol) {
+          throw new ScaClientError("failed", "failed");
+        }
+        if (pollResult.status === "accepted" && lastNonterminalStatus === "running") {
+          throw new ScaClientError("failed", "failed");
+        }
+
+        const observedAtMs = this.runtime.monotonicNow();
+        if (pollResult.schema_version === 2) {
+          if (lastProgress === undefined) throw new ScaClientError("failed", "failed");
+          const disposition = classifyScaBrokerJobProgressV1(lastProgress, pollResult.progress);
+          lastProgress = pollResult.progress;
+          if (disposition === "advanced") lastProgressAtMs = observedAtMs;
+        }
+        if (pollResult.status === "running") lastNonterminalStatus = "running";
+
+        if (
+          remainingJobInactivity(lastProgressAtMs, request.limits.timeout_ms, observedAtMs) <= 0
+        ) {
+          throw new ScaClientError("timeout", "failed");
         }
         if (pollResult.status !== "accepted" && pollResult.status !== "running") {
           if (pollResult.receipt === null) throw new ScaClientError("failed", "failed");
@@ -511,16 +613,17 @@ export class ScaServiceClient {
           }
           return { requestSha256, receipt: terminalReceipt };
         }
-        if (attempt + 1 >= this.config.maxPollAttempts) {
-          throw new ScaClientError("timeout", "failed");
-        }
-        const sleepMs = Math.max(
-          1,
-          Math.min(this.config.pollIntervalMs, remainingMilliseconds(lifecycleDeadlineAt))
+        const remainingBeforeSleep = remainingJobInactivity(
+          lastProgressAtMs,
+          request.limits.timeout_ms,
+          this.runtime.monotonicNow()
         );
-        await sleep(sleepMs, options.signal);
+        if (remainingBeforeSleep <= 0) throw new ScaClientError("timeout", "failed");
+        await sleep(
+          Math.max(1, Math.min(this.config.pollIntervalMs, Math.floor(remainingBeforeSleep))),
+          options.signal
+        );
       }
-      throw new ScaClientError("timeout", "failed");
     } catch (error) {
       const clientError = normalizeClientError(error);
       if (accepted !== undefined && terminalReceipt === undefined) {

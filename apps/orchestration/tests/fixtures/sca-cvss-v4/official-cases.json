@@ -1,0 +1,196 @@
+{
+  "reference_commit": "c5b0d409ae9f57c44264c6ce5f27d89298e1d32a",
+  "notes": "Named examples copy published vector/score pairs from FIRST Examples v1.8. Other cases and boundary selections are evaluated with the pinned, unmodified FIRST reference implementation, not manually assigned expectations.",
+  "cases": [
+    {
+      "id": "B-nginx",
+      "source": "https://www.first.org/cvss/v4.0/examples",
+      "vector": "CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
+      "score": 7.3,
+      "base_score": 7.3,
+      "nomenclature": "CVSS-B",
+      "rating": "High",
+      "base_vector": "CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+    },
+    {
+      "id": "BT-cisco",
+      "source": "https://www.first.org/cvss/v4.0/examples",
+      "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N/E:U",
+      "score": 5.2,
+      "base_score": 7.7,
+      "nomenclature": "CVSS-BT",
+      "rating": "Medium",
+      "base_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+    },
+    {
+      "id": "BE-openshift",
+      "source": "https://www.first.org/cvss/v4.0/examples",
+      "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:L/VA:L/SC:N/SI:N/SA:N/CR:H/IR:L/AR:L/MAV:N/MAC:H/MVC:H/MVI:L/MVA:L",
+      "score": 8.1,
+      "base_score": 8.3,
+      "nomenclature": "CVSS-BE",
+      "rating": "High",
+      "base_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:L/VA:L/SC:N/SI:N/SA:N"
+    },
+    {
+      "id": "BTE-immutable-container",
+      "source": "https://www.first.org/cvss/v4.0/examples",
+      "vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N/E:P/MAC:L/MAT:N/MVC:N/MVI:N/MVA:L",
+      "score": 5.5,
+      "base_score": 9.2,
+      "nomenclature": "CVSS-BTE",
+      "rating": "Medium",
+      "base_vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+    },
+    {
+      "id": "B-supplemental-safety",
+      "source": "https://www.first.org/cvss/v4.0/examples",
+      "vector": "CVSS:4.0/AV:P/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:H/SA:N/S:P/V:D",
+      "score": 8.3,
+      "base_score": 8.3,
+      "nomenclature": "CVSS-B",
+      "rating": "High",
+      "base_vector": "CVSS:4.0/AV:P/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:H/SA:N"
+    },
+    {
+      "id": "BT-heartbleed",
+      "source": "https://www.first.org/cvss/v4.0/examples",
+      "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N/E:A",
+      "score": 8.7,
+      "base_score": 8.7,
+      "nomenclature": "CVSS-BT",
+      "rating": "High",
+      "base_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
+    },
+    {
+      "id": "None-Base",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
+      "score": 0,
+      "base_score": 0,
+      "nomenclature": "CVSS-B",
+      "rating": "None",
+      "base_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N"
+    },
+    {
+      "id": "None-contextual",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H/E:U/MVC:N/MVI:N/MVA:N/MSC:N/MSI:N/MSA:N",
+      "score": 0,
+      "base_score": 10,
+      "nomenclature": "CVSS-BTE",
+      "rating": "None",
+      "base_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H"
+    },
+    {
+      "id": "safety-MSI",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N/MSI:S",
+      "score": 8.9,
+      "base_score": 0,
+      "nomenclature": "CVSS-BE",
+      "rating": "High",
+      "base_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N"
+    },
+    {
+      "id": "safety-MSA",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N/MSA:S",
+      "score": 8.9,
+      "base_score": 0,
+      "nomenclature": "CVSS-BE",
+      "rating": "High",
+      "base_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N"
+    },
+    {
+      "id": "supplemental-all",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H/S:P/AU:Y/R:I/V:C/RE:H/U:Red",
+      "score": 10,
+      "base_score": 10,
+      "nomenclature": "CVSS-B",
+      "rating": "Critical",
+      "base_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H"
+    },
+    {
+      "id": "boundary-10",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H",
+      "score": 10,
+      "base_score": 10,
+      "nomenclature": "CVSS-B",
+      "rating": "Critical",
+      "base_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H"
+    },
+    {
+      "id": "boundary-9",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:A/AC:H/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H",
+      "score": 9,
+      "base_score": 9,
+      "nomenclature": "CVSS-B",
+      "rating": "Critical",
+      "base_vector": "CVSS:4.0/AV:A/AC:H/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H"
+    },
+    {
+      "id": "boundary-8.9",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H",
+      "score": 8.9,
+      "base_score": 8.9,
+      "nomenclature": "CVSS-B",
+      "rating": "High",
+      "base_vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H"
+    },
+    {
+      "id": "boundary-7",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:H/UI:N/VC:N/VI:N/VA:H/SC:H/SI:H/SA:H",
+      "score": 7,
+      "base_score": 7,
+      "nomenclature": "CVSS-B",
+      "rating": "High",
+      "base_vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:H/UI:N/VC:N/VI:N/VA:H/SC:H/SI:H/SA:H"
+    },
+    {
+      "id": "boundary-6.9",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:P/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:H/SC:N/SI:H/SA:H",
+      "score": 6.9,
+      "base_score": 6.9,
+      "nomenclature": "CVSS-B",
+      "rating": "Medium",
+      "base_vector": "CVSS:4.0/AV:P/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:H/SC:N/SI:H/SA:H"
+    },
+    {
+      "id": "boundary-4",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:H/UI:N/VC:L/VI:L/VA:L/SC:N/SI:N/SA:H",
+      "score": 4,
+      "base_score": 4,
+      "nomenclature": "CVSS-B",
+      "rating": "Medium",
+      "base_vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:H/UI:N/VC:L/VI:L/VA:L/SC:N/SI:N/SA:H"
+    },
+    {
+      "id": "boundary-3.9",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:H/UI:N/VC:N/VI:H/VA:H/SC:H/SI:H/SA:H/E:U",
+      "score": 3.9,
+      "base_score": 7.1,
+      "nomenclature": "CVSS-BT",
+      "rating": "Low",
+      "base_vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:H/UI:N/VC:N/VI:H/VA:H/SC:H/SI:H/SA:H"
+    },
+    {
+      "id": "boundary-0.1",
+      "source": "pinned reference implementation",
+      "vector": "CVSS:4.0/AV:P/AC:H/AT:N/PR:N/UI:N/VC:L/VI:L/VA:L/SC:L/SI:L/SA:L/E:U",
+      "score": 0.1,
+      "base_score": 1,
+      "nomenclature": "CVSS-BT",
+      "rating": "Low",
+      "base_vector": "CVSS:4.0/AV:P/AC:H/AT:N/PR:N/UI:N/VC:L/VI:L/VA:L/SC:L/SI:L/SA:L"
+    }
+  ]
+}

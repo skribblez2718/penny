@@ -3,6 +3,7 @@
  */
 
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -19,15 +20,15 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CatalogSessionRetentionError,
   ProjectRetentionOwner,
-} from "../src/catalog-session-retention.js";
-import { Checkpointer } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import type { RunIdentity, RunStatus } from "../src/contracts.js";
+} from "../dist/catalog-session-retention.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import type { ArtifactRef, RunIdentity, RunStatus } from "../dist/contracts.js";
 import {
   CATALOG_WORKER_CONTINUITY_METADATA,
   CATALOG_WORKER_SESSION_METADATA,
@@ -35,9 +36,9 @@ import {
   finalizeDurableCatalogSession,
   type CatalogWorkerSessionMetadataV1,
   type ModelClient,
-} from "../src/model-client.js";
-import { OrchestrationService } from "../src/service.js";
-import { initializePennyState } from "../src/state/index.js";
+} from "../dist/model-client.js";
+import { OrchestrationService } from "../dist/service.js";
+import { initializePennyState } from "../dist/state/index.js";
 import { requireRecordArray, requireString, requireValue } from "./helpers/narrowing.js";
 
 const PROJECT_ID = `prj_${"a".repeat(32)}`;
@@ -51,6 +52,7 @@ function temporaryRoot(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -92,8 +94,9 @@ function mkRun(
   runId: string,
   status: RunStatus,
   timestamp: string,
-  projectRoot: string
-): void {
+  projectRoot: string,
+  initialArtifacts: readonly ArtifactRef[] = []
+): RunContext {
   const identity = {
     schema_version: 2,
     run_id: runId,
@@ -108,6 +111,7 @@ function mkRun(
     projectRoot,
     trustProfile: "trusted-interactive",
     maxSteps: 8,
+    initialArtifacts: [...initialArtifacts],
   });
   context.status = status;
   checkpointer.createRun(context, "run_created", {});
@@ -122,6 +126,42 @@ function mkRun(
   } finally {
     db.close();
   }
+  return context;
+}
+
+function appendProgressHistory(file: string, runId: string, count: number): void {
+  const db = database(file);
+  try {
+    db.prepare(
+      `WITH RECURSIVE progress(n) AS (
+      VALUES(2) UNION ALL SELECT n + 1 FROM progress WHERE n < ? + 1
+    ) INSERT INTO events(run_id, sequence, event_type, payload_json, created_at)
+      SELECT ?, n, 'worker_progress', '{"liveness_v1":{"activity":"progress"}}', '2026-01-01'
+      FROM progress`
+    ).run(count, runId);
+  } finally {
+    db.close();
+  }
+}
+
+/** Schema-valid control-store selection; retention does not read artifact bodies. */
+function selectedRef(producerRunId: string): ArtifactRef {
+  const digest = createHash("sha256").update(producerRunId).digest("hex");
+  return {
+    schema_version: 2,
+    artifact_id: `art_${digest}`,
+    run_id: producerRunId,
+    phase: "fixture",
+    branch_id: null,
+    kind: "semantic-core",
+    operation_id: `handoff-${producerRunId}`,
+    version: 1,
+    producer: "fixture",
+    media_type: "application/json",
+    byte_length: 2,
+    content_digest: digest,
+    store_ref: `artifact://sha256/${digest}`,
+  };
 }
 
 function metadata(input: {
@@ -242,6 +282,312 @@ function capturedRetentionError(action: () => void): CatalogSessionRetentionErro
 }
 
 describe("run-cohort retention", () => {
+  it.each([0, 1, 2])(
+    "does not reserve the writer or hydrate contexts with %i terminals below/at the cap",
+    (terminalCount) => {
+      const root = temporaryRoot();
+      const dbPath = path.join(root, "orchestration.db");
+      const sessions = sessionRoot(root);
+      using checkpointer = new Checkpointer(dbPath, undefined, { maxRetainedRuns: 2 });
+      for (let index = 0; index < terminalCount; index += 1) {
+        mkRun(checkpointer, dbPath, `terminal-${index}`, "complete", "2026-01-01", root);
+      }
+      mkRun(checkpointer, dbPath, "live", "running", "2026-01-01", root);
+      const retainedSession = writeSessionFile({ root: sessions, agent: "echo", runId: "live" });
+      const orphanSession = writeSessionFile({ root: sessions, agent: "echo", runId: "orphan" });
+      const hydration = vi.spyOn(RunContext, "fromCheckpoint").mockImplementation(() => {
+        throw new Error("no-op retention must not hydrate contexts");
+      });
+      const events = vi.spyOn(checkpointer, "eventsAfter").mockImplementation(() => {
+        throw new Error("no-op retention must not replay events");
+      });
+      const holder = database(dbPath);
+      try {
+        holder.exec("BEGIN IMMEDIATE");
+        expect(owner(checkpointer, sessions).run()).toEqual({
+          evictedRunIds: [],
+          removedSessionFiles: 1,
+        });
+        expect(hydration).not.toHaveBeenCalled();
+        expect(events).not.toHaveBeenCalled();
+        expect(existsSync(retainedSession)).toBe(true);
+        expect(existsSync(orphanSession)).toBe(false);
+      } finally {
+        holder.exec("ROLLBACK");
+        holder.close();
+      }
+    }
+  );
+
+  it("prunes with a large live progress history without hydrating runtime contexts or replaying it", () => {
+    const root = temporaryRoot();
+    const dbPath = path.join(root, "orchestration.db");
+    const sessions = sessionRoot(root);
+    using checkpointer = new Checkpointer(dbPath, undefined, { maxRetainedRuns: 1 });
+    mkRun(checkpointer, dbPath, "old", "complete", "2026-01-01", root);
+    mkRun(checkpointer, dbPath, "new", "complete", "2026-01-02", root);
+    mkRun(checkpointer, dbPath, "live", "running", "2026-01-01", root);
+    appendProgressHistory(dbPath, "live", 105_183);
+    const oldSession = writeSessionFile({ root: sessions, agent: "echo", runId: "old" });
+    const hydration = vi.spyOn(RunContext, "fromCheckpoint").mockImplementation(() => {
+      throw new Error("dependency traversal needs compact checkpoints, not runtime contexts");
+    });
+    const events = vi.spyOn(checkpointer, "events").mockImplementation(() => {
+      throw new Error("retention must not replay liveness history");
+    });
+    const visits = vi.spyOn(checkpointer, "stateVisits").mockImplementation(() => {
+      throw new Error("dependency traversal must not reconstruct state visits");
+    });
+    expect(owner(checkpointer, sessions).run()).toEqual({
+      evictedRunIds: ["old"],
+      removedSessionFiles: 1,
+    });
+    expect(runIds(dbPath)).toEqual(["live", "new"]);
+    expect(existsSync(oldSession)).toBe(false);
+    expect(hydration).not.toHaveBeenCalled();
+    expect(events).not.toHaveBeenCalled();
+    expect(visits).not.toHaveBeenCalled();
+
+    visits.mockRestore();
+    const parses = vi.spyOn(JSON, "parse");
+    expect(checkpointer.stateVisits("live")).toEqual([
+      { event_sequence: 1, offset: 0, state_id: "intake", source: "create" },
+    ]);
+    // One relevant payload, not the 105,183 progress payloads. The public full-history
+    // reader remains disabled so this also detects a regression to events(runId).
+    expect(parses).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    '{"state_visits_v1":null}',
+    '{"state_visits_v1":{}}',
+    JSON.stringify({ state_visits_v1: Array.from({ length: 33 }, () => ({})) }),
+    '{"state_visits_v1":[{"schema_version":1,"state_id":"intake","source":"invented"}]}',
+    '{"state_visits_v1":',
+    "[]",
+    "null",
+    '{"unrelated":',
+    '{"unrelated":1e999}',
+    '{"unrelated":{"nested":[-1e999]}}',
+    `{"unrelated":${"9".repeat(309)}}`,
+  ])("refuses malformed event/visit payloads after SQL filtering: %s", (payload) => {
+    const root = temporaryRoot();
+    const dbPath = path.join(root, "orchestration.db");
+    using checkpointer = new Checkpointer(dbPath);
+    mkRun(checkpointer, dbPath, "live", "running", "2026-01-01", root);
+    const db = database(dbPath);
+    try {
+      db.prepare(
+        "INSERT INTO events(run_id, sequence, event_type, payload_json, created_at) VALUES (?, 2, 'fixture', ?, ?)"
+      ).run("live", payload, "2026-01-01");
+    } finally {
+      db.close();
+    }
+    expect(() => checkpointer.stateVisits("live")).toThrow();
+  });
+
+  it.each([
+    { sequence: 2, eventType: new Uint8Array([1]), createdAt: "2026-01-01" },
+    { sequence: 2, eventType: "fixture", createdAt: new Uint8Array([1]) },
+    { sequence: 2.5, eventType: "fixture", createdAt: "2026-01-01" },
+    { sequence: Number.MAX_SAFE_INTEGER + 1, eventType: "fixture", createdAt: "2026-01-01" },
+  ])("does not hide malformed SQLite event columns without visit metadata: %j", (event) => {
+    const root = temporaryRoot();
+    const dbPath = path.join(root, "orchestration.db");
+    using checkpointer = new Checkpointer(dbPath);
+    mkRun(checkpointer, dbPath, "live", "running", "2026-01-01", root);
+    const db = database(dbPath);
+    try {
+      db.prepare(
+        "INSERT INTO events(run_id, sequence, event_type, payload_json, created_at) VALUES ('live', ?, ?, '{}', ?)"
+      ).run(event.sequence, event.eventType, event.createdAt);
+    } finally {
+      db.close();
+    }
+    expect(() => checkpointer.stateVisits("live")).toThrow();
+  });
+
+  it("keeps exact sequences and offsets for visit metadata on any event type", () => {
+    const root = temporaryRoot();
+    const dbPath = path.join(root, "orchestration.db");
+    using checkpointer = new Checkpointer(dbPath);
+    mkRun(checkpointer, dbPath, "live", "running", "2026-01-01", root);
+    appendProgressHistory(dbPath, "live", 10);
+    const db = database(dbPath);
+    try {
+      db.prepare(
+        "INSERT INTO events(run_id, sequence, event_type, payload_json, created_at) VALUES ('live', 12, 'worker_progress', ?, '2026-01-01')"
+      ).run(
+        JSON.stringify({
+          state_visits_v1: [
+            { schema_version: 1, state_id: "review", source: "transition" },
+            { schema_version: 1, state_id: "review", source: "restored_current" },
+          ],
+        })
+      );
+    } finally {
+      db.close();
+    }
+    expect(checkpointer.stateVisits("live")).toEqual([
+      { event_sequence: 1, offset: 0, state_id: "intake", source: "create" },
+      { event_sequence: 12, offset: 0, state_id: "review", source: "transition" },
+      { event_sequence: 12, offset: 1, state_id: "review", source: "restored_current" },
+    ]);
+  });
+
+  it("pins transitive exact cross-run producers, but not unrelated old runs", () => {
+    const root = temporaryRoot();
+    const dbPath = path.join(root, "orchestration.db");
+    using checkpointer = new Checkpointer(dbPath, undefined, { maxRetainedRuns: 0 });
+    mkRun(checkpointer, dbPath, "ancestor", "complete", "2026-01-01", root);
+    mkRun(checkpointer, dbPath, "producer", "complete", "2026-01-02", root, [
+      selectedRef("ancestor"),
+    ]);
+    mkRun(checkpointer, dbPath, "unrelated", "complete", "2026-01-03", root);
+    const consumer = mkRun(checkpointer, dbPath, "consumer", "running", "2026-01-04", root, [
+      selectedRef("producer"),
+    ]);
+    expect(checkpointer.pruneTerminalRuns()).toEqual(["unrelated"]);
+    expect(runIds(dbPath)).toEqual(["ancestor", "consumer", "producer"]);
+    consumer.status = "error";
+    checkpointer.saveRun(consumer, "fixture_settled", {});
+    expect(new Set(checkpointer.pruneTerminalRuns())).toEqual(
+      new Set(["ancestor", "producer", "consumer"])
+    );
+  });
+
+  it("refuses a malformed retained dependency projection before any deletion or session cleanup", () => {
+    const root = temporaryRoot();
+    const dbPath = path.join(root, "orchestration.db");
+    const sessions = sessionRoot(root);
+    using checkpointer = new Checkpointer(dbPath, undefined, { maxRetainedRuns: 1 });
+    mkRun(checkpointer, dbPath, "old", "complete", "2026-01-01", root);
+    mkRun(checkpointer, dbPath, "new", "complete", "2026-01-02", root);
+    const oldSession = writeSessionFile({ root: sessions, agent: "echo", runId: "old" });
+    executeSql(
+      dbPath,
+      "UPDATE runs SET context_json=json_set(context_json, '$.selected_artifacts', json('[{}]')) WHERE run_id='new'"
+    );
+    expect(() => owner(checkpointer, sessions).run()).toThrow();
+    expect(runIds(dbPath)).toEqual(["new", "old"]);
+    expect(existsSync(oldSession)).toBe(true);
+  });
+
+  it.each(["during-read", "after-read"])(
+    "defers after a concurrent consumer selection committed %s instead of deleting its producer",
+    (phase) => {
+      const root = temporaryRoot();
+      const dbPath = path.join(root, "orchestration.db");
+      using checkpointer = new Checkpointer(dbPath, undefined, { maxRetainedRuns: 1 });
+      mkRun(checkpointer, dbPath, "old", "complete", "2026-01-01", root);
+      mkRun(checkpointer, dbPath, "new", "complete", "2026-01-02", root);
+      mkRun(checkpointer, dbPath, "consumer", "running", "2026-01-01", root);
+      const rival = database(dbPath);
+      const sqlite = requireValue(process.getBuiltinModule("node:sqlite"), "node:sqlite");
+      const exec = sqlite.DatabaseSync.prototype.exec;
+      let committed = false;
+      // Interleave a real second-connection commit at an exact transaction boundary,
+      // without sleeps, model calls or a production database.
+      vi.spyOn(sqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
+        this: import("node:sqlite").DatabaseSync,
+        sql: string
+      ) {
+        const boundary = phase === "during-read" ? "COMMIT" : "BEGIN IMMEDIATE";
+        if (this !== rival && sql === boundary && !committed) {
+          rival
+            .prepare(
+              "UPDATE runs SET context_json=json_set(context_json, '$.selected_artifacts', json(?)) WHERE run_id='consumer'"
+            )
+            .run(JSON.stringify([selectedRef("old")]));
+          committed = true;
+        }
+        return exec.call(this, sql);
+      });
+      try {
+        expect(checkpointer.pruneTerminalRuns()).toEqual([]);
+        expect(committed).toBe(true);
+        expect(runIds(dbPath)).toEqual(["consumer", "new", "old"]);
+      } finally {
+        rival.close();
+      }
+    }
+  );
+
+  it("does not spin or hold the writer during planning when other writers keep committing", () => {
+    const root = temporaryRoot();
+    const dbPath = path.join(root, "orchestration.db");
+    using checkpointer = new Checkpointer(dbPath, undefined, { maxRetainedRuns: 1 });
+    mkRun(checkpointer, dbPath, "old", "complete", "2026-01-01", root);
+    mkRun(checkpointer, dbPath, "new", "complete", "2026-01-02", root);
+    const rival = database(dbPath);
+    const sqlite = requireValue(process.getBuiltinModule("node:sqlite"), "node:sqlite");
+    const exec = sqlite.DatabaseSync.prototype.exec;
+    let writeReservations = 0;
+    vi.spyOn(sqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: import("node:sqlite").DatabaseSync,
+      sql: string
+    ) {
+      if (this !== rival && sql === "BEGIN IMMEDIATE") {
+        writeReservations += 1;
+        // Fail deterministically rather than hanging if retention retries indefinitely.
+        if (writeReservations > 1) throw new Error("retention repeated a stale plan");
+        rival.exec("UPDATE runs SET updated_at='2026-01-03' WHERE run_id='new'");
+      }
+      return exec.call(this, sql);
+    });
+    try {
+      expect(checkpointer.pruneTerminalRuns()).toEqual([]);
+      expect(writeReservations).toBe(1);
+      expect(runIds(dbPath)).toEqual(["new", "old"]);
+    } finally {
+      rival.close();
+    }
+  });
+
+  it("defers stale custody/keep-order plans and recomputes them on the next pass", () => {
+    const root = temporaryRoot();
+    const dbPath = path.join(root, "orchestration.db");
+    using checkpointer = new Checkpointer(dbPath, undefined, { maxRetainedRuns: 1 });
+    mkRun(checkpointer, dbPath, "old", "complete", "2026-01-01", root);
+    mkRun(checkpointer, dbPath, "middle", "complete", "2026-01-02", root);
+    mkRun(checkpointer, dbPath, "new", "complete", "2026-01-03", root);
+    const rival = database(dbPath);
+    const sqlite = requireValue(process.getBuiltinModule("node:sqlite"), "node:sqlite");
+    const exec = sqlite.DatabaseSync.prototype.exec;
+    let committed = false;
+    vi.spyOn(sqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: import("node:sqlite").DatabaseSync,
+      sql: string
+    ) {
+      if (this !== rival && sql === "BEGIN IMMEDIATE" && !committed) {
+        rival.exec("BEGIN IMMEDIATE");
+        rival
+          .prepare(
+            `INSERT INTO private_inputs(private_input_id, run_id, request_sha256, storage_key, state, created_at, updated_at)
+          VALUES ('hold', 'old', ?, 'fixture/request.json', 'active', '2026-01-01', '2026-01-01')`
+          )
+          .run("a".repeat(64));
+        rival.exec("UPDATE runs SET updated_at='2026-01-04' WHERE run_id='middle'");
+        rival.exec("COMMIT");
+        committed = true;
+      }
+      return exec.call(this, sql);
+    });
+    try {
+      expect(checkpointer.pruneTerminalRuns()).toEqual([]);
+      expect(committed).toBe(true);
+      expect(runIds(dbPath)).toEqual(["middle", "new", "old"]);
+      expect(checkpointer.pruneTerminalRuns()).toEqual(["new"]);
+      expect(runIds(dbPath)).toEqual(["middle", "old"]);
+      // Even above cap, an all-held plan must not request a writer reservation.
+      rival.exec("BEGIN IMMEDIATE");
+      expect(checkpointer.pruneTerminalRuns()).toEqual([]);
+      rival.exec("ROLLBACK");
+    } finally {
+      rival.close();
+    }
+  });
+
   it("co-retains exactly the newest 500 terminal database and JSONL cohorts by default", () => {
     const root = temporaryRoot();
     const dbPath = path.join(root, "orchestration.db");

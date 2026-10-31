@@ -1,7 +1,7 @@
-import { Checkpointer, canonicalJson, sha256 } from "../../src/checkpointer.js";
-import { RunContext } from "../../src/context.js";
-import { materializeRunInput } from "../../src/private-inputs.js";
-import type { StartKbAction } from "../../src/kb/contracts.js";
+import { Checkpointer, canonicalJson, sha256 } from "../../dist/checkpointer.js";
+import { RunContext } from "../../dist/context.js";
+import { materializeRunInput } from "../../dist/private-inputs.js";
+import type { StartKbAction } from "../../dist/kb/contracts.js";
 import { installTestProjectState } from "./penny-state-fixture.js";
 
 const controls = new Map<string, Checkpointer>();

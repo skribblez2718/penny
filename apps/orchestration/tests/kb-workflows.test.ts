@@ -25,9 +25,9 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256Hex, type KbPolicy } from "../src/kb/contracts.js";
-import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
-import { PolicyRefusal } from "../src/kb/policy.js";
+import { canonicalJson, sha256Hex, type KbPolicy } from "../dist/kb/contracts.js";
+import { readPolicy, writePolicy } from "../dist/kb/filesystem.js";
+import { PolicyRefusal } from "../dist/kb/policy.js";
 import {
   admitKbRun,
   initKb,
@@ -36,7 +36,7 @@ import {
   recheckAdmittedPolicy,
   statusKb,
   type KbWorkflowContext,
-} from "../src/kb/workflows.js";
+} from "../dist/kb/workflows.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 
 const dirs: string[] = [];

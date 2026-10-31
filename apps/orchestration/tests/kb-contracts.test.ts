@@ -27,7 +27,7 @@ import {
   type KbManifest,
   type KbProfile,
   type SourceRecord,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 
 const ZERO = validateKbContract(Sha256HexSchema, "0".repeat(64), "zero digest fixture");
 const NOW = "2026-01-01T00:00:00Z";

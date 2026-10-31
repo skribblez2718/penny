@@ -56,16 +56,16 @@ import {
   validateQueryRequest,
   type KbAgentRunner,
   type KbPhaseInvocation,
-} from "@penny/orchestration/source";
-import { sha256Hex } from "../../../../../apps/orchestration/src/kb/contracts.js";
-import { writePolicy } from "../../../../../apps/orchestration/src/kb/filesystem.js";
+} from "@penny/orchestration";
+import { sha256Hex } from "../../../../../apps/orchestration/dist/kb/contracts.js";
+import { writePolicy } from "../../../../../apps/orchestration/dist/kb/filesystem.js";
 import {
   KB_PHASE_TOOL_MATRIX,
   createTestOnlyArtifactBodyRunner,
-} from "../../../../../apps/orchestration/src/kb/session-tools.js";
+} from "../../../../../apps/orchestration/dist/kb/session-tools.js";
 import { setGlobalLogTransport } from "../../../../lib/logger/logger.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
 import {
-  createTestExtensionApi,
   isRecord,
   parseJson,
   requireArray,
@@ -1041,6 +1041,7 @@ describe("registered knowledge_base production path", () => {
     process.env.PROJECT_ROOT = projectRoot;
     process.env.PI_OBSERVABILITY_ENABLED = "false";
     process.env.PI_OBSERVABILITY_AUTO_START = "false";
+    process.env.PENNY_STATE_ROOT = path.join(temporary("penny-kb-preflight-state-e2e"), "state");
     setGlobalLogTransport((entry) => capturedLogs.push(entry));
 
     const targetFixture: {
@@ -1063,9 +1064,23 @@ describe("registered knowledge_base production path", () => {
     const parentSurfaces: RegisteredToolResult[] = [];
     const hostSurfaces: unknown[] = [];
 
-    // Unregistered project state fails closed before profile authority is consulted; the failure
-    // preserves its root cause and remains content-free. Valid state/profile/grant is then installed
-    // out of band.
+    // Missing retained state fails closed before profile authority is consulted and preserves its
+    // root cause without relying on ambient host state.
+    const uninitializedStateRefusal = await callTool(
+      tool,
+      projectRoot,
+      "call_state_uninitialized",
+      { schema_version: 1, action: "init", kb_profile_id: PROFILE, create: true, title: "X" },
+      parentSurfaces
+    );
+    expect(uninitializedStateRefusal.details).toMatchObject({
+      status: "refused",
+      warnings: ["STATE_UNINITIALIZED: retained state unavailable"],
+    });
+
+    // Once the catalog exists, the same unbound project is distinguished as unregistered. A valid
+    // state/profile/grant is then installed out of band for the synthetic lifecycle.
+    initializePennyState(temporary("penny-kb-catalog-seed-e2e"), { env: process.env });
     const profileRefusal = await callTool(
       tool,
       projectRoot,

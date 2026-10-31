@@ -6,11 +6,8 @@
 > authority, tool posture, and input→output transformation remain stable when the
 > subject matter changes.
 
-An agent is not a cognitive faculty and not a subject-matter specialist. `skribble` holds
-write authority and `tabitha` performs operationalization; neither is a psychological
-function, and both are legitimate capability contracts. Judging the roster by whether each
-member resembles a mental faculty invites deleting good abstractions and inventing useless
-ones.
+Roles describe capabilities, not psychological faculties or subject-matter specialties.
+Domain criteria belong in Domain Guidance.
 
 ## Single source of truth
 
@@ -47,11 +44,8 @@ neighbors: critique, explore, synthesize
 
 ### `neighbors` — semantic coordinates, not exhaustive exclusion
 
-A description may name only an agent's **nearest confusable neighbours**, at most three.
-Maintaining bilateral "do not use me for X" prose across the whole roster is quadratic: at
-eight agents it is tolerable, at ten it is ninety potential pairs maintained by hand, in
-prose, across ten files. That reproduces — inside the reusable architecture — a smaller
-copy of the maintenance problem the architecture exists to prevent.
+A description may name only an agent's **nearest confusable neighbours**, at most three;
+do not maintain roster-wide bilateral exclusions.
 
 `neighbors` requires **referential integrity, not symmetry**. Confusability is genuinely
 asymmetric: `ideate` is easily mistaken for `decide`, while `decide` is more often confused
@@ -67,10 +61,9 @@ anti-cases that disambiguate routing live.
 | Hard limit       | 1,024 | Validator fails the build                                   |
 | Preferred target |   500 | Validator warns; justified longer descriptions remain valid |
 
-The ceiling bounds runaway text, not authorship. The preferred target keeps routing compact
-without forcing deletion of distinctions that materially improve selection. Every description
-competes for the same model attention during agent and skill selection, so shorter still routes
-better when it preserves the relevant positive trigger and nearest anti-cases.
+The ceiling bounds runaway text, not authorship. Keep relevant positive triggers and nearest
+anti-cases even when they need more than the preferred target; length alone does not establish
+routing quality.
 
 ## The roster
 
@@ -86,6 +79,7 @@ better when it preserves the relevant positive trigger and nearest anti-cases.
 | `decide`     | `demetri`  | deliberative | `read`    | alternatives + objectives + uncertainty → justified choice + sensitivity |
 | `ideate`     | `ida`      | deliberative | `read`    | problem + constraints → diverse candidate possibilities                  |
 | `plan`       | `piper`    | deliberative | `read`    | goal + state + constraints → strategy                                    |
+| `specify`    | `rhea`     | deliberative | `read`    | bounded brief + evidence + constraints → specification                   |
 | `generate`   | `skribble` | operational  | `write`   | specification → materialized artifact                                    |
 | `taskify`    | `tabitha`  | operational  | `read`    | strategy/specification → executable task graph                           |
 
@@ -100,17 +94,15 @@ all valid without passing through an intermediate family.
 <!-- BEGIN GENERATED: families -->
 
 - **Epistemic** — transform information into knowledge or judgment: `analyze`, `critique`, `explore`, `synthesize`, `verify`
-- **Deliberative** — determine what should happen: `decide`, `ideate`, `plan`
+- **Deliberative** — determine what should be defined or happen: `decide`, `ideate`, `plan`, `specify`
 - **Operational** — convert intent into externalizable work: `generate`, `taskify`
 
 <!-- END GENERATED -->
 
 ## Semantic coordinates
 
-A router reasons over these far more reliably than over eight-way negative exclusions. They
-also make new-agent design harder in the right way: when someone proposes
-`secure-code-reviewer`, the table immediately shows it is `critique` or `verify` plus
-Domain Guidance, not a new capability.
+Use these coordinates to distinguish capability from domain: `secure-code-reviewer` is
+`critique` or `verify` plus Domain Guidance, not a new capability.
 
 <!-- BEGIN GENERATED: coordinates -->
 
@@ -124,6 +116,7 @@ Domain Guidance, not a new capability.
 | `decide`     | —       | **yes**     | **yes**       | —            | —       | —              |
 | `ideate`     | —       | —           | —             | —            | —       | —              |
 | `plan`       | —       | limited     | strategy_only | **yes**      | —       | —              |
+| `specify`    | —       | limited     | —             | —            | —       | —              |
 | `generate`   | —       | self_check  | —             | —            | **yes** | spec           |
 | `taskify`    | —       | —           | —             | dependencies | —       | —              |
 
@@ -143,6 +136,7 @@ Domain Guidance, not a new capability.
 | `decide`     | alternatives, constraints, objectives, evidence | selection, ranking, rationale, decision_sensitivity | `analyze`, `plan`, `critique`       |
 | `ideate`     | problem, constraints, evidence                  | candidates, hypotheses, options                     | `decide`, `generate`, `analyze`     |
 | `plan`       | goal, current_state, constraints                | strategy                                            | `taskify`, `analyze`                |
+| `specify`    | brief, evidence, constraints                    | specification                                       | `plan`, `generate`, `taskify`       |
 | `generate`   | specification                                   | artifact                                            | `synthesize`, `taskify`             |
 | `taskify`    | strategy, specification                         | task_graph                                          | `plan`, `generate`                  |
 

@@ -3,6 +3,11 @@ import { Type, type Static } from "typebox";
 import { canonicalJson, sha256 } from "../checkpointer.js";
 import { ArtifactRefSchema, ConfidenceSchema, type ArtifactRef } from "../contracts.js";
 import {
+  validateCanonicalSpecificationBytes,
+  validateSpecification,
+  type SpecificationV1,
+} from "./define.js";
+import {
   ArtifactIdSchema,
   OpaqueIdSchema,
   Sha256Schema,
@@ -13,7 +18,7 @@ import {
   validateSkillSchema,
 } from "./common.js";
 
-const MAX_PLAN_INPUTS = 3;
+const MAX_PLAN_INPUTS = 4;
 const MAX_STRATEGY_PROSE_BYTES = 65_536;
 const MAX_STRATEGY_CORE_LINE_BYTES = 49_152;
 const MAX_STRATEGY_SUMMARY_LINE_BYTES = 256;
@@ -76,6 +81,39 @@ export const PlanRequestConstraintsV1Schema = Type.Object(PlanRequestConstraintP
   additionalProperties: false,
 });
 export type PlanRequestConstraintsV1 = Readonly<Static<typeof PlanRequestConstraintsV1Schema>>;
+
+/** Invocation assurance is transport policy; the native request and Strategy stay unchanged. */
+export const PlanInvocationV2Schema = Type.Object(
+  {
+    schema_version: Type.Literal(2),
+    request: PlanRequestConstraintsV1Schema,
+    specification_assurance: Type.Union([
+      Type.Literal("reviewed_definition"),
+      Type.Literal("semantic_only"),
+    ]),
+  },
+  { additionalProperties: false }
+);
+export type PlanInvocationV2 = Readonly<Static<typeof PlanInvocationV2Schema>>;
+export function validatePlanInvocation(value: unknown): {
+  readonly request: PlanRequestConstraintsV1;
+  readonly specification_assurance: PlanInvocationV2["specification_assurance"];
+} {
+  if (typeof value !== "object" || value === null || !("schema_version" in value)) {
+    throw new Error("Plan invocation requires a supported schema_version");
+  }
+  if (value.schema_version === 1) {
+    return {
+      request: validateSkillSchema(PlanRequestConstraintsV1Schema, value, "PlanInvocationV1"),
+      specification_assurance: "semantic_only",
+    };
+  }
+  const invocation = validateSkillSchema(PlanInvocationV2Schema, value, "PlanInvocationV2");
+  return {
+    request: invocation.request,
+    specification_assurance: invocation.specification_assurance,
+  };
+}
 
 export const PlanRequestV1Schema = Type.Object(
   {
@@ -244,6 +282,7 @@ export const StrategyProductIntegrityV1Schema = Type.Object(
     integrity_id: Sha256Schema,
     status: Type.Literal("PASS"),
     request_ref: ArtifactRefSchema,
+    specification_assurance_ref: Type.Optional(ArtifactRefSchema),
     orientation_ref: ArtifactRefSchema,
     admission_ref: ArtifactRefSchema,
     evidence_refs: Type.Array(ArtifactRefSchema, { maxItems: 64 }),
@@ -286,6 +325,7 @@ export const StrategyProductEnvelopeV1Schema = Type.Object(
     status: Type.Literal("complete"),
     strategy_ref: ArtifactRefSchema,
     request_ref: ArtifactRefSchema,
+    specification_assurance_ref: Type.Optional(ArtifactRefSchema),
     orientation_ref: ArtifactRefSchema,
     admission_ref: ArtifactRefSchema,
     evidence_refs: Type.Array(ArtifactRefSchema, { maxItems: 64 }),
@@ -419,6 +459,124 @@ export const StrategyV1Schema = Type.Object(
   { additionalProperties: false }
 );
 export type StrategyV1 = Readonly<Static<typeof StrategyV1Schema>>;
+
+const StrategySourceDispositionV2Schema = Type.Union([
+  Type.Literal("addressed"),
+  Type.Literal("blocked"),
+  Type.Literal("deferred"),
+  Type.Literal("not_applicable"),
+]);
+
+const DraftSourceItemCoverageV2Schema = Type.Object(
+  {
+    source_item_index: Type.Integer({ minimum: 0, maximum: 511 }),
+    disposition: StrategySourceDispositionV2Schema,
+    strategy_outcome_indexes: Type.Array(Type.Integer({ minimum: 0, maximum: 23 }), {
+      maxItems: 24,
+      uniqueItems: true,
+    }),
+    rationale: TextSchema({ minBytes: 1, maxBytes: 2_048, multiline: true }),
+  },
+  { additionalProperties: false }
+);
+
+const DraftUnsupportedStrategyElementV2Schema = Type.Object(
+  {
+    strategy_outcome_index: Type.Union([Type.Integer({ minimum: 0, maximum: 23 }), Type.Null()]),
+    statement: TextSchema({ minBytes: 1, maxBytes: 2_048, multiline: true }),
+    rationale: TextSchema({ minBytes: 1, maxBytes: 2_048, multiline: true }),
+  },
+  { additionalProperties: false }
+);
+
+const { schema_version: ignoredStrategyCoreSchemaVersion, ...StrategyCoreV2BaseProperties } =
+  StrategyCoreProperties;
+void ignoredStrategyCoreSchemaVersion;
+
+export const StrategyCoreV2Schema = Type.Object(
+  {
+    schema_version: Type.Literal(2),
+    ...StrategyCoreV2BaseProperties,
+    source_item_coverage: Type.Array(DraftSourceItemCoverageV2Schema, { maxItems: 512 }),
+    unsupported_strategy_elements: Type.Array(DraftUnsupportedStrategyElementV2Schema, {
+      maxItems: 64,
+    }),
+  },
+  { additionalProperties: false }
+);
+export type StrategyCoreV2 = Readonly<Static<typeof StrategyCoreV2Schema>>;
+
+export const StrategyDraftV2Schema = Type.Object(
+  {
+    strategy_report: TextSchema({
+      minBytes: 1,
+      maxBytes: MAX_STRATEGY_PROSE_BYTES,
+      multiline: true,
+    }),
+    ...StrategyCoreV2Schema.properties,
+  },
+  { additionalProperties: false }
+);
+export type StrategyDraftV2 = Readonly<Static<typeof StrategyDraftV2Schema>>;
+
+export const StrategySourceItemCoverageV2Schema = Type.Object(
+  {
+    source_artifact_id: ArtifactIdSchema,
+    source_item_id: OpaqueIdSchema,
+    source_item_type: OpaqueIdSchema,
+    disposition: StrategySourceDispositionV2Schema,
+    strategy_outcome_ids: Type.Array(OpaqueIdSchema, {
+      maxItems: 24,
+      uniqueItems: true,
+    }),
+    rationale: TextSchema({ minBytes: 1, maxBytes: 2_048, multiline: true }),
+  },
+  { additionalProperties: false }
+);
+export type StrategySourceItemCoverageV2 = Readonly<
+  Static<typeof StrategySourceItemCoverageV2Schema>
+>;
+
+export const UnsupportedStrategyElementV2Schema = Type.Object(
+  {
+    strategy_outcome_id: Type.Union([OpaqueIdSchema, Type.Null()]),
+    statement: TextSchema({ minBytes: 1, maxBytes: 2_048, multiline: true }),
+    rationale: TextSchema({ minBytes: 1, maxBytes: 2_048, multiline: true }),
+  },
+  { additionalProperties: false }
+);
+export type UnsupportedStrategyElementV2 = Readonly<
+  Static<typeof UnsupportedStrategyElementV2Schema>
+>;
+
+export const StrategyV2Schema = Type.Object(
+  {
+    schema_version: Type.Literal(2),
+    strategy_id: OpaqueIdSchema,
+    strategy_report: TextSchema({
+      minBytes: 1,
+      maxBytes: MAX_STRATEGY_PROSE_BYTES,
+      multiline: true,
+    }),
+    ...StrategySemanticProperties,
+    source_item_coverage: Type.Array(StrategySourceItemCoverageV2Schema, { maxItems: 512 }),
+    unsupported_strategy_elements: Type.Array(UnsupportedStrategyElementV2Schema, {
+      maxItems: 64,
+    }),
+    request: PlanRequestV1Schema,
+    request_sha256: Sha256Schema,
+    source_lineage: StrategySourceLineageV1Schema,
+    execution_started: Type.Literal(false),
+  },
+  { additionalProperties: false }
+);
+export type StrategyV2 = Readonly<Static<typeof StrategyV2Schema>>;
+
+export interface SpecificationStrategySourceItemV2 {
+  readonly source_item_id: string;
+  readonly source_item_type: string;
+  readonly required: boolean;
+}
 
 function sanitizedIssues(issues: readonly string[]): readonly string[] {
   return [
@@ -780,7 +938,7 @@ function strategySemanticIssues(core: StrategyCoreV1, request: PlanRequestV1): r
   if (core.disposition === "ready") {
     if (core.outcomes.length === 0) issues.push("ready strategy requires at least one outcome");
     if (!sameNumbers(linked, range(lengths.desired))) {
-      issues.push("ready strategy outcomes must cover every desired outcome");
+      issues.push("ready strategy outcomes must cover each desired outcome exactly once");
     }
     if (core.blockers.length !== 0) issues.push("ready strategy cannot contain blockers");
     if (coverage.blocked_desired_outcome_indexes.length !== 0) {
@@ -795,7 +953,9 @@ function strategySemanticIssues(core: StrategyCoreV1, request: PlanRequestV1): r
     if (
       !sameNumbers([...linked, ...coverage.blocked_desired_outcome_indexes], range(lengths.desired))
     ) {
-      issues.push("blocked strategy linked and blocked outcomes must cover every desired outcome");
+      issues.push(
+        "blocked strategy linked and blocked outcomes must cover each desired outcome exactly once"
+      );
     }
     if (!exactCoverage) issues.push("blocked strategy request coverage must be exact");
   } else if (
@@ -1475,6 +1635,877 @@ export function validateCanonicalStrategyBytes(bytes: Uint8Array, ref?: Artifact
   return strategy;
 }
 
+export const validateCanonicalStrategyV1Bytes = validateCanonicalStrategyBytes;
+
+export function specificationStrategySourceItems(
+  value: unknown
+): readonly SpecificationStrategySourceItemV2[] {
+  const specification = validateSpecification(value, { skipRevisionClosure: true });
+  const entries: SpecificationStrategySourceItemV2[] = [
+    ...specification.requirements.map((entry) => ({
+      source_item_id: entry.item_id,
+      source_item_type: "requirement",
+      required: entry.priority === "must",
+    })),
+    ...specification.constraints.map((entry) => ({
+      source_item_id: entry.item_id,
+      source_item_type: "constraint",
+      required: true,
+    })),
+    ...specification.non_goals.map((entry) => ({
+      source_item_id: entry.item_id,
+      source_item_type: "non_goal",
+      required: true,
+    })),
+    ...specification.assumptions.map((entry) => ({
+      source_item_id: entry.item_id,
+      source_item_type: "assumption",
+      required: false,
+    })),
+    ...specification.risks.map((entry) => ({
+      source_item_id: entry.item_id,
+      source_item_type: "risk",
+      required: false,
+    })),
+    ...specification.open_questions.map((entry) => ({
+      source_item_id: entry.item_id,
+      source_item_type: "open_question",
+      required: entry.blocking,
+    })),
+    ...specification.standards_status.map((entry) => ({
+      source_item_id: entry.item_id,
+      source_item_type: "standard",
+      required: entry.status === "applicable" || entry.status === "satisfied_with_evidence",
+    })),
+  ].sort(
+    (left, right) =>
+      left.source_item_id.localeCompare(right.source_item_id) ||
+      left.source_item_type.localeCompare(right.source_item_type)
+  );
+  assertUnique(
+    entries.map((entry) => entry.source_item_id),
+    "SpecificationV1 strategy source item IDs"
+  );
+  return entries;
+}
+
+export const PlanSpecificationSourceIndexV1Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.plan-specification-source-index.v1"),
+    schema_version: Type.Literal(1),
+    specification_ref: ArtifactRefSchema,
+    specification_sha256: Sha256Schema,
+    entries: Type.Array(
+      Type.Object(
+        {
+          index: Type.Integer({ minimum: 0, maximum: 511 }),
+          source_item_id: OpaqueIdSchema,
+          source_item_type: Type.Union([
+            Type.Literal("requirement"),
+            Type.Literal("constraint"),
+            Type.Literal("non_goal"),
+            Type.Literal("assumption"),
+            Type.Literal("risk"),
+            Type.Literal("open_question"),
+            Type.Literal("standard"),
+          ]),
+          required: Type.Boolean(),
+          // JSON pointer into the exact canonical SpecificationV1, not a prose locator.
+          source_locator: Type.String({
+            pattern:
+              "^/(requirements|constraints|non_goals|assumptions|risks|open_questions|standards_status)/[0-9]+$",
+          }),
+          source_value_sha256: Sha256Schema,
+        },
+        { additionalProperties: false }
+      ),
+      { minItems: 1, maxItems: 512 }
+    ),
+  },
+  { additionalProperties: false }
+);
+export type PlanSpecificationSourceIndexV1 = Readonly<
+  Static<typeof PlanSpecificationSourceIndexV1Schema>
+>;
+
+/** Complete deterministic namespace; full source semantics stay in the exact specification. */
+export function planSpecificationSourceIndex(
+  specificationBytes: Uint8Array,
+  specificationRef: ArtifactRef
+): PlanSpecificationSourceIndexV1 {
+  const specification = validateCanonicalSpecificationBytes(specificationBytes, specificationRef);
+  const locators = new Map<string, { source_locator: string; source_value_sha256: string }>();
+  for (const collection of [
+    "requirements",
+    "constraints",
+    "non_goals",
+    "assumptions",
+    "risks",
+    "open_questions",
+    "standards_status",
+  ] as const) {
+    specification[collection].forEach((entry, index) => {
+      locators.set(entry.item_id, {
+        source_locator: `/${collection}/${index}`,
+        source_value_sha256: sha256(canonicalJson(entry)),
+      });
+    });
+  }
+  const entries = specificationStrategySourceItems(specification).map((entry, index) => {
+    const locator = locators.get(entry.source_item_id);
+    if (locator === undefined) throw new Error("Plan source index lost its exact source locator");
+    return { index, ...entry, ...locator };
+  });
+  return validateSkillSchema(
+    PlanSpecificationSourceIndexV1Schema,
+    {
+      schema_id: "penny.plan-specification-source-index.v1",
+      schema_version: 1,
+      specification_ref: specificationRef,
+      specification_sha256: sha256(specificationBytes),
+      entries,
+    },
+    "PlanSpecificationSourceIndexV1"
+  );
+}
+
+/** Reproject from exact source bytes: shape or digest claims alone never establish coverage. */
+export function validatePlanSpecificationSourceIndex(
+  value: unknown,
+  specificationBytes: Uint8Array,
+  specificationRef: ArtifactRef
+): PlanSpecificationSourceIndexV1 {
+  const index = validateSkillSchema(
+    PlanSpecificationSourceIndexV1Schema,
+    value,
+    "PlanSpecificationSourceIndexV1"
+  );
+  if (
+    canonicalJson(index) !==
+    canonicalJson(planSpecificationSourceIndex(specificationBytes, specificationRef))
+  ) {
+    throw new Error("PlanSpecificationSourceIndexV1 differs from its exact specification source");
+  }
+  return index;
+}
+
+function strategyCoreV1FromV2(core: StrategyCoreV2): StrategyCoreV1 {
+  return {
+    schema_version: 1,
+    disposition: core.disposition,
+    applicability_reason: core.applicability_reason,
+    outcomes: core.outcomes,
+    dependencies: core.dependencies,
+    request_coverage: core.request_coverage,
+    blockers: core.blockers,
+    confidence: core.confidence,
+  };
+}
+
+function strategyDraftV1FromV2(draft: StrategyDraftV2): StrategyDraftV1 {
+  return {
+    strategy_report: draft.strategy_report,
+    ...strategyCoreV1FromV2(draft),
+  };
+}
+
+function validateStrategyDraftV2Shape(value: unknown): StrategyDraftV2 {
+  const draft = validateSkillSchema(StrategyDraftV2Schema, value, "StrategyDraftV2");
+  validateBoundedText(
+    draft.strategy_report,
+    "StrategyDraftV2 strategy report",
+    MAX_STRATEGY_PROSE_BYTES,
+    1
+  );
+  validateDraftShape(strategyDraftV1FromV2(draft));
+  for (const entry of draft.source_item_coverage) {
+    validateBoundedText(entry.rationale, "StrategyDraftV2 source coverage rationale", 2_048, 1);
+  }
+  for (const entry of draft.unsupported_strategy_elements) {
+    validateBoundedText(entry.statement, "StrategyDraftV2 unsupported statement", 2_048, 1);
+    validateBoundedText(entry.rationale, "StrategyDraftV2 unsupported rationale", 2_048, 1);
+  }
+  assertCanonicalUnique(draft.source_item_coverage, "StrategyDraftV2 source item coverage");
+  assertCanonicalUnique(
+    draft.unsupported_strategy_elements,
+    "StrategyDraftV2 unsupported strategy elements"
+  );
+  return draft;
+}
+
+function strategyDraftV2SourceIssues(input: {
+  readonly draft: StrategyDraftV2;
+  readonly request: PlanRequestV1;
+  readonly specification?: SpecificationV1;
+  readonly specificationArtifactId?: string;
+}): readonly string[] {
+  const { draft, request, specification, specificationArtifactId } = input;
+  const issues: string[] = [];
+  if (specification === undefined) {
+    if (specificationArtifactId !== undefined) {
+      issues.push("specification artifact ID requires SpecificationV1 bytes");
+    }
+    if (draft.source_item_coverage.length !== 0) {
+      issues.push("standalone StrategyDraftV2 cannot fabricate source item coverage");
+    }
+    if (draft.unsupported_strategy_elements.length !== 0) {
+      issues.push("standalone StrategyDraftV2 cannot fabricate unsupported source elements");
+    }
+    return issues;
+  }
+  if (
+    specificationArtifactId === undefined ||
+    !request.input_artifact_ids.includes(specificationArtifactId)
+  ) {
+    issues.push("specification-informed StrategyDraftV2 lacks the exact admitted source artifact");
+    return issues;
+  }
+  const sourceItems = specificationStrategySourceItems(specification);
+  if (!specification.planning_handoff.planning_ready && draft.disposition !== "blocked") {
+    issues.push("a clarification-required SpecificationV1 requires a blocked strategy");
+  }
+  const coveredIndexes = draft.source_item_coverage.map((entry) => entry.source_item_index);
+  indexesInRange(issues, coveredIndexes, sourceItems.length, "source item coverage");
+  for (const entry of draft.source_item_coverage) {
+    indexesInRange(
+      issues,
+      entry.strategy_outcome_indexes,
+      draft.outcomes.length,
+      "source coverage strategy outcomes"
+    );
+    if (entry.disposition === "addressed" && entry.strategy_outcome_indexes.length === 0) {
+      issues.push("addressed source item coverage requires at least one strategy outcome");
+    }
+    if (entry.disposition !== "addressed" && entry.strategy_outcome_indexes.length > 0) {
+      issues.push("non-addressed source item coverage cannot claim strategy outcomes");
+    }
+    if (
+      draft.disposition === "ready" &&
+      (entry.disposition === "blocked" || entry.disposition === "deferred") &&
+      sourceItems[entry.source_item_index]?.required === true
+    ) {
+      issues.push("ready StrategyDraftV2 cannot block or defer a required source item");
+    }
+  }
+  const coveredSet = new Set(coveredIndexes);
+  for (let index = 0; index < sourceItems.length; index += 1) {
+    if (sourceItems[index]?.required === true && !coveredSet.has(index)) {
+      issues.push(`required source item index ${index} lacks coverage`);
+    }
+  }
+  const sourceCoveredOutcomeIndexes = new Set(
+    draft.source_item_coverage.flatMap((entry) => entry.strategy_outcome_indexes)
+  );
+  const unsupportedOutcomeIndexes = draft.unsupported_strategy_elements.flatMap((entry) =>
+    entry.strategy_outcome_index === null ? [] : [entry.strategy_outcome_index]
+  );
+  indexesInRange(
+    issues,
+    unsupportedOutcomeIndexes,
+    draft.outcomes.length,
+    "unsupported strategy element outcomes"
+  );
+  for (const index of new Set(unsupportedOutcomeIndexes)) {
+    if (sourceCoveredOutcomeIndexes.has(index)) {
+      issues.push(
+        `strategy outcome index ${index} cannot have both source coverage and a derived-need rationale`
+      );
+    }
+  }
+  const supportedOutcomeIndexes = new Set([
+    ...sourceCoveredOutcomeIndexes,
+    ...unsupportedOutcomeIndexes,
+  ]);
+  for (let index = 0; index < draft.outcomes.length; index += 1) {
+    if (!supportedOutcomeIndexes.has(index)) {
+      issues.push(
+        `strategy outcome index ${index} lacks source coverage or derived-need rationale`
+      );
+    }
+  }
+  return sanitizedIssues(issues);
+}
+
+export function validateStrategyDraftV2(
+  value: unknown,
+  input: {
+    readonly request: unknown;
+    readonly specification?: unknown;
+    readonly specificationArtifactId?: string;
+  }
+): StrategyDraftV2 {
+  const request = validatePlanRequest(input.request);
+  let draft: StrategyDraftV2;
+  try {
+    draft = validateStrategyDraftV2Shape(value);
+    validateStrategyDraft(strategyDraftV1FromV2(draft), { request });
+  } catch (error) {
+    if (error instanceof StrategyDraftValidationError) throw error;
+    const issues =
+      error instanceof SkillSchemaValidationError
+        ? error.issues
+        : [error instanceof Error ? error.message : "closed schema validation failed"];
+    throw new StrategyDraftValidationError("SCHEMA_INVALID", sanitizedIssues(issues));
+  }
+  const specification =
+    input.specification === undefined
+      ? undefined
+      : validateSpecification(input.specification, { skipRevisionClosure: true });
+  const sourceIssues = strategyDraftV2SourceIssues({
+    draft,
+    request,
+    ...(specification === undefined ? {} : { specification }),
+    ...(input.specificationArtifactId === undefined
+      ? {}
+      : { specificationArtifactId: input.specificationArtifactId }),
+  });
+  if (sourceIssues.length > 0) {
+    throw new StrategyDraftValidationError("SEMANTIC_INVALID", sourceIssues);
+  }
+  return draft;
+}
+
+export function parseStrategyDraftV2(
+  bytes: Uint8Array,
+  input: {
+    readonly request: unknown;
+    readonly specification?: unknown;
+    readonly specificationArtifactId?: string;
+  }
+): { readonly draft: StrategyDraftV2; readonly summary: StrategyRoutingSummaryV1 } {
+  const body = Buffer.from(bytes);
+  if (body.byteLength === 0 || body.byteLength > MAX_PERSISTED_STRATEGY_DRAFT_BYTES) {
+    throw draftFailure(
+      "FRAMING_INVALID",
+      `StrategyDraftV2 output must be 1..${MAX_PERSISTED_STRATEGY_DRAFT_BYTES} bytes`
+    );
+  }
+  const framingIssues: string[] = [];
+  if (body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf)
+    framingIssues.push("StrategyDraftV2 output forbids BOM");
+  if (body.includes(0)) framingIssues.push("StrategyDraftV2 output forbids NUL");
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body);
+  } catch {
+    throw draftFailure("FRAMING_INVALID", "StrategyDraftV2 output is not strict UTF-8");
+  }
+  if (text.includes("\ufeff")) framingIssues.push("StrategyDraftV2 output forbids BOM");
+  if (text.includes("\r")) framingIssues.push("StrategyDraftV2 output forbids CR");
+  if (text.includes("```")) framingIssues.push("StrategyDraftV2 output forbids code fences");
+  const framed = text.endsWith("\n") ? text.slice(0, -1) : text;
+  if (framed.endsWith("\n")) framingIssues.push("StrategyDraftV2 permits at most one trailing LF");
+  if (countLineStartMarker(framed, "STRATEGY_CORE:") !== 1) {
+    framingIssues.push("StrategyDraftV2 requires exactly one line-start STRATEGY_CORE marker");
+  }
+  if (countLineStartMarker(framed, "SUMMARY:") !== 1) {
+    framingIssues.push("StrategyDraftV2 requires exactly one line-start SUMMARY marker");
+  }
+  const lines = framed.split("\n");
+  const nonemptyIndexes = lines.flatMap((line, index) => (line.length === 0 ? [] : [index]));
+  const coreIndex = nonemptyIndexes.at(-2);
+  const summaryIndex = nonemptyIndexes.at(-1);
+  const coreLine = coreIndex === undefined ? "" : (lines[coreIndex] ?? "");
+  const summaryLine = summaryIndex === undefined ? "" : (lines[summaryIndex] ?? "");
+  if (!coreLine.startsWith("STRATEGY_CORE:") || !summaryLine.startsWith("SUMMARY:")) {
+    framingIssues.push("STRATEGY_CORE and SUMMARY must be the final two nonempty lines");
+  }
+  if (Buffer.byteLength(coreLine, "utf8") > MAX_STRATEGY_CORE_LINE_BYTES) {
+    framingIssues.push(`STRATEGY_CORE line must be at most ${MAX_STRATEGY_CORE_LINE_BYTES} bytes`);
+  }
+  if (Buffer.byteLength(summaryLine, "utf8") > MAX_STRATEGY_SUMMARY_LINE_BYTES) {
+    framingIssues.push(`SUMMARY line must be at most ${MAX_STRATEGY_SUMMARY_LINE_BYTES} bytes`);
+  }
+  const summary = parsePersistedStrategyRoutingSummary(summaryLine);
+  if (summary === undefined) framingIssues.push("StrategyDraftV2 SUMMARY is invalid");
+  const strategyReport = coreIndex === undefined ? "" : lines.slice(0, coreIndex).join("\n");
+  if (
+    Buffer.byteLength(strategyReport, "utf8") < 1 ||
+    Buffer.byteLength(strategyReport, "utf8") > MAX_STRATEGY_PROSE_BYTES ||
+    strategyReport.trim().length === 0
+  )
+    framingIssues.push("strategy prose must be nonempty and within its byte budget");
+  if (framingIssues.length > 0 || summary === undefined) {
+    throw draftFailure("FRAMING_INVALID", framingIssues);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(coreLine.slice("STRATEGY_CORE:".length));
+  } catch {
+    throw draftFailure("JSON_INVALID", "StrategyDraftV2 STRATEGY_CORE footer is not JSON");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw draftFailure("SCHEMA_INVALID", "StrategyDraftV2 STRATEGY_CORE footer must be an object");
+  }
+  const draft = validateStrategyDraftV2(
+    Object.assign({ strategy_report: strategyReport }, parsed),
+    input
+  );
+  if (draft.confidence !== summary.confidence) {
+    throw draftFailure(
+      "SEMANTIC_INVALID",
+      "StrategyDraftV2 footer and SUMMARY confidence must match"
+    );
+  }
+  return { draft, summary };
+}
+
+function strategyV2SemanticProjection(
+  draft: StrategyDraftV2,
+  request: PlanRequestV1,
+  specification: SpecificationV1 | undefined,
+  specificationArtifactId: string | undefined
+): {
+  readonly base: StrategySemanticProjectionV1;
+  readonly source_item_coverage: readonly StrategySourceItemCoverageV2[];
+  readonly unsupported_strategy_elements: readonly UnsupportedStrategyElementV2[];
+} {
+  const baseDraft = strategyDraftV1FromV2(draft);
+  const base = projectStrategyDraft(baseDraft, { request });
+  const requestIds = planRequestItemIds(request);
+  const draftOutcomeIds = draft.outcomes.map((outcome) =>
+    stablePlanId("strategy-outcome", {
+      statement: outcome.statement,
+      desired_outcome_ids: sortedStrings(
+        mappedValues(
+          outcome.desired_outcome_indexes,
+          requestIds.desired_outcome_ids,
+          "desired outcome"
+        )
+      ),
+      success_signal: outcome.success_signal,
+    })
+  );
+  const sourceItems =
+    specification === undefined ? [] : specificationStrategySourceItems(specification);
+  const coverage = draft.source_item_coverage
+    .map((entry) => {
+      const source = sourceItems[entry.source_item_index];
+      if (source === undefined || specificationArtifactId === undefined) {
+        throw new Error("StrategyDraftV2 source item projection failed");
+      }
+      return {
+        source_artifact_id: specificationArtifactId,
+        source_item_id: source.source_item_id,
+        source_item_type: source.source_item_type,
+        disposition: entry.disposition,
+        strategy_outcome_ids: sortedStrings(
+          mappedValues(entry.strategy_outcome_indexes, draftOutcomeIds, "strategy outcome")
+        ),
+        rationale: entry.rationale,
+      };
+    })
+    .sort(
+      (left, right) =>
+        left.source_artifact_id.localeCompare(right.source_artifact_id) ||
+        left.source_item_id.localeCompare(right.source_item_id)
+    );
+  const unsupported = draft.unsupported_strategy_elements
+    .map((entry) => ({
+      strategy_outcome_id:
+        entry.strategy_outcome_index === null
+          ? null
+          : (mappedValues(
+              [entry.strategy_outcome_index],
+              draftOutcomeIds,
+              "unsupported strategy outcome"
+            )[0] ?? null),
+      statement: entry.statement,
+      rationale: entry.rationale,
+    }))
+    .sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+  return { base, source_item_coverage: coverage, unsupported_strategy_elements: unsupported };
+}
+
+function strategyV2IdSeed(input: {
+  readonly base: StrategySemanticProjectionV1;
+  readonly sourceItemCoverage: readonly StrategySourceItemCoverageV2[];
+  readonly unsupportedStrategyElements: readonly UnsupportedStrategyElementV2[];
+  readonly requestSha256: string;
+  readonly strategyReport: string;
+}): unknown {
+  return {
+    semantic_product: {
+      ...input.base,
+      source_item_coverage: input.sourceItemCoverage,
+      unsupported_strategy_elements: input.unsupportedStrategyElements,
+    },
+    request_sha256: input.requestSha256,
+    strategy_report_sha256: sha256(Buffer.from(input.strategyReport, "utf8")),
+  };
+}
+
+function v1CompatibilityProjection(strategy: StrategyV2): StrategyV1 {
+  const base = validateSkillSchema(
+    StrategySemanticProjectionV1Schema,
+    {
+      schema_version: 1,
+      disposition: strategy.disposition,
+      applicability_reason: strategy.applicability_reason,
+      outcomes: strategy.outcomes,
+      dependencies: strategy.dependencies,
+      request_coverage: strategy.request_coverage,
+      blockers: strategy.blockers,
+      confidence: strategy.confidence,
+      execution_started: strategy.execution_started,
+    },
+    "StrategyV2 V1-compatible projection"
+  );
+  return {
+    schema_version: 1,
+    strategy_id: stablePlanId(
+      "strategy",
+      strategyIdSeed({
+        projection: base,
+        requestSha256: strategy.request_sha256,
+        strategyReport: strategy.strategy_report,
+      })
+    ),
+    strategy_report: strategy.strategy_report,
+    disposition: strategy.disposition,
+    applicability_reason: strategy.applicability_reason,
+    outcomes: strategy.outcomes,
+    dependencies: strategy.dependencies,
+    request_coverage: strategy.request_coverage,
+    blockers: strategy.blockers,
+    confidence: strategy.confidence,
+    request: strategy.request,
+    request_sha256: strategy.request_sha256,
+    source_lineage: strategy.source_lineage,
+    execution_started: false,
+  };
+}
+
+function validateStrategyV2SourceCoverage(input: {
+  readonly strategy: StrategyV2;
+  readonly specification?: SpecificationV1;
+  readonly specificationArtifactId?: string;
+  readonly strictSourceValidation: boolean;
+}): void {
+  const { strategy, specification, specificationArtifactId, strictSourceValidation } = input;
+  const outcomeIds = new Set(strategy.outcomes.map((entry) => entry.outcome_id));
+  assertCanonicalUnique(strategy.source_item_coverage, "StrategyV2 source item coverage");
+  assertCanonicalUnique(
+    strategy.unsupported_strategy_elements,
+    "StrategyV2 unsupported strategy elements"
+  );
+  const sortedCoverage = [...strategy.source_item_coverage].sort(
+    (left, right) =>
+      left.source_artifact_id.localeCompare(right.source_artifact_id) ||
+      left.source_item_id.localeCompare(right.source_item_id)
+  );
+  if (canonicalJson(sortedCoverage) !== canonicalJson(strategy.source_item_coverage)) {
+    throw new Error("StrategyV2 source item coverage is not in canonical order");
+  }
+  const sortedUnsupported = [...strategy.unsupported_strategy_elements].sort((left, right) =>
+    canonicalJson(left).localeCompare(canonicalJson(right))
+  );
+  if (canonicalJson(sortedUnsupported) !== canonicalJson(strategy.unsupported_strategy_elements)) {
+    throw new Error("StrategyV2 unsupported strategy elements are not in canonical order");
+  }
+  for (const entry of strategy.source_item_coverage) {
+    assertSorted(entry.strategy_outcome_ids, "StrategyV2 coverage outcome IDs");
+    if (entry.strategy_outcome_ids.some((id) => !outcomeIds.has(id))) {
+      throw new Error("StrategyV2 source coverage references an unknown outcome");
+    }
+    if (entry.disposition === "addressed" && entry.strategy_outcome_ids.length === 0) {
+      throw new Error("addressed StrategyV2 source coverage requires an outcome");
+    }
+    if (entry.disposition !== "addressed" && entry.strategy_outcome_ids.length > 0) {
+      throw new Error("non-addressed StrategyV2 source coverage cannot claim outcomes");
+    }
+  }
+  for (const entry of strategy.unsupported_strategy_elements) {
+    if (entry.strategy_outcome_id !== null && !outcomeIds.has(entry.strategy_outcome_id)) {
+      throw new Error("StrategyV2 unsupported element references an unknown outcome");
+    }
+  }
+  if (!strictSourceValidation) return;
+  if (specification === undefined) {
+    if (
+      strategy.source_item_coverage.length !== 0 ||
+      strategy.unsupported_strategy_elements.length !== 0
+    ) {
+      throw new Error("standalone StrategyV2 cannot fabricate itemized source traceability");
+    }
+    return;
+  }
+  if (
+    specificationArtifactId === undefined ||
+    !strategy.request.input_artifact_ids.includes(specificationArtifactId)
+  ) {
+    throw new Error("specification-informed StrategyV2 lacks the exact admitted specification");
+  }
+  const sourceItems = specificationStrategySourceItems(specification);
+  if (!specification.planning_handoff.planning_ready && strategy.disposition !== "blocked") {
+    throw new Error("a clarification-required SpecificationV1 requires a blocked StrategyV2");
+  }
+  const sourceById = new Map(sourceItems.map((entry) => [entry.source_item_id, entry]));
+  const coveredIds = new Set<string>();
+  for (const entry of strategy.source_item_coverage) {
+    if (entry.source_artifact_id !== specificationArtifactId) {
+      throw new Error("StrategyV2 source coverage binds the wrong artifact");
+    }
+    const source = sourceById.get(entry.source_item_id);
+    if (source === undefined || source.source_item_type !== entry.source_item_type) {
+      throw new Error("StrategyV2 source coverage binds an unknown source item");
+    }
+    if (coveredIds.has(entry.source_item_id)) {
+      throw new Error("StrategyV2 source item is covered more than once");
+    }
+    coveredIds.add(entry.source_item_id);
+    if (
+      strategy.disposition === "ready" &&
+      source.required &&
+      (entry.disposition === "blocked" || entry.disposition === "deferred")
+    ) {
+      throw new Error("ready StrategyV2 blocks or defers a required source item");
+    }
+  }
+  for (const source of sourceItems) {
+    if (source.required && !coveredIds.has(source.source_item_id)) {
+      throw new Error(`required source item '${source.source_item_id}' lacks coverage`);
+    }
+  }
+  const supportedOutcomeIds = new Set([
+    ...strategy.source_item_coverage.flatMap((entry) => entry.strategy_outcome_ids),
+    ...strategy.unsupported_strategy_elements.flatMap((entry) =>
+      entry.strategy_outcome_id === null ? [] : [entry.strategy_outcome_id]
+    ),
+  ]);
+  if (strategy.outcomes.some((entry) => !supportedOutcomeIds.has(entry.outcome_id))) {
+    throw new Error("StrategyV2 outcome lacks source coverage or derived-need rationale");
+  }
+}
+
+export function validateStrategyV2(
+  value: unknown,
+  options: {
+    readonly specification?: unknown;
+    readonly specificationArtifactId?: string;
+    readonly strictSourceValidation?: boolean;
+  } = {}
+): StrategyV2 {
+  const strategy = validateSkillSchema(StrategyV2Schema, value, "StrategyV2");
+  validateStrategy(v1CompatibilityProjection(strategy));
+  const specification =
+    options.specification === undefined
+      ? undefined
+      : validateSpecification(options.specification, { skipRevisionClosure: true });
+  validateStrategyV2SourceCoverage({
+    strategy,
+    ...(specification === undefined ? {} : { specification }),
+    ...(options.specificationArtifactId === undefined
+      ? {}
+      : { specificationArtifactId: options.specificationArtifactId }),
+    strictSourceValidation: options.strictSourceValidation === true,
+  });
+  const base = semanticProjectionFromStrategy(v1CompatibilityProjection(strategy));
+  const expectedId = stablePlanId(
+    "strategy-v2",
+    strategyV2IdSeed({
+      base,
+      sourceItemCoverage: strategy.source_item_coverage,
+      unsupportedStrategyElements: strategy.unsupported_strategy_elements,
+      requestSha256: strategy.request_sha256,
+      strategyReport: strategy.strategy_report,
+    })
+  );
+  if (strategy.strategy_id !== expectedId) throw new Error("StrategyV2 strategy_id drifted");
+  return strategy;
+}
+
+export function sealStrategyV2(input: {
+  readonly request: unknown;
+  readonly draft: unknown;
+  readonly draftBytes: Uint8Array;
+  readonly requestSha256: string;
+  readonly sourceRequestArtifactId: string;
+  readonly sourceDraftArtifactId: string;
+  readonly exactInputArtifactIds: readonly string[];
+  readonly specification?: unknown;
+  readonly specificationArtifactId?: string;
+}): StrategyV2 {
+  const request = validatePlanRequest(input.request);
+  const requestSha256 = planRequestSha256(request);
+  if (input.requestSha256 !== requestSha256) throw new Error("StrategyV2 request binding is stale");
+  const inputArtifactIds = sortedStrings(input.exactInputArtifactIds);
+  if (canonicalJson(inputArtifactIds) !== canonicalJson(request.input_artifact_ids)) {
+    throw new Error("StrategyV2 exact inputs drifted from request");
+  }
+  const specification =
+    input.specification === undefined
+      ? undefined
+      : validateSpecification(input.specification, { skipRevisionClosure: true });
+  const parsed = parseStrategyDraftV2(input.draftBytes, {
+    request,
+    ...(specification === undefined ? {} : { specification }),
+    ...(input.specificationArtifactId === undefined
+      ? {}
+      : { specificationArtifactId: input.specificationArtifactId }),
+  });
+  const draft = validateStrategyDraftV2(input.draft, {
+    request,
+    ...(specification === undefined ? {} : { specification }),
+    ...(input.specificationArtifactId === undefined
+      ? {}
+      : { specificationArtifactId: input.specificationArtifactId }),
+  });
+  if (canonicalJson(parsed.draft) !== canonicalJson(draft)) {
+    throw new Error("StrategyV2 source draft bytes and parsed draft disagree");
+  }
+  const projection = strategyV2SemanticProjection(
+    draft,
+    request,
+    specification,
+    input.specificationArtifactId
+  );
+  const sourceLineage: StrategySourceLineagePreimageV1 = validateSkillSchema(
+    StrategySourceLineagePreimageV1Schema,
+    {
+      request_artifact_id: input.sourceRequestArtifactId,
+      draft_artifact_id: input.sourceDraftArtifactId,
+      draft_sha256: sha256(Buffer.from(input.draftBytes)),
+      input_artifact_ids: inputArtifactIds,
+    },
+    "StrategyV2 source lineage"
+  );
+  const strategy = {
+    schema_version: 2 as const,
+    strategy_id: stablePlanId(
+      "strategy-v2",
+      strategyV2IdSeed({
+        base: projection.base,
+        sourceItemCoverage: projection.source_item_coverage,
+        unsupportedStrategyElements: projection.unsupported_strategy_elements,
+        requestSha256,
+        strategyReport: draft.strategy_report,
+      })
+    ),
+    strategy_report: draft.strategy_report,
+    disposition: projection.base.disposition,
+    applicability_reason: projection.base.applicability_reason,
+    outcomes: projection.base.outcomes,
+    dependencies: projection.base.dependencies,
+    request_coverage: projection.base.request_coverage,
+    blockers: projection.base.blockers,
+    confidence: projection.base.confidence,
+    source_item_coverage: projection.source_item_coverage,
+    unsupported_strategy_elements: projection.unsupported_strategy_elements,
+    request,
+    request_sha256: requestSha256,
+    source_lineage: {
+      ...sourceLineage,
+      lineage_sha256: strategySourceLineageSha256(sourceLineage),
+    },
+    execution_started: false as const,
+  };
+  return validateStrategyV2(strategy, {
+    ...(specification === undefined ? {} : { specification }),
+    ...(input.specificationArtifactId === undefined
+      ? {}
+      : { specificationArtifactId: input.specificationArtifactId }),
+    strictSourceValidation: true,
+  });
+}
+
+export function assertStrategyV2Lineage(input: {
+  readonly strategy: unknown;
+  readonly request: unknown;
+  readonly draft: unknown;
+  readonly draftBytes: Uint8Array;
+  readonly requestArtifactId: string;
+  readonly draftArtifactId: string;
+  readonly exactInputArtifactIds: readonly string[];
+  readonly specification?: unknown;
+  readonly specificationArtifactId?: string;
+}): StrategyV2 {
+  const request = validatePlanRequest(input.request);
+  const expected = sealStrategyV2({
+    request,
+    draft: input.draft,
+    draftBytes: input.draftBytes,
+    requestSha256: planRequestSha256(request),
+    sourceRequestArtifactId: input.requestArtifactId,
+    sourceDraftArtifactId: input.draftArtifactId,
+    exactInputArtifactIds: input.exactInputArtifactIds,
+    ...(input.specification === undefined ? {} : { specification: input.specification }),
+    ...(input.specificationArtifactId === undefined
+      ? {}
+      : { specificationArtifactId: input.specificationArtifactId }),
+  });
+  const strategy = validateStrategyV2(input.strategy, {
+    ...(input.specification === undefined ? {} : { specification: input.specification }),
+    ...(input.specificationArtifactId === undefined
+      ? {}
+      : { specificationArtifactId: input.specificationArtifactId }),
+    strictSourceValidation: true,
+  });
+  if (canonicalJson(strategy) !== canonicalJson(expected)) {
+    throw new Error("StrategyV2 request, draft, or host-sealed lineage diverged");
+  }
+  return strategy;
+}
+
+export function validateCanonicalStrategyV2Bytes(
+  bytes: Uint8Array,
+  ref?: ArtifactRef,
+  options: {
+    readonly specification?: unknown;
+    readonly specificationArtifactId?: string;
+    readonly strictSourceValidation?: boolean;
+  } = {}
+): StrategyV2 {
+  const body = Buffer.from(bytes);
+  if (
+    ref !== undefined &&
+    (ref.kind !== "strategy" ||
+      ref.content_schema?.schema_id !== "penny.strategy.v2" ||
+      ref.content_schema.schema_version !== 2 ||
+      ref.byte_length !== body.byteLength ||
+      ref.content_digest !== sha256(body) ||
+      ref.store_ref !== `artifact://sha256/${ref.content_digest}`)
+  ) {
+    throw new Error("StrategyV2 artifact ref is stale or has the wrong semantic identity");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.toString("utf8"));
+  } catch {
+    throw new Error("StrategyV2 artifact is not JSON");
+  }
+  const strategy = validateStrategyV2(parsed, options);
+  if (canonicalJson(strategy) !== body.toString("utf8")) {
+    throw new Error("StrategyV2 artifact bytes are not canonical JSON");
+  }
+  return strategy;
+}
+
+export function strategyDraftV2PromptContract(): string {
+  return canonicalJson({
+    schema: StrategyCoreV2Schema,
+    transport: {
+      encoding: "strict UTF-8",
+      maximum_output_bytes: MAX_PERSISTED_STRATEGY_DRAFT_BYTES,
+      strategy_prose_bytes: { minimum: 1, maximum: MAX_STRATEGY_PROSE_BYTES },
+      strategy_core_line_maximum_bytes: MAX_STRATEGY_CORE_LINE_BYTES,
+      summary_line_maximum_bytes: MAX_STRATEGY_SUMMARY_LINE_BYTES,
+      framing:
+        "bounded strategy prose, STRATEGY_CORE:<single-line JSON>, then final SUMMARY; footer and summary are the final two nonempty lines",
+      forbidden: ["BOM", "NUL", "CR", "code fences", "duplicate markers", "trailing content"],
+    },
+    desired_outcome_indexing:
+      "partition request desired-outcome indexes exactly once across outcomes[].desired_outcome_indexes and request_coverage.blocked_desired_outcome_indexes; ready uses each index exactly once across outcomes with an empty blocked list; blocked uses each index exactly once in either one outcome or the blocked list",
+    source_item_indexing:
+      "when SpecificationV1 is supplied, fully read the exact PlanSpecificationSourceIndexV1 artifact in input_artifacts slot plan-specification-source-index; its entries are the only indexed source-item namespace: requirements, constraints, non_goals, assumptions, risks, open_questions, and standards_status ordered by source_item_id then source_item_type; objectives and acceptance_criteria are authoritative semantics but are not source_item_coverage entries; standalone coverage is empty",
+    traceability:
+      "every required source item has exactly one disposition; addressed maps to outcomes; every outcome has exactly one basis: source coverage or one derived-need rationale, never both; each outcome index appears at most once in unsupported_strategy_elements",
+    ids: "model emits indexes only; host assigns every stable ID",
+    execution: "forbidden; host product always sets execution_started:false",
+    summary: { schema: StrategyRoutingSummaryV1Schema, confidence_must_equal_core: true },
+  });
+}
+
 export function validateStrategySealFeedback(value: unknown): StrategySealFeedbackV1 {
   const feedback = validateSkillSchema(
     StrategySealFeedbackV1Schema,
@@ -1512,6 +2543,9 @@ export function validateStrategyProductIntegrity(value: unknown): StrategyProduc
   }
   const refs = [
     integrity.request_ref,
+    ...(integrity.specification_assurance_ref === undefined
+      ? []
+      : [integrity.specification_assurance_ref]),
     integrity.orientation_ref,
     integrity.admission_ref,
     ...integrity.evidence_refs,
@@ -1562,6 +2596,9 @@ export function validateStrategyProductEnvelope(value: unknown): StrategyProduct
   );
   const refs = [
     envelope.request_ref,
+    ...(envelope.specification_assurance_ref === undefined
+      ? []
+      : [envelope.specification_assurance_ref]),
     envelope.orientation_ref,
     envelope.admission_ref,
     ...envelope.evidence_refs,

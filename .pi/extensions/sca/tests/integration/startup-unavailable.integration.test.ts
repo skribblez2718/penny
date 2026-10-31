@@ -5,9 +5,9 @@ import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createTestExtensionApi } from "../../../../lib/tests/test-narrowers.js";
-import { canonicalJson, sha256 } from "../../../../../apps/orchestration/src/canonical-json.js";
-import type { CurrentArtifactRef } from "../../../../../apps/orchestration/src/contracts.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { canonicalJson, sha256 } from "../../../../../apps/orchestration/dist/canonical-json.js";
+import type { CurrentArtifactRef } from "../../../../../apps/orchestration/dist/contracts.js";
 import {
   startScaService,
   type ScaServiceHandle,

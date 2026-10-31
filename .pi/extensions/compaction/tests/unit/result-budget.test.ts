@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ArtifactStore, initializePennyState } from "@penny/orchestration/source";
+import { ArtifactStore, initializePennyState } from "@penny/orchestration";
 
 import {
   compactionResultBudget,

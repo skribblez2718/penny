@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { initializePennyState } from "@penny/orchestration/source";
+import { initializePennyState } from "@penny/orchestration";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import artifactExtension from "../../../artifacts/index.js";
@@ -22,9 +22,8 @@ import {
   directChainOutputMetadata,
   persistDirectChainOutput,
 } from "../../../subagent/chain-artifacts.js";
+import { createTestExtensionApi, createTestToolInfos } from "../../../../lib/tests/pi-test-host.js";
 import {
-  createTestExtensionApi,
-  createTestToolInfos,
   isRecord,
   parseJson,
   requireArray,
@@ -288,6 +287,7 @@ function skillResult(toolCallId: string, ref: ArtifactRef): SessionMessage[] {
         session_id: "skill-current-session",
         skill_name: "research",
         state: "complete",
+        requires_approval: false,
         steps_total: 1,
         agents_invoked: ["researcher"],
         errors: [],

@@ -14,13 +14,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
-import type { Confidence, Directive, JsonValue, RunIdentity } from "../src/contracts.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import type { Confidence, Directive, JsonValue, RunIdentity } from "../dist/contracts.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import type { PlaybookCoreV1 } from "../src/playbooks/playbook.js";
-import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
+import type { PlaybookCore } from "../dist/playbooks/playbook.js";
+import { RESEARCH_SKILL_CONTRACT } from "../dist/playbooks/research.js";
 import {
   assertExpectedRegistrations,
   AUTHORIZED_PLAYBOOK_NAMES,
@@ -29,10 +29,10 @@ import {
   PLAYBOOK_REGISTRY,
   registeredPlaybookNames,
   resolvePlaybook,
-  type PlaybookRegistrationV1,
-  type PlaybookRegistryV1,
+  type PlaybookRegistration,
+  type PlaybookRegistry,
   type WorkerRegistrationV1,
-} from "../src/playbooks/registry.js";
+} from "../dist/playbooks/registry.js";
 
 const directories: string[] = [];
 function temporaryDirectory(): string {
@@ -88,7 +88,7 @@ function terminal(met: boolean): Directive {
   } satisfies Directive;
 }
 
-class DoublePlaybook implements PlaybookCoreV1 {
+class DoublePlaybook implements PlaybookCore {
   initialize(): Directive {
     return terminal(true);
   }
@@ -123,7 +123,7 @@ describe("W2 shipped registry — authorized registrations only", () => {
   });
 
   it("rejects a registry missing research", () => {
-    const noResearch: PlaybookRegistryV1 = new Map([
+    const noResearch: PlaybookRegistry = new Map([
       [
         "knowledge-base",
         {
@@ -140,7 +140,7 @@ describe("W2 shipped registry — authorized registrations only", () => {
   });
 
   it("fails closed on an unauthorized registration", () => {
-    const rogue: PlaybookRegistryV1 = new Map([
+    const rogue: PlaybookRegistry = new Map([
       ...PLAYBOOK_REGISTRY,
       [
         "coding",
@@ -211,7 +211,7 @@ describe("W2 fail-closed on an unregistered playbook", () => {
 
 describe("W2 multi-playbook dispatch — injected double only", () => {
   it("constructs a non-research playbook from an injected registry", () => {
-    const registration: PlaybookRegistrationV1 = {
+    const registration: PlaybookRegistration = {
       name: DEFAULT_PLAYBOOK_NAME,
       contract: RESEARCH_SKILL_CONTRACT,
       ...registrationRuntime(RESEARCH_SKILL_CONTRACT),
@@ -221,7 +221,7 @@ describe("W2 multi-playbook dispatch — injected double only", () => {
       ]),
       construct: () => new DoublePlaybook(),
     };
-    const injected: PlaybookRegistryV1 = new Map([[registration.name, registration]]);
+    const injected: PlaybookRegistry = new Map([[registration.name, registration]]);
     const root = temporaryDirectory();
     const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
 
@@ -240,7 +240,7 @@ describe("W2 multi-playbook dispatch — injected double only", () => {
   });
 
   it("refuses to build when the registry omits the production playbook", () => {
-    const empty: PlaybookRegistryV1 = new Map();
+    const empty: PlaybookRegistry = new Map();
     const root = temporaryDirectory();
     const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
     expect(

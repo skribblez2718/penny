@@ -1,8 +1,13 @@
 # Ambiguity Categories Reference
 
-Common kinds of ambiguity to weigh during the SURFACE step of the on-demand clarification protocol (RESTATE/IDENTIFY/LIST/SURFACE/FLAG — `docs/penny/clarification-protocol.md`, activated via the frame's Ask vs. Act section). These are recurring examples, **not an exhaustive checklist to sweep** — use judgment about which apply.
+Common kinds of ambiguity to weigh under the frame's Work Policy. These are recurring
+examples, **not an exhaustive checklist to sweep**. Infer low-risk details when reasonable
+and state material assumptions. Clarify unresolved information that could materially change
+the result, scope, authorization, or risk. When blocking ambiguity activates the on-demand
+clarification protocol, resolve it through the protocol index; this reference does not
+activate that procedure by itself.
 
-When executing SURFACE (assumptions and unknowns), look for unresolved items like:
+Relevant unresolved items may include:
 
 | Category          | What to Check                                                       | Examples                                                                 |
 | ----------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -18,12 +23,16 @@ A clarification pass is judged by evidence, not by phrasing — a banned-phrase 
 
 - **State what was checked.** Name the specific inputs and assumptions examined, not "no ambiguities detected."
 - **Surface each unresolved assumption explicitly** rather than folding gaps into "reasonable assumptions."
-- **Confirm before acting on a guess** when an unresolved item is a BLOCKER or the action is irreversible.
+- **Clarify before acting on a material guess** about result, scope, authorization, or risk.
+  Reversibility alone does not authorize an external, costly, credential-related, or
+  sensitive-data action; obtain explicit approval unless the exact action/scope is authorized.
 
 A hand-wavy pass ("assuming standard interpretation", "proceeding with reasonable assumptions") is a skipped pass — the reviewer/verifier treats it as one regardless of wording.
 
 ## What a good clarification contains
 
-When ambiguity is found, a good clarification names the specific unresolved item, asks a targeted (not open-ended) question, makes the stakes explicit (what goes wrong if resolved incorrectly), and offers a default where one is reasonable ("if unclear, I'll assume X"). The decision rule is the protocol's: ask when an unresolved item is a BLOCKER or the action is irreversible — otherwise proceed on the stated default.
+Name the unresolved item, ask a targeted question, and explain the stakes if it is resolved
+incorrectly. Offer a default only when the assumption is low-risk and does not decide
+authorization or material scope. “Just proceed” does not authorize irreversible guesses.
 
 This reference is Domain Guidance content — available when needed, not burned into every interaction.

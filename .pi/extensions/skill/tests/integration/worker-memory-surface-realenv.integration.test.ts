@@ -12,8 +12,12 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { createWorkerResourceLoader } from "@penny/orchestration/source";
-import { createMemoryExtension, primaryMemoryToolNames } from "@penny/memory-extension";
+import { createWorkerResourceLoader } from "@penny/orchestration";
+import {
+  createMemoryExtension,
+  memoryExtensionSource,
+  primaryMemoryToolNames,
+} from "@penny/memory-extension";
 
 function findPennyRoot(start: string): string {
   let dir = start;
@@ -105,7 +109,21 @@ describe("worker-read memory surface (real .env path, as the skill driver builds
 
     await withAmbientWorkerRead(async () => {
       const factory = createMemoryExtension({ env: readEnv });
-      const loader = await createWorkerResourceLoader(projectRoot, [factory]);
+      const loader = await createWorkerResourceLoader(
+        projectRoot,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        [
+          {
+            source: memoryExtensionSource,
+            extension: { name: "memory-worker-read", hidden: true, factory },
+          },
+        ]
+      );
 
       const tools = new Set<string>();
       for (const extension of loader.getExtensions().extensions) {

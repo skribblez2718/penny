@@ -30,11 +30,11 @@ import {
   type IngestSource,
   type TestOnlyIngestBodyRunner,
   type PendingIngest,
-} from "../src/kb/ingest.js";
-import { conflictRecordForAllocation } from "../src/kb/content-review.js";
-import { canonicalJson, sha256Hex } from "../src/kb/contracts.js";
-import { defaultKbIngestPlane } from "../src/kb/ingest-plane.js";
-import { initKb, queryKb, statusKb } from "../src/kb/workflows.js";
+} from "../dist/kb/ingest.js";
+import { conflictRecordForAllocation } from "../dist/kb/content-review.js";
+import { canonicalJson, sha256Hex } from "../dist/kb/contracts.js";
+import { defaultKbIngestPlane } from "../dist/kb/ingest-plane.js";
+import { initKb, queryKb, statusKb } from "../dist/kb/workflows.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 
 // ── Fixtures ────────────────────────────────────────────────────────────────

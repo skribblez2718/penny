@@ -11,12 +11,16 @@ import {
 } from "./skill-contracts/assess.js";
 import { validateCanonicalDecisionBytes } from "./skill-contracts/decide.js";
 import { validateCanonicalDiagnosisBytes } from "./skill-contracts/diagnose.js";
+import { validateCanonicalSpecificationBytes } from "./skill-contracts/define.js";
 import {
   validateCanonicalProducedArtifactBytes,
   validateCanonicalProducedArtifactV2Bytes,
 } from "./skill-contracts/produce.js";
 import { validateCanonicalGroundedSynthesisBytes } from "./skill-contracts/research.js";
-import { validateCanonicalStrategyBytes } from "./skill-contracts/plan.js";
+import {
+  validateCanonicalStrategyBytes,
+  validateCanonicalStrategyV2Bytes,
+} from "./skill-contracts/plan.js";
 
 export interface SemanticProductValidatorV1 {
   readonly schema_id: string;
@@ -73,6 +77,15 @@ export const SEMANTIC_PRODUCT_VALIDATORS: ReadonlyMap<string, SemanticProductVal
       },
     ],
     [
+      "penny.specification.v1",
+      {
+        schema_id: "penny.specification.v1",
+        schema_version: 1,
+        artifact_kind: "specification",
+        validateCanonicalBytes: validateCanonicalSpecificationBytes,
+      },
+    ],
+    [
       "penny.diagnosis.v1",
       {
         schema_id: "penny.diagnosis.v1",
@@ -100,6 +113,15 @@ export const SEMANTIC_PRODUCT_VALIDATORS: ReadonlyMap<string, SemanticProductVal
       },
     ],
     [
+      "penny.strategy.v2",
+      {
+        schema_id: "penny.strategy.v2",
+        schema_version: 2,
+        artifact_kind: "strategy",
+        validateCanonicalBytes: validateCanonicalStrategyV2Bytes,
+      },
+    ],
+    [
       "penny.produced-artifact.v1",
       {
         schema_id: "penny.produced-artifact.v1",
@@ -121,6 +143,8 @@ export const SEMANTIC_PRODUCT_VALIDATORS: ReadonlyMap<string, SemanticProductVal
 );
 
 export type CompositionAdmissionCode =
+  | "COMPOSITION_CONTEXT_UNACCEPTED"
+  | "COMPOSITION_INPUT_DUPLICATE"
   | "COMPOSITION_ARTIFACT_STALE"
   | "COMPOSITION_PORT_UNMATCHED"
   | "COMPOSITION_PORT_AMBIGUOUS"
@@ -201,12 +225,56 @@ export function validateSemanticComposition(input: {
   readonly inputArtifacts?: InputArtifacts;
   readonly artifactReader?: ArtifactReader;
   readonly validators?: ReadonlyMap<string, SemanticProductValidatorV1>;
+  /** Runtime-owned current completion verification, never inferred from source text. */
+  readonly acceptContextProduct?: (ref: ArtifactRef) => void;
 }): void {
   const bindings = input.inputArtifacts?.artifacts ?? [];
   const counts = new Map(input.contract.io.input_ports.map((port) => [port.name, 0]));
   const validators = input.validators ?? SEMANTIC_PRODUCT_VALIDATORS;
 
+  const slots = new Set(bindings.map((binding) => binding.slot));
+  const ids = new Set(bindings.map((binding) => binding.ref.artifact_id));
+  if (
+    bindings.some((binding) => binding.designation === "context") &&
+    (slots.size !== bindings.length || ids.size !== bindings.length)
+  ) {
+    throw new CompositionAdmissionError(
+      "COMPOSITION_INPUT_DUPLICATE",
+      "slots and refs must be unique across native and context inputs"
+    );
+  }
+
   for (const binding of bindings) {
+    if (binding.designation === "context") {
+      if (input.artifactReader === undefined || input.acceptContextProduct === undefined)
+        throw new CompositionAdmissionError(
+          "COMPOSITION_CONTEXT_UNACCEPTED",
+          "context requires runtime-owned accepted-terminal verification"
+        );
+      const ref = exactManifestRef(input.artifactReader, binding.ref);
+      const validator =
+        ref.content_schema === undefined ? undefined : validators.get(ref.content_schema.schema_id);
+      if (
+        validator === undefined ||
+        validator.schema_version !== ref.content_schema?.schema_version ||
+        validator.artifact_kind !== ref.kind
+      )
+        throw new CompositionAdmissionError(
+          "COMPOSITION_VALIDATOR_MISSING",
+          "context has no exact semantic validator"
+        );
+      const bytes = input.artifactReader.readById(ref.artifact_id);
+      try {
+        validator.validateCanonicalBytes(bytes, ref);
+      } catch {
+        throw new CompositionAdmissionError(
+          "COMPOSITION_SEMANTIC_INVALID",
+          `context '${binding.slot}' failed exact canonical validation`
+        );
+      }
+      input.acceptContextProduct(ref);
+      continue;
+    }
     const matches = matchingPorts(input.contract, binding);
     if (matches.length === 0) {
       throw new CompositionAdmissionError(

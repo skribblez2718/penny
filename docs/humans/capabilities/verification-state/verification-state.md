@@ -32,7 +32,7 @@ verifier:
    evidence field is empty, the SUMMARY is rejected and the run stalls loudly
    instead of advancing.
 4. On a genuine PASS, the run proceeds (or completes). On a FAIL, it loops back
-   to fix the gap, up to the iteration budget.
+   to fix the gap, under actual operator policy, without an invented iteration cap.
 
 ## Concrete Example — the research workflow
 
@@ -43,10 +43,7 @@ claim-to-source checks. Because `evidence` is declared as a required non-empty
 field, a bare `verdict: "PASS"` cannot satisfy the contract.
 
 A failed validation routes back to evidence gathering or synthesis so unsupported
-claims can be re-grounded, removed, or explicitly reported. If the validation
-budget is spent, the report can still be delivered, but the result distinguishes
-`met=true` from `grounded=false` and lists the unresolved claims instead of
-presenting the report as fully verified.
+claims can be re-grounded, removed, or explicitly reported. If an actual operator limit is exhausted or required verification cannot be completed, preserve the best exact partial with `incomplete/met:false` and list unresolved claims; do not present it as fully verified.
 
 ## When a Loop Won't Settle
 

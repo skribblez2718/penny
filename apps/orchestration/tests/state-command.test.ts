@@ -15,12 +15,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { executeStateCommand } from "../src/state/index.js";
+import { executeStateCommand } from "../dist/state/index.js";
 import {
   initializePennyState,
   resolvePennyRuntimeState,
   resolvePennyStateStatus,
-} from "../src/state/setup.js";
+} from "../dist/state/setup.js";
 
 const roots: string[] = [];
 
@@ -67,18 +67,20 @@ interface StateTreeEntry {
   readonly gid: number;
   readonly nlink: number;
   readonly size: number;
-  readonly atimeMs: number;
   readonly mtimeMs: number;
   readonly ctimeMs: number;
   readonly birthtimeMs: number;
   readonly sha256: string | undefined;
 }
 
-/** Capture contents and filesystem metadata after each entry's own read. */
+/** Capture durable file bytes/identity; SQLite owns access times and sidecars. */
 function stateTreeSnapshot(root: string): StateTreeEntry[] {
   const entries: StateTreeEntry[] = [];
   const visit = (candidate: string): void => {
     for (const name of readdirSync(candidate).sort((left, right) => left.localeCompare(right))) {
+      // SQLite owns transient WAL/SHM bookkeeping. It must not mutate application
+      // data, but zero filesystem-metadata mutation is not a safe read contract.
+      if (name.endsWith("-wal") || name.endsWith("-shm")) continue;
       const child = path.join(candidate, name);
       const initial = lstatSync(child);
       if (initial.isDirectory() && !initial.isSymbolicLink()) visit(child);
@@ -93,10 +95,9 @@ function stateTreeSnapshot(root: string): StateTreeEntry[] {
         uid: stat.uid,
         gid: stat.gid,
         nlink: stat.nlink,
-        size: stat.size,
-        atimeMs: stat.atimeMs,
-        mtimeMs: stat.mtimeMs,
-        ctimeMs: stat.ctimeMs,
+        size: stat.isDirectory() ? 0 : stat.size,
+        mtimeMs: stat.isDirectory() ? 0 : stat.mtimeMs,
+        ctimeMs: stat.isDirectory() ? 0 : stat.ctimeMs,
         birthtimeMs: stat.birthtimeMs,
         sha256: bytes === undefined ? undefined : createHash("sha256").update(bytes).digest("hex"),
       });
@@ -113,10 +114,9 @@ function stateTreeSnapshot(root: string): StateTreeEntry[] {
     uid: rootStat.uid,
     gid: rootStat.gid,
     nlink: rootStat.nlink,
-    size: rootStat.size,
-    atimeMs: rootStat.atimeMs,
-    mtimeMs: rootStat.mtimeMs,
-    ctimeMs: rootStat.ctimeMs,
+    size: 0,
+    mtimeMs: 0,
+    ctimeMs: 0,
     birthtimeMs: rootStat.birthtimeMs,
     sha256: undefined,
   });
@@ -231,7 +231,7 @@ describe("penny-state command", () => {
         PRAGMA foreign_keys=OFF;
         DROP TABLE runs;
         CREATE TABLE runs(run_key TEXT PRIMARY KEY);
-        PRAGMA user_version=12;
+        PRAGMA user_version=13;
       `);
     }
 
@@ -240,7 +240,7 @@ describe("penny-state command", () => {
     ).rejects.toThrow("missing required column 'run_id'");
   });
 
-  it("performs readiness and status validation without mutating canonical state", () => {
+  it("performs readiness and status validation without mutating durable canonical data", () => {
     const root = sandbox();
     const projectRoot = path.join(root, "project");
     mkdirSync(projectRoot, { mode: 0o700 });
@@ -342,7 +342,9 @@ describe("penny-state command", () => {
     if (initialized.action !== "init") throw new Error("state init returned an unexpected result");
     {
       using database = openDatabase(initialized.orchestration_database);
-      database.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+      database.exec(
+        "DROP TABLE host_operation_calls; DROP TABLE child_workflow_calls; PRAGMA user_version=10;"
+      );
     }
 
     await expect(
@@ -352,7 +354,7 @@ describe("penny-state command", () => {
       details: {
         component: "orchestration",
         actualSchemaVersion: 10,
-        requiredSchemaVersion: 12,
+        requiredSchemaVersion: 13,
         upgradeSupported: true,
         recoveryAction: "penny-state-upgrade",
       },
@@ -365,7 +367,7 @@ describe("penny-state command", () => {
       action: "upgrade",
       project_id: initialized.project_id,
       source_schema_version: 10,
-      target_schema_version: 12,
+      target_schema_version: 13,
       changed: true,
     });
     if (upgraded.action !== "upgrade") throw new Error("state upgrade returned wrong action");

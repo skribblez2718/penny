@@ -76,9 +76,10 @@ User messages define tasks within the trust and action boundaries above. ...
 The version check is read-only and uses Pi's injected `VERSION` export. It does not inspect an
 operator-specific installation path, run Bun, access a package registry, or change project files.
 Use `bun run pi:update` from the repository root to perform a validated update. That updater first
-checks the published coding-agent in a clean temporary consumer, then classifies Penny architecture,
-type, runtime, extension-load, and global-update failures separately. It never adds an undeclared
-upstream dependency merely to force an update through validation.
+checks the published coding-agent in a clean temporary consumer, then stages the coordinated Pi
+package family together with the coding-agent's exact declared TypeBox version. It classifies Penny
+architecture, type, runtime, extension-load, and global-update failures separately. It never adds an
+undeclared upstream dependency merely to force an update through validation.
 
 ## For Extension Authors
 

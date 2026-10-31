@@ -33,7 +33,7 @@ import {
   type KbPolicy,
   type QueryKbRequest,
   type QueryVerificationReport,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 import {
   ParentDeliveryGrantStore,
   REFUSED_PARENT_DELIVERY,
@@ -41,10 +41,10 @@ import {
   decideParentDelivery,
   mintParentDeliveryGrant,
   validateQueryRequest,
-} from "../src/kb/parent-delivery.js";
-import { assessQueryVerification } from "../src/kb/query-verification.js";
-import { readSealedAnswer } from "../src/kb/workflows.js";
-import { RunArtifactStore } from "../src/kb/run-artifacts.js";
+} from "../dist/kb/parent-delivery.js";
+import { assessQueryVerification } from "../dist/kb/query-verification.js";
+import { readSealedAnswer } from "../dist/kb/workflows.js";
+import { RunArtifactStore } from "../dist/kb/run-artifacts.js";
 import { kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 
 const PROFILE = "kbp_answer_quality";

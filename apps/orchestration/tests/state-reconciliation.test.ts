@@ -20,14 +20,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer } from "../src/checkpointer.js";
-import { ReceiptAuthority } from "../src/receipts.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { ReceiptAuthority } from "../dist/receipts.js";
 import {
   applyStateMigration,
   createStateMigrationPlan,
   verifyStateMigration,
-} from "../src/state/index.js";
+} from "../dist/state/index.js";
 
 const sqlite = process.getBuiltinModule("node:sqlite");
 const roots: string[] = [];
@@ -50,7 +50,7 @@ function orchestrationSource(
   ).DatabaseSync)(databasePath);
   try {
     database.exec(
-      "DROP TABLE child_workflow_calls; DROP TABLE store_metadata; PRAGMA user_version=9;"
+      "DROP TABLE host_operation_calls; DROP TABLE child_workflow_calls; DROP TABLE store_metadata; PRAGMA user_version=9;"
     );
     const insert = database.prepare(
       `INSERT INTO runs(

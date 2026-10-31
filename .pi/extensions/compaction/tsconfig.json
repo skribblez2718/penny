@@ -10,7 +10,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "rootDir": "../..",
+    "rootDir": "../../..",
     "types": ["node"],
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true

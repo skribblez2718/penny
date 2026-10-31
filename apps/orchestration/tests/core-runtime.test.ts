@@ -4,17 +4,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { CheckpointIdentityError, Checkpointer, sha256 } from "../src/checkpointer.js";
-import type { Directive, JsonValue, RunIdentity } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { CheckpointIdentityError, Checkpointer, sha256 } from "../dist/checkpointer.js";
+import type { Directive, JsonValue, RunIdentity } from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../dist/model-client.js";
 import {
   OrchestrationRunner,
   WorkerExecutor,
   type OrchestrationProgressEvent,
-} from "../src/worker.js";
+} from "../dist/worker.js";
 import { researchSemanticDraftFixture } from "./helpers/research-semantic-draft.js";
 
 const directories: string[] = [];

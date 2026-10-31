@@ -5,22 +5,22 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer, canonicalJson, sha256 } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { kbWorkerClientOptionsFromRun } from "../src/kb/kb-worker-client.js";
-import { SaveQueryClaimStore, saveClaimStoreDir } from "../src/kb/save-claim.js";
-import { initKb, admitKbRun } from "../src/kb/workflows.js";
-import { materializeRunInput } from "../src/private-inputs.js";
-import { KnowledgeBasePlaybook } from "../src/playbooks/knowledge-base.js";
-import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
+import { Checkpointer, canonicalJson, sha256 } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { kbWorkerClientOptionsFromRun } from "../dist/kb/kb-worker-client.js";
+import { SaveQueryClaimStore, saveClaimStoreDir } from "../dist/kb/save-claim.js";
+import { initKb, admitKbRun } from "../dist/kb/workflows.js";
+import { materializeRunInput } from "../dist/private-inputs.js";
+import { KnowledgeBasePlaybook } from "../dist/playbooks/knowledge-base.js";
+import { readPolicy, writePolicy } from "../dist/kb/filesystem.js";
 import {
   KbRunAccessError,
   requireKbCurrentParent,
   requireKbRunAccess,
   requireKbRunIdentityCurrent,
   requireKbRunPolicyCurrent,
-} from "../src/kb/run-access.js";
-import { PolicyRefusal } from "../src/kb/policy.js";
+} from "../dist/kb/run-access.js";
+import { PolicyRefusal } from "../dist/kb/policy.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const PROFILE = "kbp_resume";

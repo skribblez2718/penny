@@ -1,3 +1,4 @@
+import { assertSupportedSqliteVersion } from "./state/sqlite-runtime.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -29,9 +30,10 @@ import {
 import { pathExistsNoFollow } from "./state/custody.js";
 import { PENNY_STATE_LAYOUT_VERSION, PROJECT_ID_PATTERN } from "./state/paths.js";
 import {
-  createReadOnlySqliteSnapshot,
-  type ReadOnlySqliteSnapshot,
-} from "./state/sqlite-snapshot.js";
+  assertSqliteHealthy,
+  openReadOnlySqliteDatabase,
+  SqliteHealthError,
+} from "./state/sqlite-health.js";
 
 export interface PersistArtifactInput {
   readonly metadata: OutputArtifactMetadata;
@@ -143,6 +145,7 @@ function isSqliteModule(value: object | undefined): value is SqliteModule {
 }
 
 function sqliteModule(): SqliteModule {
+  assertSupportedSqliteVersion(process.versions.sqlite);
   const module = process.getBuiltinModule("node:" + "sqlite");
   if (!isSqliteModule(module)) {
     throw new Error("Node.js runtime does not provide node:sqlite");
@@ -307,6 +310,12 @@ export function currentOutputArtifactMetadata(value: unknown): CurrentOutputArti
     "output artifact metadata"
   );
   const parentRef = metadata.parent_ref === null ? null : currentArtifactRef(metadata.parent_ref);
+  const domainRevisionParentRef =
+    metadata.domain_revision_parent_ref === undefined
+      ? undefined
+      : metadata.domain_revision_parent_ref === null
+        ? null
+        : currentArtifactRef(metadata.domain_revision_parent_ref);
   const upstreamRefs = metadata.upstream_refs.map((ref) => currentArtifactRef(ref));
   const normalized: CurrentOutputArtifactMetadata = {
     schema_version: 2,
@@ -320,6 +329,9 @@ export function currentOutputArtifactMetadata(value: unknown): CurrentOutputArti
     media_type: metadata.media_type,
     ...(metadata.content_schema === undefined ? {} : { content_schema: metadata.content_schema }),
     parent_ref: parentRef,
+    ...(domainRevisionParentRef === undefined
+      ? {}
+      : { domain_revision_parent_ref: domainRevisionParentRef }),
     upstream_refs: upstreamRefs,
   };
   if ((normalized.version === 1) !== (normalized.parent_ref === null)) {
@@ -344,14 +356,62 @@ export function currentOutputArtifactMetadata(value: unknown): CurrentOutputArti
   if (new Set(ids).size !== ids.length) {
     throw new Error("output artifact upstream_refs contains duplicates");
   }
+  if (
+    domainRevisionParentRef !== undefined &&
+    domainRevisionParentRef !== null &&
+    !ids.includes(domainRevisionParentRef.artifact_id)
+  ) {
+    throw new Error("output artifact domain revision parent is not an upstream ref");
+  }
   return normalized;
+}
+
+interface ArtifactPreview {
+  readonly metadata: CurrentOutputArtifactMetadata;
+  readonly bytes: Buffer;
+  readonly ref: CurrentArtifactRef;
+}
+
+function previewArtifactInput(input: PersistArtifactInput): ArtifactPreview {
+  const metadata = currentOutputArtifactMetadata(input.metadata);
+  const bytes =
+    typeof input.content === "string"
+      ? Buffer.from(input.content, "utf8")
+      : Buffer.from(input.content);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const ref = currentArtifactRef(
+    {
+      schema_version: 2,
+      artifact_id: artifactIdFor(metadata),
+      run_id: metadata.run_id,
+      phase: metadata.phase,
+      branch_id: metadata.branch_id,
+      kind: metadata.kind,
+      operation_id: metadata.operation_id,
+      version: metadata.version,
+      producer: metadata.producer,
+      media_type: metadata.media_type,
+      ...(metadata.content_schema === undefined ? {} : { content_schema: metadata.content_schema }),
+      byte_length: bytes.length,
+      content_digest: digest,
+      store_ref: `artifact://sha256/${digest}`,
+    },
+    "previewed artifact ref"
+  );
+  return { metadata, bytes, ref };
+}
+
+/**
+ * Plan one immutable artifact ref using the same validation and identity implementation as persist().
+ * This performs no filesystem or manifest mutation.
+ */
+export function previewArtifactRef(input: PersistArtifactInput): CurrentArtifactRef {
+  return previewArtifactInput(input).ref;
 }
 
 export class ArtifactStore implements Disposable {
   readonly root: string;
   private readonly db: DatabaseSync;
-  /** Private image used only by create-never status validation. */
-  private readonly validationSnapshot: ReadOnlySqliteSnapshot | undefined;
 
   /** Explicit setup/migration path. Ordinary runtime must use openExisting(). */
   static provision(root: string, options: ArtifactStoreOptions = {}): ArtifactStore {
@@ -392,16 +452,11 @@ export class ArtifactStore implements Disposable {
         throw new Error("opening an existing artifact manifest requires its Penny project ID");
       }
     }
-    const validationSnapshot =
-      mode === "verify"
-        ? createReadOnlySqliteSnapshot(manifest, "Penny artifact manifest")
-        : undefined;
-    this.validationSnapshot = validationSnapshot;
     const { DatabaseSync } = sqliteModule();
-    this.db = new DatabaseSync(
-      validationSnapshot?.databasePath ?? manifest,
-      mode === "verify" ? { readOnly: true } : {}
-    );
+    this.db =
+      mode === "verify"
+        ? openReadOnlySqliteDatabase(manifest, "Penny artifact manifest", DatabaseSync)
+        : new DatabaseSync(manifest);
     if (mode !== "verify") {
       this.db.exec(
         mode === "provision"
@@ -415,46 +470,19 @@ export class ArtifactStore implements Disposable {
         if (options.projectId !== undefined) this.ensureProjectBinding(options.projectId);
         if (!manifestExists) this.chmodManifestFiles();
       } else {
-        this.assertExistingSchema(options.projectId);
+        this.assertExistingSchema(options.projectId, mode === "verify");
       }
     } catch (error) {
       this.db.close();
-      validationSnapshot?.close();
       throw error;
     }
   }
 
   persist(input: PersistArtifactInput): CurrentArtifactRef {
-    const metadata = currentOutputArtifactMetadata(input.metadata);
-    const bytes =
-      typeof input.content === "string"
-        ? Buffer.from(input.content, "utf8")
-        : Buffer.from(input.content);
-    const digest = createHash("sha256").update(bytes).digest("hex");
-    const ref = currentArtifactRef(
-      {
-        schema_version: 2,
-        artifact_id: artifactIdFor(metadata),
-        run_id: metadata.run_id,
-        phase: metadata.phase,
-        branch_id: metadata.branch_id,
-        kind: metadata.kind,
-        operation_id: metadata.operation_id,
-        version: metadata.version,
-        producer: metadata.producer,
-        media_type: metadata.media_type,
-        ...(metadata.content_schema === undefined
-          ? {}
-          : { content_schema: metadata.content_schema }),
-        byte_length: bytes.length,
-        content_digest: digest,
-        store_ref: `artifact://sha256/${digest}`,
-      },
-      "persisted artifact ref"
-    );
-    this.writeObject(digest, bytes);
-    this.insertVerified(ref, metadata, new Date().toISOString());
-    return ref;
+    const preview = previewArtifactInput(input);
+    this.writeObject(preview.ref.content_digest, preview.bytes);
+    this.insertVerified(preview.ref, preview.metadata, new Date().toISOString());
+    return preview.ref;
   }
 
   /** Indexed direct lookup. No caller, run, consumer, grant, or expiry state participates. */
@@ -470,33 +498,41 @@ export class ArtifactStore implements Disposable {
       )
       .get(artifactId);
     if (stored === undefined) return undefined;
-    const row = artifactRefProjection(stored, `artifact '${artifactId}' manifest row`);
-    let value: unknown;
     try {
-      value = JSON.parse(row.ref_json);
-    } catch {
-      throw new Error(`artifact '${artifactId}' has invalid manifest metadata`);
-    }
-    const ref = currentArtifactRef(value, `stored ref ${artifactId}`);
-    const comparisons: Array<[string, unknown, unknown]> = [
-      ["artifact_id", artifactId, ref.artifact_id],
-      ["run_id", row.run_id, ref.run_id],
-      ["phase", row.phase, ref.phase],
-      ["branch_key", row.branch_key, branchKey(ref.branch_id)],
-      ["kind", row.kind, ref.kind],
-      ["operation_id", row.operation_id, ref.operation_id],
-      ["version", row.version, ref.version],
-      ["producer", row.producer, ref.producer],
-      ["content_digest", row.content_digest, ref.content_digest],
-      ["byte_length", row.byte_length, ref.byte_length],
-      ["store_ref", row.store_ref, ref.store_ref],
-    ];
-    for (const [field, expected, actual] of comparisons) {
-      if (expected !== actual) {
-        throw new Error(`artifact '${artifactId}' manifest ${field} mismatch`);
+      const row = artifactRefProjection(stored, `artifact '${artifactId}' manifest row`);
+      let value: unknown;
+      try {
+        value = JSON.parse(row.ref_json);
+      } catch {
+        throw new Error(`artifact '${artifactId}' has invalid manifest metadata`);
       }
+      const ref = currentArtifactRef(value, `stored ref ${artifactId}`);
+      const comparisons: Array<[string, unknown, unknown]> = [
+        ["artifact_id", artifactId, ref.artifact_id],
+        ["run_id", row.run_id, ref.run_id],
+        ["phase", row.phase, ref.phase],
+        ["branch_key", row.branch_key, branchKey(ref.branch_id)],
+        ["kind", row.kind, ref.kind],
+        ["operation_id", row.operation_id, ref.operation_id],
+        ["version", row.version, ref.version],
+        ["producer", row.producer, ref.producer],
+        ["content_digest", row.content_digest, ref.content_digest],
+        ["byte_length", row.byte_length, ref.byte_length],
+        ["store_ref", row.store_ref, ref.store_ref],
+      ];
+      for (const [field, expected, actual] of comparisons) {
+        if (expected !== actual) {
+          throw new Error(`artifact '${artifactId}' manifest ${field} mismatch`);
+        }
+      }
+      return ref;
+    } catch (error) {
+      throw new SqliteHealthError(
+        "artifact manifest",
+        [error instanceof Error ? error.message : "Invalid persisted artifact row"],
+        { cause: error }
+      );
     }
-    return ref;
   }
 
   /** Direct exact-byte read with digest and byte-length verification. */
@@ -715,11 +751,7 @@ export class ArtifactStore implements Disposable {
   }
 
   close(): void {
-    try {
-      this.db.close();
-    } finally {
-      this.validationSnapshot?.close();
-    }
+    this.db.close();
   }
 
   [Symbol.dispose](): void {
@@ -781,7 +813,7 @@ export class ArtifactStore implements Disposable {
     `);
   }
 
-  private assertExistingSchema(projectId: string | undefined): void {
+  private assertExistingSchema(projectId: string | undefined, fullHealthCheck: boolean): void {
     const journalRow = sqliteRow(
       this.db.prepare("PRAGMA journal_mode").get(),
       "artifact manifest journal mode"
@@ -865,16 +897,7 @@ export class ArtifactStore implements Disposable {
     ) {
       throw new Error("artifact manifest selection foreign key is missing");
     }
-    if (this.db.prepare("PRAGMA foreign_key_check").all().length !== 0) {
-      throw new Error("artifact manifest foreign-key check failed");
-    }
-    const integrity = sqliteRow(
-      this.db.prepare("PRAGMA integrity_check").get(),
-      "artifact integrity"
-    );
-    if (sqliteText(integrity, "integrity_check", "artifact integrity") !== "ok") {
-      throw new Error("artifact manifest integrity check failed");
-    }
+    if (fullHealthCheck) assertSqliteHealthy(this.db, "artifact manifest");
     this.assertProjectBinding(projectId);
   }
 

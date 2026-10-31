@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { PLAN_FLOW } from "../src/playbooks/plan.js";
+import { PLAN_FLOW } from "../dist/playbooks/plan.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const html = readFileSync(

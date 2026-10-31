@@ -9,110 +9,63 @@
  * - Formatting
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import * as fs from "fs";
+import { describe, it, expect, afterEach } from "vitest";
+import * as fs from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
+import { discoverSkillsFromDirectory } from "../skill-discovery.js";
 import { formatResult, normalizeEscalationQuestions, type SkillResult } from "../skill-utils.js";
 
-function fakeDirent(name: string, kind: "directory" | "file"): fs.Dirent {
-  return {
-    name,
-    parentPath: "",
-    isDirectory: () => kind === "directory",
-    isFile: () => kind === "file",
-    isBlockDevice: () => false,
-    isCharacterDevice: () => false,
-    isSymbolicLink: () => false,
-    isFIFO: () => false,
-    isSocket: () => false,
-  };
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+const plain = (_color: string, text: string) => text;
+function project(): string {
+  const root = fs.mkdtempSync(path.join(tmpdir(), "penny-skill-format-discovery-"));
+  roots.push(root);
+  return root;
 }
 
-// Mock fs module
-vi.mock("fs", () => ({
-  existsSync: vi.fn(),
-  readdirSync: vi.fn(),
-  // Registry construction reads catalog YAML before these legacy formatter tests run.
-  readFileSync: vi.fn(() => "---\ntools: read\n---\n"),
-  mkdtempSync: vi.fn(),
-  writeFileSync: vi.fn(),
-  unlinkSync: vi.fn(),
-  rmdirSync: vi.fn(),
-  statSync: vi.fn(),
-  default: {
-    existsSync: vi.fn(),
-    readdirSync: vi.fn(),
-    readFileSync: vi.fn(() => "---\ntools: read\n---\n"),
-    mkdtempSync: vi.fn(),
-    writeFileSync: vi.fn(),
-    unlinkSync: vi.fn(),
-    rmdirSync: vi.fn(),
-    statSync: vi.fn(),
-  },
-}));
-
 describe("Skill Extension", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   describe("discoverSkills", () => {
-    it("should return empty array if skills directory does not exist", () => {
-      vi.mocked(fs.existsSync).mockReturnValue(false);
-      expect(true).toBe(true);
+    it("returns no packages when the selected source directory does not exist", () => {
+      expect(discoverSkillsFromDirectory(path.join(project(), "absent"))).toEqual([]);
     });
 
-    it("should discover skills with SKILL.md files", () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      const readdirSyncWithStringNames: (
-        path: fs.PathLike,
-        options: { withFileTypes: true }
-      ) => fs.Dirent[] = fs.readdirSync;
-      vi.mocked(readdirSyncWithStringNames).mockReturnValue([
-        fakeDirent("plan", "directory"),
-        fakeDirent("implement-feature", "directory"),
-        fakeDirent("not-a-skill.txt", "file"),
-      ]);
-
-      vi.mocked(fs.readFileSync).mockReturnValue(`---
-name: plan
-description: Production-grade planning
----
-
-Content here`);
-
-      expect(true).toBe(true);
-    });
-  });
-
-  describe("Skill Parameters", () => {
-    it("should have correct TypeBox schema", () => {
-      const expectedParams = {
-        skill_name: String,
-        goal: String,
-        session_id: String,
-        constraints: Object,
-      };
-
-      expect(Object.keys(expectedParams)).toEqual([
-        "skill_name",
-        "goal",
-        "session_id",
-        "constraints",
+    it("reads real package metadata and skips files and directories without manifests", () => {
+      const root = project();
+      fs.mkdirSync(path.join(root, "plan"));
+      fs.mkdirSync(path.join(root, "not-a-skill"));
+      fs.writeFileSync(path.join(root, "not-a-skill.txt"), "not a package");
+      fs.writeFileSync(
+        path.join(root, "plan", "SKILL.md"),
+        "---\nname: plan\ndescription: Synthetic planning package\n---\n# Plan\n"
+      );
+      expect(discoverSkillsFromDirectory(root)).toEqual([
+        {
+          name: "plan",
+          directoryName: "plan",
+          description: "Synthetic planning package",
+          path: path.join(root, "plan"),
+          disableModelInvocation: false,
+          metadataValid: true,
+        },
       ]);
     });
   });
 
   describe("Format Result", () => {
     it("should format successful skill result", () => {
-      const result = {
+      const result: SkillResult = {
         success: true,
         session_id: "test-001",
         skill_name: "plan",
         state: "complete",
+        requires_approval: false,
+        steps_total: 2,
+        agents_invoked: ["piper"],
+        errors: [],
         plan: {
           steps: [
             { step: 1, title: "Create OAuth middleware" },
@@ -121,22 +74,28 @@ Content here`);
         },
       };
 
-      expect(result.success).toBe(true);
-      expect(result.skill_name).toBe("plan");
-      expect(result.state).toBe("complete");
+      const formatted = formatResult(result, plain);
+      expect(formatted).toContain("✓ plan completed");
+      expect(formatted).toContain("Session: test-001");
+      expect(formatted).toContain("Steps: 2");
+      expect(formatted).toContain("Create OAuth middleware");
     });
 
     it("should format failed skill result", () => {
-      const result = {
+      const result: SkillResult = {
         success: false,
         session_id: "test-002",
         skill_name: "plan",
         state: "error",
+        requires_approval: false,
+        steps_total: 0,
+        agents_invoked: [],
         errors: ["Plan creation failed"],
       };
 
-      expect(result.success).toBe(false);
-      expect(result.errors).toContain("Plan creation failed");
+      const formatted = formatResult(result, plain);
+      expect(formatted).toContain("Plan creation failed");
+      expect(formatted).not.toContain("✓ plan completed");
     });
 
     it("should format escalation with explicit questionnaire tool call", () => {
@@ -233,9 +192,13 @@ Content here`);
       };
 
       const formatted = formatResult(result, mockTheme);
-      const argumentStart = formatted.indexOf("questionnaire(") + "questionnaire(".length;
+      // The question itself contains questionnaire(...); only the real call's
+      // structural line prefix identifies the serialized tool argument.
+      const invocationPrefix = "\n  questionnaire(";
+      const invocationStart = formatted.indexOf(invocationPrefix);
+      expect(invocationStart).toBeGreaterThanOrEqual(0);
+      const argumentStart = invocationStart + invocationPrefix.length;
       const argumentEnd = formatted.indexOf("\n  )", argumentStart);
-      expect(argumentStart).toBeGreaterThanOrEqual("questionnaire(".length);
       expect(argumentEnd).toBeGreaterThan(argumentStart);
 
       const serializedArgument = formatted.slice(argumentStart, argumentEnd);
@@ -316,21 +279,5 @@ Content here`);
         expect(formatted).toContain(`\\u${codePoint.toString(16).padStart(4, "0")}`);
       }
     });
-  });
-});
-
-// ============================================================
-// Skill Extension Integration
-// ============================================================
-
-describe("Skill Extension Integration", () => {
-  it("should register skill tool", () => {
-    const toolName = "skill";
-    expect(toolName).toBe("skill");
-  });
-
-  it("should register skills command", () => {
-    const commandName = "skills";
-    expect(commandName).toBe("skills");
   });
 });

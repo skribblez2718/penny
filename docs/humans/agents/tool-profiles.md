@@ -21,10 +21,9 @@ Instead of granting tools one at a time, each role declares two things: how much
 it is allowed to have (`authority`), and which named bundles it draws from
 (`tool_profiles`). A CI check expands the bundles and asserts they equal the YAML tool
 list exactly. Drift fails the build. Profiles are static lint metadata for that maximum.
-Direct/parallel/chain calls and ordinary orchestration phases use YAML exactly. One
-TypeScript orchestration phase may instead declare a fixed non-empty duplicate-free strict
-YAML subset in its canonical registration; task text, trust profiles, runtime state, and
-optional services cannot select it, and it does not mutate the profile assignment.
+Runtime activation follows the [binding runtime rule](../../agents/agents/discovery-and-tools.md#binding-runtime-rule),
+including its guarded zero-tool exception. Tasks, trust profiles, runtime state, and optional
+services cannot select a subset, and phase selection does not mutate profile assignments.
 
 The bundles form **ladders** — each rung contains everything below it plus a named
 increment:
@@ -47,10 +46,10 @@ their purpose is observation — the information is already on the page, just no
 yet. Submitting a form or uploading a file is a different kind of act: it changes something
 on the other side.
 
-Collapse `reveal` into `observe` and read-only agents can no longer inspect any real
-application with tabs. Collapse it into `interact` and every role that needs to read a
-tabbed page gains the ability to submit forms. The middle rung is what lets a genuinely
-read-only role inspect a genuinely interactive page.
+The middle rung avoids granting dedicated fill/upload/evaluate interfaces just to inspect
+a tabbed page. It does not make browser activity read-only: a click or key can submit a form
+or change remote state. The target and consequences still need inspection and any required
+authorization.
 
 ## Why the shell profile is called `shell.unbounded`
 
@@ -66,11 +65,13 @@ the vocabulary.
 
 This is the part worth reading carefully, because it is easy to overstate.
 
-**Browser authority is now structural.** A role declaring `authority: read` cannot submit a
-form, upload a file, or execute arbitrary Playwright or Node code. That is enforced by the
-tool allowlist, not by asking the model nicely.
+**Tool-interface exclusion is structural; read-only browser behavior is not.** The
+`read`/`inspect` ceiling excludes dedicated fill, upload, and arbitrary Playwright/Node
+execution tools. Clicks and keys remain available at `browser.reveal`, with no general
+submit guard. A role's no-mutation rule is still an instruction and authorization boundary.
 
-**Filesystem and shell authority are not.** Every agent's YAML maximum still holds `bash`.
+**Shell access is unbounded where granted.** Consult current generated assignments rather
+than assuming every role holds `bash`.
 An ordinary exact-YAML "read-only" session can still write files, delete them, install
 packages, and reach the network — through a single tool that the profile system grants
 openly rather than pretending away.
@@ -88,18 +89,6 @@ one prematurely would trade a known limitation for an unknown one.
 
 ## What changed
 
-Removing the over-grants took **67 tool grants** out of the then eight-role roster (demetri and ida were added later, at 8 tools each):
-
-| Agent                | Before | After |          Removed |
-| -------------------- | -----: | ----: | ---------------: |
-| echo                 |     60 |    39 | 21 browser tools |
-| vera                 |     60 |    39 | 21 browser tools |
-| annie                |     59 |    34 | 25 browser tools |
-| the other five roles |     35 |    35 |                — |
-
-`playwright_run_code_unsafe`, `playwright_file_upload` and `playwright_fill_form` now
-appear in zero agent files.
-
 One detail worth recording, because it nearly went the other way: Synthia held only `read`,
 not the full observe bundle. Giving it `filesystem.observe` would have made the table
 tidier and **broadened** its authority from one filesystem tool to four. A narrower
@@ -109,4 +98,5 @@ tidier and **broadened** its authority from one filesystem tool to four. A narro
 
 The exact ladder, the per-agent assignment, and the CI contract are in the agent-facing
 twin: [`docs/agents/agents/tool-profiles.md`](../../agents/agents/tool-profiles.md). That
-page is generated from the checker, so it cannot drift from what is actually enforced.
+page's ladder and assignment tables are generated from the checker; its surrounding prose
+still requires source review.

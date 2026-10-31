@@ -5,7 +5,7 @@ import {
   parseArtifactDispatchMode as engineDispatchModeParser,
   type ArtifactDispatchPauseV1,
   type RunIdentity,
-} from "@penny/orchestration/source";
+} from "@penny/orchestration";
 import { parseArtifactDispatchMode, parseArtifactDispatchPause } from "../../dispatch-control.js";
 
 const identity: RunIdentity = {

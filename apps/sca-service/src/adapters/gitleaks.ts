@@ -4,9 +4,13 @@ import path from "node:path";
 
 import { Type, type Static } from "typebox";
 
-import { validateContract } from "../../../orchestration/src/contracts.js";
-import { Sha256Schema } from "../../../orchestration/src/skill-contracts/common.js";
-import { runBoundedScaProcess, type ScaProcessResultV1 } from "../process.js";
+import { validateContract } from "../../../orchestration/dist/contracts.js";
+import { Sha256Schema } from "../../../orchestration/dist/skill-contracts/common.js";
+import {
+  directScaProcessRunnerV1,
+  type ScaProcessRunnerV1,
+  type ScaProcessResultV1,
+} from "../process.js";
 
 const MAX_PATH_BYTES = 4_096;
 const MAX_VERSION_BYTES = 256;
@@ -203,9 +207,52 @@ function failedCode(processResult: ScaProcessResultV1): ScaGitleaksResultV1["err
   return "scanner_failed";
 }
 
+export function validateScaGitleaksResultV1(
+  value: unknown,
+  requestValue?: unknown
+): ScaGitleaksResultV1 {
+  const result = validateContract(ScaGitleaksResultV1Schema, value, "SCA Gitleaks result");
+  if (
+    result.raw_stdout_sha256 !== digestBytes(result.raw_stdout) ||
+    result.raw_stderr_sha256 !== digestBytes(result.raw_stderr)
+  ) {
+    throw new ScaGitleaksError("invalid_request", "Gitleaks raw stream digest mismatch");
+  }
+  const count = findingCount(result.raw_stdout);
+  if (count !== null && count !== result.finding_count) {
+    throw new ScaGitleaksError("invalid_request", "Gitleaks raw output count mismatch");
+  }
+  if (
+    (result.error_code === "none") !==
+      (["succeeded", "findings"].includes(result.status) && !result.truncated) ||
+    (result.status === "findings") !== (result.finding_count > 0 && result.error_code === "none")
+  ) {
+    throw new ScaGitleaksError("invalid_request", "Gitleaks status contradicts raw semantics");
+  }
+  if (requestValue !== undefined) {
+    const request = validateContract(
+      ScaGitleaksRequestV1Schema,
+      requestValue,
+      "SCA Gitleaks request"
+    );
+    if (
+      result.source_snapshot_sha256 !== request.source_snapshot_sha256 ||
+      result.configuration_sha256 !== request.configuration_sha256 ||
+      (request.runtime.state === "available" &&
+        (result.tool_version !== request.runtime.tool_version ||
+          result.runtime_identity !== request.runtime.runtime_identity ||
+          result.runtime_sha256 !== request.runtime.runtime_sha256))
+    ) {
+      throw new ScaGitleaksError("invalid_request", "Gitleaks result is not request-bound");
+    }
+  }
+  return result;
+}
+
 export async function runScaGitleaksV1(
   value: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  runner: ScaProcessRunnerV1 = directScaProcessRunnerV1
 ): Promise<ScaGitleaksResultV1> {
   let request: ScaGitleaksRequestV1;
   try {
@@ -229,13 +276,13 @@ export async function runScaGitleaksV1(
     return unavailableResult(request, "configuration_drift");
   }
 
-  const processResult = await runBoundedScaProcess(
+  const processResult = await runner.run(
     {
       schema_id: "penny.sca-process-request.v1",
       schema_version: 1,
       executable: request.runtime.executable,
       executable_sha256: request.runtime.executable_sha256,
-      arguments: gitleaksArguments(request),
+      arguments: [...gitleaksArguments(request)],
       cwd: request.source_root,
       environment: [{ name: "HOME", value: "/nonexistent" }],
       timeout_ms: request.timeout_ms,
@@ -268,8 +315,7 @@ export async function runScaGitleaksV1(
       ? "invalid_output"
       : failedCode(processResult);
 
-  return validateContract(
-    ScaGitleaksResultV1Schema,
+  return validateScaGitleaksResultV1(
     {
       schema_id: SCA_GITLEAKS_RESULT_SCHEMA,
       schema_version: 1,
@@ -289,6 +335,6 @@ export async function runScaGitleaksV1(
       truncated: processResult.stdout_truncated || processResult.stderr_truncated,
       error_code: errorCode,
     },
-    "SCA Gitleaks result"
+    request
   );
 }

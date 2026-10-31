@@ -2,14 +2,18 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../src/checkpointer.js";
-import type { ArtifactRef } from "../src/contracts.js";
-import { RESEARCH_BUDGET_POLICY, researchLivenessPolicy } from "../src/liveness.js";
+import { canonicalJson, sha256 } from "../dist/checkpointer.js";
+import type { ArtifactRef } from "../dist/contracts.js";
+import { CatalogWorkerContinuityMetadataV1Schema } from "../dist/model-client.js";
+import { RESEARCH_BUDGET_POLICY, researchLivenessPolicy } from "../dist/liveness.js";
 import {
   ContextSourceRefV1Schema,
   ContextSourceRefV2Schema,
   GroundedSynthesisV1Schema,
   MAX_RESEARCH_SEMANTIC_DRAFT_BYTES,
+  RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS,
+  RESEARCH_CORE_MAX_EVIDENCE_ARTIFACTS,
+  ResearchEvidenceCapacityError,
   ProductReceiptV1Schema,
   ResearchBudgetAdmissionV3Schema,
   ResearchBudgetPolicyV3Schema,
@@ -40,8 +44,8 @@ import {
   validateSemanticCoreRef,
   validateVersionedContextSourceRef,
   validateSkillPort,
-} from "../src/skill-contracts/research.js";
-import { validateSkillSchema } from "../src/skill-contracts/common.js";
+} from "../dist/skill-contracts/research.js";
+import { validateSkillSchema } from "../dist/skill-contracts/common.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -541,6 +545,154 @@ describe("P2 closed research schema vectors", () => {
         readEvidenceArtifact: () => Buffer.from(evidenceText, "utf8"),
       })
     ).toThrow(/Echo/);
+  });
+
+  it("binds history slot bounds to actual shared handoff capacity without lifting the core bound", () => {
+    expect(RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS).toBe(
+      record(CatalogWorkerContinuityMetadataV1Schema.properties.input_artifacts, "handoff schema")[
+        "maxItems"
+      ]
+    );
+    expect(
+      record(
+        ResearchSemanticDraftV1Schema.properties.evidence.items.properties.evidence_artifact_slot,
+        "slot schema"
+      )["maximum"]
+    ).toBe(RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS - 1);
+    expect(
+      record(
+        GroundedSynthesisV1Schema.properties.provenance.properties.evidence_artifacts,
+        "core schema"
+      )["maxItems"]
+    ).toBe(64);
+    expect(RESEARCH_CORE_MAX_EVIDENCE_ARTIFACTS).toBe(64);
+  });
+
+  it("projects cited old0 + new64 only, deduplicates repeated citations and preserves every exact relation", () => {
+    const draft = validateResearchSemanticDraft(positive.research_semantic_draft);
+    const request = canonicalizeResearchRequest({
+      question: "Consider every supplied observation?",
+      constraints: {},
+    });
+    const history = Array.from({ length: RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS }, (_, index) => ({
+      ...artifactRef({
+        id: "e",
+        phase: "researching",
+        producer: "agent:echo",
+        content: `observation ${index}.`,
+      }),
+      artifact_id: `art_${sha256(`history-${index}`)}`,
+      operation_id: `history-${index}`,
+    }));
+    const synthesis = artifactRef({
+      id: "f",
+      phase: "synthesizing",
+      producer: "agent:synthia",
+      content: canonicalJson(draft),
+    });
+    const evidenceFor = (slot: number) => ({
+      ...draft.evidence[0],
+      source_index: 0,
+      locator: `observation ${slot}`,
+      relation: "supports" as const,
+      evidence_artifact_slot: slot,
+      excerpt: `observation ${slot}.`,
+    });
+    const candidate = (slots: readonly number[]) => ({
+      ...draft,
+      evidence: slots.map(evidenceFor),
+      claims: draft.claims.map((claim) => ({
+        ...claim,
+        evidence_indexes: slots.map((_slot, index) => index),
+      })),
+      sections: draft.sections.map((section) => ({
+        ...section,
+        evidence_indexes: slots.map((_slot, index) => index),
+      })),
+    });
+    const reads: string[] = [];
+    const project = (value: unknown, refs: readonly ArtifactRef[] = history) =>
+      projectResearchSemanticDraft({
+        draft: value,
+        request,
+        contextTraceSha256: "3".repeat(64),
+        evidenceArtifacts: refs,
+        synthesisSourceArtifact: synthesis,
+        readEvidenceArtifact: (ref) => {
+          reads.push(ref.artifact_id);
+          const index = history.findIndex((item) => item.artifact_id === ref.artifact_id);
+          return Buffer.from(`observation ${index}.`);
+        },
+      });
+    const core = project(candidate([64, 0, 64]));
+    expect(core.provenance.evidence_artifacts).toEqual([history[0], history[64]]);
+    expect(reads).toEqual([history[64]?.artifact_id, history[0]?.artifact_id]);
+    expect(core.evidence.map((item) => item.evidence_artifact_id)).toEqual([
+      history[64]?.artifact_id,
+      history[0]?.artifact_id,
+      history[64]?.artifact_id,
+    ]);
+    expect(core.evidence.map((item) => item.excerpt_sha256)).toEqual([
+      sha256("observation 64."),
+      sha256("observation 0."),
+      sha256("observation 64."),
+    ]);
+    expect(core.claims[0]?.evidence_ids).toEqual([
+      "evidence-0001",
+      "evidence-0002",
+      "evidence-0003",
+    ]);
+    expect(core.evidence.every((item) => item.source_id === "source-0001")).toBe(true);
+    expect(history).toHaveLength(RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS);
+    expect(project(candidate([255])).provenance.evidence_artifacts).toEqual([history[255]]);
+    expect(() => project(candidate([256]))).toThrow();
+    expect(() => project(candidate([64]), history.slice(0, 64))).toThrow(/slot does not resolve/);
+    expect(() =>
+      project({
+        ...candidate([0]),
+        evidence: [{ ...evidenceFor(0), evidence_artifact_slot: history[0] }],
+      })
+    ).toThrow();
+    expect(() =>
+      project({
+        ...candidate([0]),
+        evidence: [{ ...evidenceFor(0), artifact_id: history[64]?.artifact_id }],
+      })
+    ).toThrow();
+    expect(() =>
+      project({ ...candidate([64]), evidence: [{ ...evidenceFor(64), excerpt: "observation 0." }] })
+    ).toThrow(/excerpt is absent/);
+    expect(() =>
+      project(
+        candidate([0]),
+        [history[0], history[0]].filter((ref): ref is ArtifactRef => ref !== undefined)
+      )
+    ).toThrow(/unique/);
+    expect(() => project(candidate(Array.from({ length: 65 }, (_, index) => index)))).toThrow(
+      ResearchEvidenceCapacityError
+    );
+    expect(() => project(candidate([0]), [...history, synthesis])).toThrow(
+      ResearchEvidenceCapacityError
+    );
+    // Old revisions are addressable, not silently replaced by newer same-operation bytes.
+    const old = history[0];
+    const next = history[64];
+    if (old === undefined || next === undefined) throw new Error("missing revision operands");
+    const revision = {
+      ...next,
+      operation_id: old.operation_id,
+      branch_id: old.branch_id,
+      version: 2,
+    };
+    expect(
+      project(
+        {
+          ...candidate([0, 1]),
+          evidence: [evidenceFor(0), { ...evidenceFor(64), evidence_artifact_slot: 1 }],
+        },
+        [old, revision]
+      ).provenance.evidence_artifacts
+    ).toEqual([old, revision]);
   });
 
   it("admits partial unsupported and qualified cores but rejects broken support", () => {

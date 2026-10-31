@@ -16,7 +16,7 @@ pass through an intermediate family.
 <!-- BEGIN GENERATED: families -->
 
 - **Epistemic** — transform information into knowledge or judgment: `analyze`, `critique`, `explore`, `synthesize`, `verify`
-- **Deliberative** — determine what should happen: `decide`, `ideate`, `plan`
+- **Deliberative** — determine what should be defined or happen: `decide`, `ideate`, `plan`, `specify`
 - **Operational** — convert intent into externalizable work: `generate`, `taskify`
 
 <!-- END GENERATED -->
@@ -33,6 +33,7 @@ pass through an intermediate family.
 | `decide`     | `demetri`  | deliberative | `read`    | alternatives + objectives + uncertainty → justified choice + sensitivity |
 | `ideate`     | `ida`      | deliberative | `read`    | problem + constraints → diverse candidate possibilities                  |
 | `plan`       | `piper`    | deliberative | `read`    | goal + state + constraints → strategy                                    |
+| `specify`    | `rhea`     | deliberative | `read`    | bounded brief + evidence + constraints → specification                   |
 | `generate`   | `skribble` | operational  | `write`   | specification → materialized artifact                                    |
 | `taskify`    | `tabitha`  | operational  | `read`    | strategy/specification → executable task graph                           |
 
@@ -60,6 +61,16 @@ support advisory recall but never workflow transport.
 The owner persists and re-reads exact response bytes before parsing the small routing
 SUMMARY or returning success. Every result prints the exact ID; memory search and
 model-authored pointers are never persistence proof.
+
+## Bounded work
+
+For substantial work, Penny aims for assignments with one coherent outcome, sufficient declared inputs, and room for implementation, verification, correction, and handoff within the effective context limits. Small requests stay direct; not every multi-step request needs a task graph or a worker.
+
+Tabitha turns an accepted specification or strategy into dependency-aware work. Execution-ready tasks describe required inputs, change boundaries, expected outputs and evidence, and why their context needs are manageable. Dependencies identify what a task consumes; parallel work must also avoid shared-resource conflicts. Integration remains explicit work rather than an assumed consequence of passing component checks. Later acceptance or deployment prerequisites should not block independent earlier work: narrow or split assignments while retaining each control at its actual point of need and keeping later gates explicit.
+
+After implementation is authorized, Penny can give one bounded task to a fresh worker, inspect its actual outputs and evidence, and accept, repair, clarify, or re-decompose before releasing dependent work. A worker finishing and its response being saved do not establish that the task succeeded. Handoffs preserve revisions, material decisions, check results, and incomplete work without requiring the next worker to reconstruct an ancestor conversation.
+
+These are prompting-led responsibilities using the existing delegation and artifact mechanisms—not hard context enforcement, filesystem isolation, or a new unattended scheduler. Applicable runtime gates and permissions still apply. The agent-facing [Bounded Work standard](../../agents/agents/bounded-work.md) owns the detailed task and handoff criteria.
 
 ## Durable memory boundary
 

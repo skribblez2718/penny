@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { researchSummarySchema } from "../src/playbooks/research.js";
+import { researchSummarySchema } from "../dist/playbooks/research.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PIN = parseResearchParityPin(

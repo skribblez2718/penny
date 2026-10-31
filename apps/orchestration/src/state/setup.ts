@@ -1,3 +1,4 @@
+import { SqliteHealthError, isSqliteCorruption } from "./sqlite-health.js";
 import { ArtifactStore } from "../artifact-store.js";
 import { rejectRetiredConfiguration } from "../config.js";
 import { Checkpointer, OrchestrationSchemaCompatibilityError } from "../checkpointer.js";
@@ -31,10 +32,12 @@ export type PennyStateResolutionErrorCode =
   | "PROJECT_NOT_ACTIVE"
   | "STATE_CUSTODY_INVALID"
   | "STATE_COMPONENT_UNINITIALIZED"
-  | "STATE_SCHEMA_INCOMPATIBLE";
+  | "STATE_SCHEMA_INCOMPATIBLE"
+  | "STATE_DATABASE_CORRUPT";
 
 export interface PennyStateResolutionDetails {
-  readonly component?: "orchestration";
+  readonly component?: "orchestration" | "artifacts" | "catalog" | "observability";
+  readonly diagnostics?: readonly string[];
   readonly actualSchemaVersion?: number;
   readonly requiredSchemaVersion?: number;
   readonly upgradeSupported?: boolean;
@@ -54,6 +57,22 @@ export class PennyStateResolutionError extends Error {
     this.name = "PennyStateResolutionError";
     this.code = code;
   }
+}
+
+function corruptionFailure(
+  component: NonNullable<PennyStateResolutionDetails["component"]>,
+  error: unknown
+): PennyStateResolutionError {
+  const diagnostics =
+    error instanceof SqliteHealthError
+      ? error.diagnostics
+      : [error instanceof Error ? error.message : String(error)];
+  return new PennyStateResolutionError(
+    "STATE_DATABASE_CORRUPT",
+    `${component} database is damaged; preserve it and recover into a separate validated database: ${diagnostics.join("; ")}`,
+    error,
+    { component, diagnostics }
+  );
 }
 
 export function globalStateDirectories(stateRoot: string): readonly string[] {
@@ -189,7 +208,11 @@ export function resolvePennyProjectState(
     );
   }
   try {
-    using catalog = new ProjectCatalog(stateRoot, { create: false, readOnly: true });
+    using catalog = new ProjectCatalog(stateRoot, {
+      create: false,
+      readOnly: true,
+      verifyIntegrity: false,
+    });
     let binding: ProjectBinding | undefined;
     try {
       binding = catalog.lookupProject(projectRoot);
@@ -219,6 +242,7 @@ export function resolvePennyProjectState(
     return resolved;
   } catch (error) {
     if (error instanceof PennyStateResolutionError) throw error;
+    if (isSqliteCorruption(error)) throw corruptionFailure("catalog", error);
     throw new PennyStateResolutionError(
       "STATE_CUSTODY_INVALID",
       `Penny state failed ownership, layout, or integrity validation: ${
@@ -240,16 +264,23 @@ export function resolvePennyRuntimeState(
 ): ResolvedProjectState {
   rejectRetiredConfiguration(options.env ?? process.env);
   const resolved = resolvePennyProjectState(projectRoot, options);
+  let component: NonNullable<PennyStateResolutionDetails["component"]> = "catalog";
   try {
+    {
+      using _catalog = new ProjectCatalog(resolved.state.root, { create: false, readOnly: true });
+    }
+    component = "orchestration";
     Checkpointer.verifyExisting(resolved.paths.orchestration.database, {
       projectId: resolved.projectId,
     });
+    component = "artifacts";
     ArtifactStore.verifyExisting(resolved.paths.artifacts.root, {
       projectId: resolved.projectId,
     });
     ReceiptAuthority.loadExisting(resolved.paths.orchestration.receiptKey);
     return resolved;
   } catch (error) {
+    if (isSqliteCorruption(error)) throw corruptionFailure(component, error);
     if (error instanceof OrchestrationSchemaCompatibilityError) {
       throw new PennyStateResolutionError("STATE_SCHEMA_INCOMPATIBLE", error.message, error, {
         component: error.component,
@@ -279,6 +310,7 @@ export function resolvePennyStateStatus(
     assertExistingObservabilityDatabase(resolved.state.observability.database);
     return resolved;
   } catch (error) {
+    if (isSqliteCorruption(error)) throw corruptionFailure("observability", error);
     throw new PennyStateResolutionError(
       "STATE_COMPONENT_UNINITIALIZED",
       `Penny observability state is incomplete or incompatible: ${

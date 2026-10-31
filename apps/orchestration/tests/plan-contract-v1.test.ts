@@ -19,12 +19,13 @@ import {
   type PlanRequestConstraintsV1,
   type StrategyCoreV1,
   type StrategyDraftV1,
-} from "../src/index.js";
+} from "../dist/index.js";
 
 const ARTIFACT_A = `art_${"a".repeat(64)}`;
 const ARTIFACT_B = `art_${"b".repeat(64)}`;
 const ARTIFACT_C = `art_${"c".repeat(64)}`;
 const ARTIFACT_D = `art_${"f".repeat(64)}`;
+const ARTIFACT_E = `art_${"e".repeat(64)}`;
 const REQUEST_ARTIFACT = `art_${"c".repeat(64)}`;
 const DRAFT_ARTIFACT = `art_${"d".repeat(64)}`;
 
@@ -164,7 +165,7 @@ describe("PlanRequestV1, StrategyDraftV1, and StrategyV1", () => {
     expect(planRequestSha256(value)).toBe(sha256(canonicalJson(value)));
   });
 
-  it("accepts three exact inputs and rejects unknown fields, duplicates, and a fourth input", () => {
+  it("accepts four exact inputs and rejects unknown fields, duplicates, and a fifth input", () => {
     expect(() =>
       canonicalizePlanRequest({
         goal: "Plan safely.",
@@ -187,8 +188,11 @@ describe("PlanRequestV1, StrategyDraftV1, and StrategyV1", () => {
       ARTIFACT_B,
       ARTIFACT_C,
     ]);
-    expect(() => request([ARTIFACT_A, ARTIFACT_B, ARTIFACT_C, ARTIFACT_D])).toThrow(
-      /at most 3 exact inputs/u
+    expect(
+      request([ARTIFACT_A, ARTIFACT_B, ARTIFACT_C, ARTIFACT_D]).input_artifact_ids
+    ).toHaveLength(4);
+    expect(() => request([ARTIFACT_A, ARTIFACT_B, ARTIFACT_C, ARTIFACT_D, ARTIFACT_E])).toThrow(
+      /at most 4 exact inputs/u
     );
     const valid = request();
     expect(() => validatePlanRequest({ ...valid, request_id: "plan-request-wrong" })).toThrow(

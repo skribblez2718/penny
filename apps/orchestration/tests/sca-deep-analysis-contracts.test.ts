@@ -6,7 +6,7 @@ import {
   sealScaCandidateAnalysisResultV1,
   validateScaCandidateAnalysisResultV1,
   validateScaDeepAnalysisPlanV1,
-} from "../src/sca/deep-analysis-contracts.js";
+} from "../dist/sca/deep-analysis-contracts.js";
 
 const DIGEST = "a".repeat(64);
 

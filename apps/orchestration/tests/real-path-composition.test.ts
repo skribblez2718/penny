@@ -21,9 +21,9 @@ import {
   type Directive,
   type JsonValue,
   type ModelClient,
-  type PlaybookRegistrationV1,
-  type StrategyCoreV1,
-} from "../src/index.js";
+  type PlaybookRegistration,
+  type StrategyCoreV2,
+} from "../dist/index.js";
 import { researchSemanticDraftFixture } from "./helpers/research-semantic-draft.js";
 import { decisionRequest, persistedDecisionDraft } from "./fixtures/decision-fixtures.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
@@ -132,7 +132,7 @@ async function executeRegistered(input: {
   readonly checkpointer: Checkpointer;
   readonly client: ModelClient;
   readonly request: unknown;
-  readonly registration?: PlaybookRegistrationV1;
+  readonly registration?: PlaybookRegistration;
 }): Promise<Directive> {
   const engine = new OrchestrationEngine(input.checkpointer, {
     projectRoot: input.root,
@@ -141,6 +141,7 @@ async function executeRegistered(input: {
     artifactRevisions: input.artifacts,
     artifactStore: input.artifacts,
     artifactReader: input.artifacts,
+    assuranceProjectId: `prj_${"0".repeat(32)}`,
     ...(input.registration === undefined
       ? {}
       : {
@@ -178,9 +179,9 @@ function decideStart(root: string, runId: string, grounded: ArtifactRef) {
   };
 }
 
-function strategyCore(): StrategyCoreV1 {
+function strategyCore(): StrategyCoreV2 {
   return {
-    schema_version: 1,
+    schema_version: 2,
     disposition: "ready",
     applicability_reason: "The exact research and decision products support a bounded strategy.",
     outcomes: [
@@ -202,6 +203,8 @@ function strategyCore(): StrategyCoreV1 {
     },
     blockers: [],
     confidence: "PROBABLE",
+    source_item_coverage: [],
+    unsupported_strategy_elements: [],
   };
 }
 
@@ -242,8 +245,11 @@ function planStart(root: string, runId: string, grounded: ArtifactRef, decision:
 describe("provider-free real-path workflow composition", () => {
   it("executes Research → Decide → Plan with actual terminal semantic products", async () => {
     const root = temporaryRoot();
-    using artifacts = new ArtifactStore(path.join(root, "artifacts"));
-    using checkpointer = new Checkpointer(path.join(root, "orchestration.db"));
+    const projectId = `prj_${"0".repeat(32)}`;
+    using artifacts = new ArtifactStore(path.join(root, "artifacts"), { projectId });
+    using checkpointer = new Checkpointer(path.join(root, "orchestration.db"), undefined, {
+      projectId,
+    });
     sequence += 1;
 
     const researchClient = new ResearchChainClient(artifacts);
@@ -346,7 +352,7 @@ describe("provider-free real-path workflow composition", () => {
         request: planStart(root, `chain-plan-${sequence}`, research, decision),
       })
     );
-    expect(strategy.content_schema).toEqual({ schema_id: "penny.strategy.v1", schema_version: 1 });
+    expect(strategy.content_schema).toEqual({ schema_id: "penny.strategy.v2", schema_version: 2 });
     expect(planClient.invocations[0]?.inputArtifacts.map((ref) => ref.artifact_id)).toEqual(
       expect.arrayContaining([research.artifact_id, decision.artifact_id])
     );

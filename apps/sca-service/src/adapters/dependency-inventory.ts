@@ -1,8 +1,8 @@
 import { Type, type Static } from "typebox";
 
-import { canonicalJson, sha256 } from "../../../orchestration/src/canonical-json.js";
-import { validateContract } from "../../../orchestration/src/contracts.js";
-import { Sha256Schema } from "../../../orchestration/src/skill-contracts/common.js";
+import { canonicalJson, sha256 } from "../../../orchestration/dist/canonical-json.js";
+import { validateContract } from "../../../orchestration/dist/contracts.js";
+import { Sha256Schema } from "../../../orchestration/dist/skill-contracts/common.js";
 
 const MAX_MANIFESTS = 32;
 const MAX_CONTENT_BYTES = 16_777_216;

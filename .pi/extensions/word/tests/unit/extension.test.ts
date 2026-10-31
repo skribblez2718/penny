@@ -22,11 +22,8 @@ import {
   type_scale,
   validateMarkdownTokenStream,
 } from "../../renderer.js";
-import {
-  createTestExtensionApi,
-  isRecord,
-  requireArrayElement,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord, requireArrayElement } from "../../../../lib/tests/test-narrowers.js";
 
 interface RegisteredTool {
   name: string;
@@ -156,7 +153,7 @@ describe("output paths", () => {
     expect(resolveOutputPath("/tmp/x.docx", "t", "/proj")).toBe("/tmp/x.docx");
   });
 
-  it("reserves a unique same-directory staging file with 0600 permissions", () => {
+  it("reserves unique same-directory staging files on every platform", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "word-staging-test-"));
     try {
       const output = path.join(directory, "report.docx");
@@ -166,12 +163,23 @@ describe("output paths", () => {
       expect(first).not.toBe(second);
       expect(fs.existsSync(first)).toBe(true);
       expect(fs.existsSync(second)).toBe(true);
-      expect(fs.statSync(first).mode & 0o777).toBe(0o600);
-      expect(fs.statSync(second).mode & 0o777).toBe(0o600);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "creates staging files with owner-only POSIX permissions",
+    () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "word-staging-mode-test-"));
+      try {
+        const staging = reserveStagingPath(path.join(directory, "report.docx"));
+        expect(fs.statSync(staging).mode & 0o777).toBe(0o600);
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  );
 });
 
 describe("buildSpec", () => {

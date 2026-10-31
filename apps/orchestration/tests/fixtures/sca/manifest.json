@@ -17,7 +17,7 @@
     },
     {
       "filename": "profile.json",
-      "sha256": "3f62367f192f00b79e000fe4a2c475785571074b61ce9c37585e77e5f55f51fb",
+      "sha256": "7824906fb534e90c7819968201d0973b147cb072f8ccc1a0f39ce3c258559c92",
       "schema_identity": {
         "schema_id": "penny.sca-profile.v1",
         "schema_version": 1

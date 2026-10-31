@@ -17,7 +17,7 @@
       "registration_scope": "universal",
       "test_config": "unit",
       "test_file": "tests/unit/engine-path.test.ts",
-      "full_name": "TypeScript-only skill engine path routes every generic registered skill through the skill tool with its exact registration"
+      "full_name": "TypeScript-only skill engine path routes every generic registered skill through the upgraded shared state"
     },
     {
       "check_id": "research-production-entrypoint",
@@ -158,6 +158,67 @@
       ]
     },
     {
+      "skill_name": "define",
+      "checks": [
+        {
+          "check_id": "define-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/define-contract.test.ts",
+          "full_name": "DefinitionRequestV1, DefinitionFrameV1, and SpecificationV1 seals one planning-ready cross-domain specification with exact source coverage"
+        },
+        {
+          "check_id": "define-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/define-contract.test.ts",
+          "full_name": "DefinitionRequestV1, DefinitionFrameV1, and SpecificationV1 rejects missing profile categories, incomplete source coverage, and fabricated schema fields"
+        },
+        {
+          "check_id": "define-boundary",
+          "category": "boundary",
+          "tier": 1,
+          "test_file": "tests/define-contract.test.ts",
+          "full_name": "DefinitionRequestV1, DefinitionFrameV1, and SpecificationV1 makes ambiguous caller intent a durable clarification route instead of evidence acquisition"
+        },
+        {
+          "check_id": "define-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/define-contract.test.ts",
+          "full_name": "DefinitionRequestV1, DefinitionFrameV1, and SpecificationV1 accepts meaning-preserving JSON key-order variation in the typed specification footer"
+        },
+        {
+          "check_id": "define-input-mutation",
+          "category": "input_mutation",
+          "tier": 1,
+          "test_file": "tests/define-contract.test.ts",
+          "full_name": "DefinitionRequestV1, DefinitionFrameV1, and SpecificationV1 rejects a stale frame after a material definition-request mutation"
+        },
+        {
+          "check_id": "define-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/define-contract.test.ts",
+          "full_name": "DefinitionRequestV1, DefinitionFrameV1, and SpecificationV1 requires canonical exact bytes and rejects stable-ID or no-execution tampering"
+        },
+        {
+          "check_id": "define-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/define-playbook.test.ts",
+          "full_name": "provider-free orchestrated Define workflow completes one reviewed canonical SpecificationV1 without planning or execution"
+        },
+        {
+          "check_id": "define-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/define-playbook.test.ts",
+          "full_name": "provider-free orchestrated Define workflow returns a durable clarification gate when caller-owned intent is ambiguous"
+        }
+      ]
+    },
+    {
       "skill_name": "diagnose",
       "checks": [
         {
@@ -215,6 +276,67 @@
           "tier": 2,
           "test_file": "tests/diagnose-playbook.test.ts",
           "full_name": "orchestrated diagnose workflow terminates repeated product gaps as bounded non-positive incomplete"
+        }
+      ]
+    },
+    {
+      "skill_name": "imagegen",
+      "checks": [
+        {
+          "check_id": "imagegen-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/imagegen-activation.test.ts",
+          "full_name": "durable imagegen activation authority admits ordinary starts in enabled mode without consuming capability state"
+        },
+        {
+          "check_id": "imagegen-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/imagegen-activation.test.ts",
+          "full_name": "durable imagegen activation authority denies every new start in the closed disabled mode"
+        },
+        {
+          "check_id": "imagegen-boundary",
+          "category": "boundary",
+          "tier": 2,
+          "test_file": "tests/imagegen-activation.test.ts",
+          "full_name": "durable imagegen activation authority fails closed on request and profile drift"
+        },
+        {
+          "check_id": "imagegen-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/imagegen-activation.test.ts",
+          "full_name": "typed imagegen start admission activation gate admits the exact canary request through the typed admission and denies ordinary ones"
+        },
+        {
+          "check_id": "imagegen-input-mutation",
+          "category": "input_mutation",
+          "tier": 1,
+          "test_file": "tests/imagegen-activation.test.ts",
+          "full_name": "durable imagegen activation authority refuses to overwrite an active capability with a different one"
+        },
+        {
+          "check_id": "imagegen-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/imagegen-activation.test.ts",
+          "full_name": "durable imagegen activation authority consumes the exact canary once and binds it to the preallocated run id"
+        },
+        {
+          "check_id": "imagegen-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/imagegen-runtime-config.test.ts",
+          "full_name": "operator-private imagegen runtime configuration admits only the exact canary-bound request while ordinary starts stay denied"
+        },
+        {
+          "check_id": "imagegen-fail-closed",
+          "category": "fail_closed",
+          "tier": 1,
+          "test_file": "tests/imagegen-activation.test.ts",
+          "full_name": "durable imagegen activation authority fails closed when durable custody is broken"
         }
       ]
     },
@@ -329,7 +451,7 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/plan-playbook.test.ts",
-          "full_name": "provider-free orchestrated plan workflow completes a reviewed canonical ready StrategyV1 and exact product envelope"
+          "full_name": "provider-free orchestrated plan workflow completes a reviewed canonical ready StrategyV2 and exact product envelope"
         },
         {
           "check_id": "plan-fail-closed",
@@ -497,8 +619,8 @@
           "check_id": "sca-input-mutation",
           "category": "input_mutation",
           "tier": 2,
-          "test_file": "tests/sca-playbook.test.ts",
-          "full_name": "S-09 SCA skill playbook rejects a source snapshot digest mismatch before model work"
+          "test_file": "tests/sca-conformance.test.ts",
+          "full_name": "provider-free current SCA conformance refuses changed source identity/digest and requested or resolved model bindings before affected model work"
         },
         {
           "check_id": "sca-product-integrity",
@@ -512,14 +634,75 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/sca-playbook.test.ts",
-          "full_name": "S-09 SCA skill playbook runs inventory, two pinned primary branches, critic review, report verification, and release gate"
+          "full_name": "ordinary registered SCA replacement routes real admission/owner/engine/artifacts through the complete ordinary phase sequence"
         },
         {
           "check_id": "sca-fail-closed",
           "category": "fail_closed",
           "tier": 2,
-          "test_file": "tests/sca-playbook.test.ts",
-          "full_name": "S-09 SCA skill playbook terminates honestly when critic consensus has an unresolved gap"
+          "test_file": "tests/sca-conformance.test.ts",
+          "full_name": "provider-free current SCA conformance keeps unresolved mandatory coverage or evidence non-positive even when both final reviews PASS"
+        }
+      ]
+    },
+    {
+      "skill_name": "videogen",
+      "checks": [
+        {
+          "check_id": "videogen-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/videogen-stage-contracts.test.ts",
+          "full_name": "videogen phase contract fixtures (not production qualification) script_text: validates its complete closed product and static prompt schema"
+        },
+        {
+          "check_id": "videogen-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/videogen-stage-contracts.test.ts",
+          "full_name": "videogen phase contract fixtures (not production qualification) refuses unknown/empty criteria, contradictory PASS and invented evidence slots"
+        },
+        {
+          "check_id": "videogen-boundary",
+          "category": "boundary",
+          "tier": 1,
+          "test_file": "tests/videogen-stage-contracts.test.ts",
+          "full_name": "videogen phase contract fixtures (not production qualification) permits a blocked objective review without invented criteria"
+        },
+        {
+          "check_id": "videogen-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/videogen-conformance.test.ts",
+          "full_name": "provider-free videogen conformance accepts meaning-preserving script wording while retaining exact outline and coverage bindings"
+        },
+        {
+          "check_id": "videogen-input-mutation",
+          "category": "input_mutation",
+          "tier": 2,
+          "test_file": "tests/videogen-conformance.test.ts",
+          "full_name": "provider-free videogen conformance invalidates the prior script canon and approval after a material G1 refinement"
+        },
+        {
+          "check_id": "videogen-product-integrity",
+          "category": "product_integrity",
+          "tier": 2,
+          "test_file": "tests/videogen-media-evidence.integration.test.ts",
+          "full_name": "raw→existing owner receipt→domain wrapper real store/engine custody protocol settles raw PCM before receipt-citing measurement, reopens exact stores and idempotently wraps without decode"
+        },
+        {
+          "check_id": "videogen-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/videogen-conformance.test.ts",
+          "full_name": "provider-free videogen conformance runs the registered engine and signed worker capture to exact G1 and recovers without effects"
+        },
+        {
+          "check_id": "videogen-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/videogen-conformance.test.ts",
+          "full_name": "provider-free videogen conformance refuses absent private providers before creating a run rather than manufacturing completion"
         }
       ]
     }

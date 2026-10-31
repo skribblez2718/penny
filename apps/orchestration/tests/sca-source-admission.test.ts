@@ -14,13 +14,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, test } from "vitest";
 
-import { canonicalJson, sha256 } from "../src/canonical-json.js";
+import { canonicalJson, sha256 } from "../dist/canonical-json.js";
 import {
   SCA_SOURCE_ADMISSION_REQUEST_SCHEMA,
   ScaSourceAdmissionError,
   admitScaSourceV1,
   type ScaSourceAdmissionRequestV1,
-} from "../src/sca/source-admission.js";
+} from "../dist/sca/source-admission.js";
 import {
   SCA_SOURCE_ADMISSION_POLICY_SCHEMA,
   SCA_SOURCE_MANIFEST_SCHEMA,
@@ -31,8 +31,8 @@ import {
   type ScaSourceAdmissionPolicyV1,
   type ScaSourceFileDeclarationV1,
   type ScaSourceAdmissionResultV1,
-} from "../src/sca/source-inventory.js";
-import type { ArtifactRef } from "../src/contracts.js";
+} from "../dist/sca/source-inventory.js";
+import type { ArtifactRef } from "../dist/contracts.js";
 
 const DEFAULT_POLICY: ScaSourceAdmissionPolicyV1 = {
   schema_id: SCA_SOURCE_ADMISSION_POLICY_SCHEMA,

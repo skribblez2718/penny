@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { pennyStatePaths, provisionObservabilityDatabase } from "@penny/orchestration/source";
+import { pennyStatePaths, provisionObservabilityDatabase } from "@penny/orchestration";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ObservabilityServiceStarter } from "../../service-startup.js";

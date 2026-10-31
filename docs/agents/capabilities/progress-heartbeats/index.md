@@ -2,27 +2,29 @@
 
 ## What
 
-Direct subagent execution currently has **no general progress-heartbeat timeout**.
-The runner exports an optional `ProgressEmitter` seam and can translate Pi stdout
-records (`agent_start`, assistant `message_end`, and tool results) when a caller
-supplies one, but no production caller constructs or passes that emitter. The
-runner therefore applies no general worker timeout; cancellation uses its own
-bounded graceful/forced termination lifecycle.
+Direct subagent execution uses a calibrated renewable inactivity lease. The runner
+projects trusted Pi stdout activity directly: non-empty assistant text or thinking,
+admitted tool starts/completions, changed cumulative tool updates, and terminal
+progress renew the lease. Its optional `ProgressEmitter` remains observational and
+is not required for liveness. Cancellation uses its own bounded graceful/forced
+termination lifecycle.
 
 Do not confuse this with skill-run progress. New ordinary orchestrated workers bind
 an immutable V3 inactivity-lease profile after the host resolves the provider/model.
 The lease renews only from content-free projections of non-empty assistant text or
 thinking deltas, admitted tool start/completion and changed cumulative tool updates,
 provider turn completion, or worker completion. Raw prompt, message, thinking, tool,
-and evidence bodies never enter the liveness event. A fixed host-operation deadline
-remains an independent upper bound; total elapsed work is not an ordinary V3 liveness
-budget. Recovery fences interrupted workers and does not charge process downtime as
-worker inactivity. Historical V1/V2 policies replay their fixed-duration semantics.
+and evidence bodies never enter the liveness event. Host operations have their own
+renewable inactivity lease; no current worker, child, host operation, or direct
+subagent has a total elapsed-work ceiling. Recovery fences interrupted workers and
+does not charge process downtime as worker inactivity. Historical V1/V2 records
+retain their exact policy fields for compatibility; those are not finite defaults for new runs, but their duration
+fields are telemetry rather than live execution-abort gates.
 
 The orchestration engine also emits typed `phase_started`, `worker_completed`, and
 `boundary_reached` events, and the skill extension maps those to user-interface
-progress. Those UI events are observational; they do not renew the worker lease,
-reset a direct-subagent timer, autonomously schedule work, or carry artifact handoff.
+progress. Those UI events are observational; they do not renew a worker or direct-subagent
+lease, autonomously schedule work, or carry artifact handoff.
 
 ## Session reset semantics
 
@@ -38,21 +40,20 @@ or workflow state. Deletion/retention follows each store's own policy.
 
 ## Rules
 
-1. Do not claim heartbeat-based staleness protection for direct `subagent()` runs.
-2. Renew an orchestrated-worker lease only from the closed trusted activity adapter;
-   model-authored progress claims and repeated identical tool updates do not count.
-3. Treat user-interface orchestration progress events as observational output only.
-4. Keep the host-operation deadline independent from the renewable inactivity lease.
-5. Cancellation must wait for the bounded process-termination lifecycle to settle.
-6. Resume orchestration by its public run/session identity and hand off exact work
+1. Renew direct and orchestrated worker leases only from their closed trusted activity
+   adapters; model-authored progress claims and repeated identical tool updates do not count.
+2. Treat user-interface orchestration progress events as observational output only.
+3. Give host operations their own renewable inactivity lease; never impose a total
+   elapsed-work deadline on productive execution.
+4. Cancellation must wait for the bounded process-termination lifecycle to settle.
+5. Resume orchestration by its public run/session identity and hand off exact work
    by artifact ID; do not reconstruct either from conversation history.
-7. A fresh chat session changes conversational context, not durable-store custody.
+6. A fresh chat session changes conversational context, not durable-store custody.
 
 ## Verification
 
-- [ ] Repository search finds no production construction or pass-through of
-      `ProgressEmitter`.
-- [ ] `runSingleAgent` still states that there is no general direct-worker timeout.
+- [ ] Direct-worker tests cover elapsed work beyond the former ceiling, trusted
+      renewal, repeated-update refusal, inactivity expiry, and cancellation.
 - [ ] V3 orchestrated-worker tests cover slow productive renewal, exact inactivity
       expiry, changed-versus-repeated tool updates, and V1/V2 replay.
 - [ ] Skill UI progress mapping remains typed and observational.

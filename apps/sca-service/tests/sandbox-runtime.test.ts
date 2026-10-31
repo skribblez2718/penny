@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { sha256 } from "../../orchestration/src/canonical-json.js";
+import { sha256 } from "../../orchestration/dist/canonical-json.js";
 import {
   admitScaStrongerExecutionV1,
   buildScaStrongerExecutionProposalV1,
   sealScaHumanAuthorizationDecisionV1,
-} from "../../orchestration/src/sca/human-authorization.js";
+} from "../../orchestration/dist/sca/human-authorization.js";
 import { attachScaExecutionEvidenceV1 } from "../src/evidence-tools.js";
 import {
   ScaSandboxRuntimeError,
@@ -279,7 +279,9 @@ describe("S-07-T1 qualified evidence sandbox runtime", () => {
       () => validateScaSandboxProfileV1({ ...value, profile_sha256: "0".repeat(64) }),
       "profile_digest_mismatch"
     );
-    const { profile_sha256: _digest, ...unsigned } = value;
+    const unsigned = Object.fromEntries(
+      Object.entries(value).filter(([key]) => key !== "profile_sha256")
+    );
     expectRuntimeError(
       () => buildScaSandboxProfileV1({ ...unsigned, runtime_executable: "relative-runtime" }),
       "qualification_invalid"

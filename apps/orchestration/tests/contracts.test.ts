@@ -5,9 +5,12 @@ import {
   ContractValidationError,
   DirectiveSchema,
   RunIdentitySchema,
+  SkillContractSchema,
   StartRequestSchema,
   validateContract,
-} from "../src/contracts.js";
+} from "../dist/contracts.js";
+
+import { RESEARCH_SKILL_CONTRACT } from "../dist/playbooks/research.js";
 
 const identity = {
   schema_version: 2,
@@ -18,6 +21,39 @@ const identity = {
 } as const;
 
 describe("orchestration boundary contracts", () => {
+  it("represents 128 exact proof ports without changing operation grants", () => {
+    const port = RESEARCH_SKILL_CONTRACT.io.input_ports[0];
+    if (port === undefined) throw new Error("registered input port absent");
+    const contract = {
+      ...RESEARCH_SKILL_CONTRACT,
+      io: {
+        ...RESEARCH_SKILL_CONTRACT.io,
+        input_ports: Array.from({ length: 128 }, (_, index) => ({
+          ...port,
+          name: "exact-proof-" + String(index),
+        })),
+      },
+    };
+    expect(
+      validateContract(SkillContractSchema, contract, "closed proof capacity").io.input_ports
+    ).toHaveLength(128);
+    expect(() =>
+      validateContract(
+        SkillContractSchema,
+        {
+          ...contract,
+          io: {
+            ...contract.io,
+            input_ports: [...contract.io.input_ports, { ...port, name: "overflow" }],
+          },
+        },
+        "proof overflow"
+      )
+    ).toThrow(ContractValidationError);
+    expect(() =>
+      validateContract(SkillContractSchema, { ...contract, approved: true }, "not a grant")
+    ).toThrow(ContractValidationError);
+  });
   it("accepts an immutable versioned TypeScript identity", () => {
     expect(validateContract(RunIdentitySchema, identity, "identity")).toEqual(identity);
   });

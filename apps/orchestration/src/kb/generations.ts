@@ -384,12 +384,7 @@ export function generationIndexDigest(
 }
 
 /** Build one preindexed staged `index.sqlite` at an exact transaction-owned key. */
-function buildGenerationIndexAt(
-  indexPath: string,
-  generationId: string,
-  kbId: string,
-  pages: readonly IndexPageEntry[]
-): void {
+function buildGenerationIndexAt(indexPath: string, pages: readonly IndexPageEntry[]): void {
   const parent = path.dirname(indexPath);
   mkdirSync(parent, { recursive: true, mode: 0o700 });
   chmodSync(parent, 0o700);
@@ -552,7 +547,6 @@ export function openStandalonePublicationCheckpointer(input: {
       constraints: { action: input.action, kb_profile_id: input.profileId },
       projectRoot: input.root,
       trustProfile: "hardened-untrusted",
-      maxSteps: 8,
     });
     checkpointer.createRun(context, "standalone_publication_started", {});
   }
@@ -1874,12 +1868,7 @@ export function publishGenerationTransaction(
           unlinkSync(staging);
         }
         publicationHit(input, "before_index_write");
-        buildGenerationIndexAt(
-          staging,
-          input.catalog.generation_id,
-          input.catalog.kb_id,
-          input.index_pages
-        );
+        buildGenerationIndexAt(staging, input.index_pages);
         const descriptor = openSync(staging, constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
           fsyncSync(descriptor);

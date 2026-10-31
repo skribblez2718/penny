@@ -2,12 +2,11 @@
 
 ## Current Behavior
 
-Penny does not currently apply a general heartbeat timeout to direct
-`subagent()` runs. The worker runner can recognize Pi start, message, and tool
-stdout events through an optional compatibility hook, but the production direct
-subagent path does not supply that hook. A direct worker is therefore not kept
-alive—or killed—by a documented three-tier heartbeat policy. Explicit
-cancellation instead follows a bounded graceful/forced shutdown process.
+Direct `subagent()` runs use a renewable inactivity lease. The worker runner
+recognizes trusted Pi start, non-empty assistant/reasoning, admitted tool lifecycle,
+changed tool-update, and completion activity directly from Pi stdout. Real activity
+renews the lease; repeated identical updates do not. Explicit cancellation follows
+a bounded graceful/forced shutdown process.
 
 Skill runs have a different progress surface. New ordinary orchestrated workers
 use calibrated renewable inactivity leases. The host renews a worker only when it
@@ -15,14 +14,15 @@ observes real non-empty assistant or reasoning output, admitted tool lifecycle o
 changed tool-update progress, or completion progress. The liveness record keeps
 only event classes and counters—not prompt, reasoning, message, tool-result, or
 evidence bodies. Slow work may exceed the old fixed worker duration while it keeps
-making progress; stalled work stops when its inactivity lease expires. A separate
-host-operation deadline remains an upper bound, and interrupted-process downtime
-does not consume a new worker lease. Older V1/V2 runs keep their historical policy.
+making progress; stalled work stops when its inactivity lease expires. Host
+operations use their own renewable inactivity leases, so current execution has no
+total elapsed-work ceiling. Interrupted-process downtime does not consume a new
+worker lease. Older V1/V2 runs keep their exact recorded policy fields, not finite defaults for new runs, but historical duration fields no longer stop live work.
 
 The orchestration engine also reports phase starts, completed workers, and
 user/completion boundaries to the skill user interface. This is useful status
-output, but it is observational: UI updates do not renew the lease, reset a
-direct-worker timeout, schedule background work, or transfer artifacts.
+output, but it is observational: UI updates do not renew a worker lease, schedule
+background work, or transfer artifacts.
 
 ## Starting a Fresh Session
 
@@ -48,7 +48,7 @@ historical `/clear` name) as clearing durable artifacts or checkpoints.
 
 **A direct subagent seems stuck**
 
-- Do not assume a heartbeat monitor will terminate it.
+- Its inactivity lease ends a silent worker; trusted Pi activity renews it.
 - Cancel explicitly when appropriate; the runner waits for bounded process exit
   and stream closure.
 - Preserve any exact completed output artifact IDs before starting replacement

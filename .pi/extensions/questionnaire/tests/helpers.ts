@@ -156,7 +156,7 @@ export function createExtensionApiHarness(): QuestionnaireExtensionApiHarness {
   const registeredTools: unknown[] = [];
   const registeredCommands: unknown[] = [];
   const registrationHost: Pick<ExtensionAPI, "on" | "registerTool" | "registerCommand"> = {
-    on: () => {},
+    on: () => () => {},
     registerTool(tool) {
       registeredTools.push(tool);
     },

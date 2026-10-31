@@ -188,14 +188,15 @@ No Python runtime is required for document generation.
 
 ## Configuration
 
-| Environment variable      | Purpose                                                                                                          |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `PROJECT_ROOT`            | Optional project-root override. Otherwise the root is discovered from the extension module, not the process CWD. |
-| `PENNY_DOCGEN_TIMEOUT_MS` | Generator timeout (default 90000 ms).                                                                            |
+| Environment variable | Purpose                                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `PROJECT_ROOT`       | Optional project-root override. Otherwise the root is discovered from the extension module, not the process CWD. |
+
+Generation has no elapsed-time ceiling. The caller's cancellation signal and the supervising agent's renewable inactivity lease remain authoritative.
 
 ## Reliability, validation, and results
 
-The renderer writes to a unique staging path beside the target, validates ZIP CRCs, required OPC/PresentationML parts, entity-safe/no-network XML well-formedness, relationship targets, presentation structure, and slide count, then atomically replaces the destination. Pre-publication failures preserve an existing target and remove only the invocation's staging file. Cancellation or timeout can abort generation before publication; an aborted or timed-out operation never publishes an incomplete deck.
+The renderer writes to a unique staging path beside the target, validates ZIP CRCs, required OPC/PresentationML parts, entity-safe/no-network XML well-formedness, relationship targets, presentation structure, and slide count, then atomically replaces the destination. Pre-publication failures preserve an existing target and remove only the invocation's staging file. Explicit cancellation can abort generation before publication; a cancelled operation never publishes an incomplete deck.
 
 Generation does not truncate table rows, code lines, or composed-layout content. Content that cannot fit at the readability floors and cannot be split at a safe boundary fails without publishing. New visual-critical assets and semantic design errors are validated before atomic publication.
 

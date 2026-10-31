@@ -9,20 +9,20 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { parseRetrievalFixture } from "../src/kb/gate-decisions.js";
+import { parseRetrievalFixture } from "../dist/kb/gate-decisions.js";
 import {
   canonicalJson,
   defaultDenyPolicy,
   type KbManifest,
   type KbRetrievalFixtureV1,
-} from "../src/kb/contracts.js";
-import { writeManifest, writePolicy, writePageRevision } from "../src/kb/filesystem.js";
+} from "../dist/kb/contracts.js";
+import { writeManifest, writePolicy, writePageRevision } from "../dist/kb/filesystem.js";
 import {
   buildCatalog,
   buildGenerationIndex,
   newGenerationId,
   publishGeneration,
-} from "../src/kb/generations.js";
+} from "../dist/kb/generations.js";
 import {
   hitAtK,
   meanReciprocalRank,
@@ -30,8 +30,8 @@ import {
   rankPages,
   type ExpectedContradiction,
   type RetrievalCandidate,
-} from "../src/kb/retrieval.js";
-import { lintDeterministic } from "../src/kb/lint.js";
+} from "../dist/kb/retrieval.js";
+import { lintDeterministic } from "../dist/kb/lint.js";
 
 const dirs: string[] = [];
 function tmpRoot(): string {

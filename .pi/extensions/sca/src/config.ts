@@ -14,22 +14,19 @@ const CLIENT_TIMEOUT_MIN_MS = 50;
 const CLIENT_TIMEOUT_MAX_MS = 30_000;
 const POLL_INTERVAL_MIN_MS = 1;
 const POLL_INTERVAL_MAX_MS = 5_000;
-const POLL_ATTEMPTS_MIN = 1;
-const POLL_ATTEMPTS_MAX = 10_000;
 const RESPONSE_BYTES_MIN = 1_024;
 const RESPONSE_BYTES_MAX = 4 * 1_024 * 1_024;
 
 export const DEFAULT_SCA_CLIENT_RESPONSE_TIMEOUT_MS = 5_000;
 export const DEFAULT_SCA_CLIENT_POLL_INTERVAL_MS = 25;
-export const DEFAULT_SCA_CLIENT_MAX_POLL_ATTEMPTS = 2_000;
 export const DEFAULT_SCA_CLIENT_MAX_RESPONSE_BYTES = 1 * 1_024 * 1_024;
 
 export interface ScaClientConfig {
   readonly socketPath: string;
   readonly token: string;
+  /** Backward-compatible name for per-response transport inactivity. */
   readonly responseTimeoutMs: number;
   readonly pollIntervalMs: number;
-  readonly maxPollAttempts: number;
   readonly maxResponseBytes: number;
 }
 
@@ -100,6 +97,7 @@ function validateToken(value: string | undefined): string {
 
 /** Reads service-owned connection data only when a tool call starts. */
 export function loadScaClientConfig(environment: NodeJS.ProcessEnv = process.env): ScaClientConfig {
+  if (environment[SCA_CLIENT_MAX_POLL_ATTEMPTS_ENV] !== undefined) failConfiguration();
   return {
     socketPath: validateSocketPath(environment[SCA_SERVICE_SOCKET_ENV]),
     token: validateToken(environment[SCA_SERVICE_TOKEN_ENV]),
@@ -114,12 +112,6 @@ export function loadScaClientConfig(environment: NodeJS.ProcessEnv = process.env
       DEFAULT_SCA_CLIENT_POLL_INTERVAL_MS,
       POLL_INTERVAL_MIN_MS,
       POLL_INTERVAL_MAX_MS
-    ),
-    maxPollAttempts: parseBoundedInteger(
-      environment[SCA_CLIENT_MAX_POLL_ATTEMPTS_ENV],
-      DEFAULT_SCA_CLIENT_MAX_POLL_ATTEMPTS,
-      POLL_ATTEMPTS_MIN,
-      POLL_ATTEMPTS_MAX
     ),
     maxResponseBytes: parseBoundedInteger(
       environment[SCA_CLIENT_MAX_RESPONSE_BYTES_ENV],

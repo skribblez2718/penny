@@ -29,8 +29,3 @@ Browser requests use ambient credentials or trigger state changes across origins
 
 - [Session security](session-security.md) owns session lifecycle.
 - [API security](api-security.md) owns interface behavior; [authorization](authorization.md) owns permission decisions.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

@@ -2,12 +2,9 @@
 
 ## Required architecture
 
-1. **Manifest:** `.pi/skills/<name>/SKILL.md` with a trigger-rich description and
-   `metadata.penny.engine: orchestration`. Model-visible packages omit
-   `disable-model-invocation`; only hidden packages declare it, exactly as `true`. The upstream
-   optional `license` field is forbidden because Penny's repository-level license governs tracked
-   packages.
-2. **Playbook:** one registered TypeScript `PlaybookCoreV1` implementation under
+1. **Manifest:** `.pi/skills/<name>/SKILL.md` conforming to
+   [SKILL.md Format](skill-md-format.md), the owner of YAML, visibility, and license rules.
+2. **Playbook:** one registered TypeScript `PlaybookCore` implementation under
    `apps/orchestration/src/playbooks/`.
 3. **Contract:** closed `SkillContractV2`, validated before construction. Its fields are
    `schema_version`, `name`, `objective`, `io`, `behavior`, `guidance`, `budget_policy`,
@@ -21,21 +18,23 @@
 Skill directories contain no executable delegate. The skill extension invokes the TypeScript
 registry in-process. Each registration owns `ingress`, typed start admission, liveness/thinking,
 worker identity, opening/guidance, phase schemas, optional fixed phase tool subsets, and model
-policy. A subset is permitted only as one explicit non-empty duplicate-free strict YAML subset
-included in the canonical runtime-registration digest and worker invocation metadata; omission
-preserves YAML equality. `ingress:skill` requires start admission; `knowledge-base` remains
-`dedicated_tool` with separate host-private tools.
+policy. Tool selection follows the [binding runtime rule](../agents/discovery-and-tools.md#binding-runtime-rule);
+[profiles](../agents/tool-profiles.md) own the static YAML maximum. A guarded zero-tool phase is
+permitted only under that rule's registration-bound model/payload/disclosure/opening conditions,
+never from task or runtime selection. `ingress:skill` requires start admission; `knowledge-base`
+remains `dedicated_tool` with separate host-private tools.
+
+The seven ordinary generic-child peers—`assess`, `decide`, `define`, `diagnose`, `plan`, `produce`,
+`research`—currently omit `allowed_tools` and use exact YAML. This is not a rule for every registered
+skill: SCA cognition binds the real `["artifact_read"]` subset. Preserve both registration shapes.
 
 ## Registration, visibility, and composition
 
-`.pi/skills/<name>/` is the only active package root. `PLAYBOOK_REGISTRY` is the sole executable
-registry; adding a registration is the explicit authorization step. A model-invocable orchestration
-package must have a matching registered playbook. A package whose top-level
-`disable-model-invocation` flag is explicitly `true` is hidden from Pi native discovery and Penny's
-model listing; a model-visible package omits the flag rather than declaring redundant `false`.
-`.pi/skills/.ignore` contains exactly the explicitly hidden package directory names. A disabled
-package may remain unregistered during development, but generic runtime invocation fails safely until
-its playbook is registered. Directory location and model visibility do not grant execution authority.
+`PLAYBOOK_REGISTRY` is the sole executable registry; registration explicitly authorizes execution.
+Model-invocable orchestration packages require a matching registration. Both visible and hidden
+packages load through native Pi discovery; the manifest flag controls only model advertising.
+Unregistered packages cannot execute regardless of visibility. Package location and model visibility
+confer no execution authority; apply the [manifest rules](skill-md-format.md#rules).
 
 Before run creation, generic composition re-reads every canonical input ref, resolves exactly one
 compatible port by source/kind/schema/version, checks cardinality, and validates exact bytes for
@@ -44,13 +43,13 @@ semantic products. The initial semantic validator is `penny.grounded-synthesis.v
 ## Exact artifact handoff
 
 Every cognitive directive declares owner-selected exact `input_artifacts` IDs/refs and an
-`output_artifact` contract. Workers read each needed task-provided exact ID with `artifact_read`
-and continue bounded reads through `next_range`, then return complete
-stage output, and keep routing fields separate from product bytes. The owner persists and
-re-reads exact bytes before parsing routing or advancing.
+`output_artifact` contract. Apply [Invocation](../agents/invocation.md) for complete reads,
+`missing_input:`, exact final-text concatenation, owner persistence/readback before SUMMARY,
+and fan-in/capture failure behavior. Keep the worker-local clauses below self-contained.
 
-Selected refs survive retries, clarification, restart, fan recovery, compaction, and skill
-composition. Payload bytes and semantic memory never enter `RunContext`.
+Selected refs survive retry, clarification, restart, fan recovery, compaction, and composition.
+The [engine](../orchestration/overview.md#persistence) owns checkpoints and admission;
+payload bytes and semantic memory never enter `RunContext`.
 
 ## Directory shape
 
@@ -72,42 +71,34 @@ apps/orchestration/tests/<name>-playbook.test.ts
 A worker prompt must:
 
 - identify the state-specific mission and consequence boundary;
-- require `artifact_read` for every needed task-provided predecessor ID;
-- prohibit predecessor discovery through memory, temporary files, repository search, or another channel;
+- require `artifact_read` through `next_range` until every needed task-provided predecessor is complete;
+- return `missing_input:` for a required absent ID/path, never discover predecessors through memory,
+  temporary files, repository search, or another channel;
 - require complete stage content;
 - state that the owner captures output and the worker must not claim persistence;
 - carry the exact typed routing contract;
-- preserve role boundaries and clarification fields.
+- preserve role boundaries and the exact phase-permitted escalation fields; closed schemas,
+  not generic advice, determine whether confidence/clarification keys are required, optional, or forbidden.
 
 ## Control-flow rules
 
-- Prove the workflow manually before encoding it.
+- Justify orchestration and topology with requirements, dependencies, or observed evidence; a manual run is optional.
 - Every state/order rule names the failure it prevents.
 - Place any required human gate at the reversibility cliff; do not add one without a consequence-based reason.
 - Split prepare from apply for consequential effects.
-- Classify valid gaps with `EvaluationResultV2`; never let model/playbook output choose the repair target or exhaustion.
-- Register unique state/kind repair routes with finite budgets and honest exhaustion successors.
+- Classify valid gaps with `EvaluationResult`; never let model/playbook output choose the repair target or exhaustion.
+- Register unique state/kind repair routes with policy-led controls and honest exhaustion successors. Derive values from actual operator policy, not test constants or model guesses. Do not require finite step, call, phase-cycle, repair, or correction caps when operator policy supplies none.
 - Require captured evidence for objective verification.
 - Keep deterministic host operations idempotent.
 - Export a flow descriptor and update it with the machine.
+- Expose the selected exact terminal `output_artifact_ref`, honest warnings and unresolved issues;
+  a rejected draft must not be labeled an accepted canonical product.
 
 ## Verification
 
-- [ ] Registry rejects unknown/malformed skills, worker phase mismatches, duplicate/unreachable routes, and invalid targets.
-- [ ] Manifests omit `license`; visible packages omit `disable-model-invocation`, and hidden packages
-      declare it exactly as `true`.
-- [ ] Required registration guidance reaches workers; direct paths and subset-absent
-      catalog phases have exact YAML equality.
-- [ ] Any phase subset is strict/non-empty/unique, canonical-registration/digest-bound,
-      projected unchanged into invocation metadata, validated before session creation, and
-      passed exactly to Pi; invalid or dynamically selected surfaces fail closed.
-- [ ] Ordinary registered phases omit `allowed_tools` and use exact YAML; synthetic
-      registration-bound strict subsets remain separately tested without OS/process sandboxing or
-      extension-code-isolation claims, and host-private tools remain separate.
-- [ ] Prompt directory exactly matches cognitive states.
-- [ ] Owner capture and receipt validation precede routing.
-- [ ] `RunContext` stores refs, not payloads.
-- [ ] Single, parallel, chain, resume, clarification, and cancellation paths are covered.
-- [ ] Memory-absent execution remains correct.
-- [ ] Flow descriptor and HTML agree.
-- [ ] Full TypeScript engine and extension suites pass.
+[Testing](testing.md#required-coverage) owns the evidence matrix for these requirements. Distinguish
+shared-runtime evidence from skill-specific routes, prompts, contracts, flow drift, and package
+behavior. Cover applicable direct/default YAML equality, real registered subsets (including SCA),
+the guarded zero-tool exception, invalid/dynamic refusal, and separate host-private matrices.
+Do not claim OS/process or extension-code isolation from a tool subset. Execute the applicable
+engine/extension suites for implementation changes; report unrun checks and qualification limits.

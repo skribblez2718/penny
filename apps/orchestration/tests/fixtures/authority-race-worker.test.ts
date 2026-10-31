@@ -11,16 +11,16 @@ import path from "node:path";
 
 import { describe, it } from "vitest";
 
-import { ParentDeliveryGrantStore } from "../../src/kb/parent-delivery.js";
-import { KbSessionProfileGrantStore } from "../../src/kb/profile-grants.js";
-import { SaveQueryClaimStore } from "../../src/kb/save-claim.js";
+import { ParentDeliveryGrantStore } from "../../dist/kb/parent-delivery.js";
+import { KbSessionProfileGrantStore } from "../../dist/kb/profile-grants.js";
+import { SaveQueryClaimStore } from "../../dist/kb/save-claim.js";
 import {
   ParentDeliveryGrantSchema,
   Sha256HexSchema,
   validateKbContract,
   type ParentDeliveryGrant,
   type Sha256Hex,
-} from "../../src/kb/contracts.js";
+} from "../../dist/kb/contracts.js";
 
 interface WorkerJob {
   readonly operation: string;

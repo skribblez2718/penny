@@ -19,7 +19,7 @@ const UPSTREAM_TOOL: Readonly<Record<LogstreamUpstreamOperation, string>> = Obje
 const RETRYABLE_HTTP_STATUS = new Set([429, 502, 503, 504]);
 const MAX_LOGSTREAM_REQUEST_BYTES = 64 * 1024;
 const MAX_LOGSTREAM_RESPONSE_BYTES = 512 * 1024;
-const MAX_LOGSTREAM_HTTP_TIMEOUT_MS = 6_000;
+const MAX_LOGSTREAM_HTTP_INACTIVITY_MS = 6_000;
 
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -52,12 +52,18 @@ function safeSleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function readBoundedResponse(response: Response, maximumBytes: number): Promise<Buffer> {
+async function readBoundedResponse(
+  response: Response,
+  maximumBytes: number,
+  onActivity: () => void
+): Promise<Buffer> {
+  onActivity();
   if (!response.body) {
     const bytes = Buffer.from(await response.arrayBuffer());
     if (bytes.length > maximumBytes) {
       throw new MemoryError("MEMPALACE_INTEGRITY", "Logstream response exceeded its hard bound");
     }
+    if (bytes.length > 0) onActivity();
     return bytes;
   }
 
@@ -74,6 +80,7 @@ async function readBoundedResponse(response: Response, maximumBytes: number): Pr
         await reader.cancel().catch(() => undefined);
         throw new MemoryError("MEMPALACE_INTEGRITY", "Logstream response exceeded its hard bound");
       }
+      if (chunk.length > 0) onActivity();
       chunks.push(chunk);
     }
   } finally {
@@ -270,18 +277,18 @@ function parseMcpResponse(
   return payload;
 }
 
-function timeoutFor(
+function inactivityIntervalFor(
   config: MemoryRuntimeConfig,
   operation: LogstreamUpstreamOperation,
   arguments_: Record<string, unknown>
 ): number {
   const configured =
     config.platformConfig.mode === "none"
-      ? MAX_LOGSTREAM_HTTP_TIMEOUT_MS
-      : (config.platformConfig.transport?.requestTimeoutMs ?? MAX_LOGSTREAM_HTTP_TIMEOUT_MS);
+      ? MAX_LOGSTREAM_HTTP_INACTIVITY_MS
+      : (config.platformConfig.transport?.requestTimeoutMs ?? MAX_LOGSTREAM_HTTP_INACTIVITY_MS);
   const operationBound =
     operation === "wait" && typeof arguments_.timeout_ms === "number"
-      ? Math.min(MAX_LOGSTREAM_HTTP_TIMEOUT_MS, arguments_.timeout_ms + 1_000)
+      ? Math.min(MAX_LOGSTREAM_HTTP_INACTIVITY_MS, arguments_.timeout_ms + 1_000)
       : 5_000;
   return Math.max(100, Math.min(configured, operationBound));
 }
@@ -374,16 +381,19 @@ export class MemoryLogstreamClient {
 
     const controller = new AbortController();
     let timedOut = false;
+    let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+    const inactivityIntervalMs = inactivityIntervalFor(this.config, operation, arguments_);
     const onCallerAbort = () => controller.abort();
-    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
-    const timer = setTimeout(
-      () => {
+    const renewInactivity = (): void => {
+      if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
         timedOut = true;
         controller.abort();
-      },
-      timeoutFor(this.config, operation, arguments_)
-    );
-    timer.unref?.();
+      }, inactivityIntervalMs);
+      inactivityTimer.unref?.();
+    };
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    renewInactivity();
 
     try {
       const response = await this.fetchImpl(this.config.platformConfig.target.endpoint, {
@@ -412,7 +422,7 @@ export class MemoryLogstreamClient {
         this.config.platformConfig.transport?.maxResponseBytes ?? MAX_LOGSTREAM_RESPONSE_BYTES,
         MAX_LOGSTREAM_RESPONSE_BYTES
       );
-      const raw = await readBoundedResponse(response, maximumResponseBytes);
+      const raw = await readBoundedResponse(response, maximumResponseBytes, renewInactivity);
       return { requestId, payload: parseMcpResponse(raw, requestId, operation) };
     } catch (error) {
       if (callerSignal?.aborted) {
@@ -426,7 +436,7 @@ export class MemoryLogstreamClient {
       if (timedOut) {
         throw new MemoryError(
           "MEMPALACE_TIMEOUT",
-          "Memory hub advisory-log request timed out",
+          "Memory hub advisory-log request became inactive",
           true,
           requestId
         );
@@ -434,7 +444,7 @@ export class MemoryLogstreamClient {
       if (error instanceof MemoryError) throw error;
       throw new MemoryError("MEMPALACE_UNAVAILABLE", "Memory hub is unavailable", true, requestId);
     } finally {
-      clearTimeout(timer);
+      if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
       callerSignal?.removeEventListener("abort", onCallerAbort);
     }
   }

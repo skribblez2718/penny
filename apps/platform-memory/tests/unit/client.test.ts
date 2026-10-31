@@ -255,7 +255,52 @@ describe("HTTP-only client", () => {
     });
   });
 
-  it("supports bounded timeout and caller cancellation", async () => {
+  it("renews transport inactivity while response chunks make progress", async () => {
+    const fetchWithProgress = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      const id = requestBody(init).id;
+      const payload = JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [{ type: "text", text: JSON.stringify({ results: [], count: 0 }) }],
+        },
+      });
+      const boundaries = [0, Math.ceil(payload.length / 3), Math.ceil((payload.length * 2) / 3)];
+      const chunks = [
+        payload.slice(boundaries[0], boundaries[1]),
+        payload.slice(boundaries[1], boundaries[2]),
+        payload.slice(boundaries[2]),
+      ];
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          chunks.forEach((chunk, index) => {
+            setTimeout(
+              () => {
+                controller.enqueue(new TextEncoder().encode(chunk));
+                if (index === chunks.length - 1) controller.close();
+              },
+              60 * (index + 1)
+            );
+          });
+        },
+      });
+      return Promise.resolve(
+        new Response(body, { status: 200, headers: { "Content-Type": "application/json" } })
+      );
+    });
+    const client = new PlatformMemoryClientV1(
+      isolatedConfig("alpha", {
+        transport: { requestTimeoutMs: 100, maxReadAttempts: 1 },
+      }),
+      { fetch: fetchWithProgress as typeof fetch, credentialResolver: () => ALPHA_TOKEN }
+    );
+
+    await expect(client.invoke("search", { query: "x" })).resolves.toMatchObject({
+      data: { results: [], count: 0 },
+    });
+  });
+
+  it("expires bounded inactivity and supports caller cancellation", async () => {
     const timeoutClient = new PlatformMemoryClientV1(
       isolatedConfig("alpha", {
         transport: { requestTimeoutMs: 100, maxReadAttempts: 1 },

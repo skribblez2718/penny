@@ -9,17 +9,8 @@
    canonical contract digest.
 5. Resume verifies checkpoint identity, registration/digest, and every exact ref before advancing;
    legacy checkpoints without a digest fail closed.
-6. Direct/parallel/chain ordinary catalog-agent invocation always uses exact YAML equality.
-   A TypeScript orchestration catalog-worker phase uses exact YAML when `allowed_tools` is
-   absent, or one explicit non-empty duplicate-free registration/digest-bound strict YAML
-   subset when present. No task, trust profile, input, runtime condition, or optional service
-   may select it; missing optional services remain visible when selected and return typed call
-   errors.
-7. A phase subset is projected unchanged into worker invocation metadata, validated against
-   YAML before session creation, passed exactly to Pi, and checked for active equality before
-   the model prompt. It does not mutate agent YAML/profiles and is not OS/process sandboxing or
-   extension-code isolation. Host-private isolated tools remain separate.
-8. Every stage output is persisted and re-read before routing or continuation.
+6. Tool selection follows the [binding runtime rule](../agents/discovery-and-tools.md#binding-runtime-rule): direct catalog paths and subset-absent orchestration use exact YAML; otherwise orchestration may use only its registered strict subset or the guarded zero-tool exception with its required model, host-admitted payload/disclosure and final-opening authorization. Modes, tasks, trust and optional-service availability cannot choose authority. [Tool Profiles](../agents/tool-profiles.md) owns static YAML expansion, not phase selection; these controls are not OS/process or extension-code isolation.
+7. [Agent Invocation](../agents/invocation.md) owns exact communication and capture. Every stage output is persisted and re-read before routing or continuation; no mode substitutes previews or memory for exact refs.
 
 ## Modes
 
@@ -44,8 +35,9 @@ Payload bytes and durable memory are never control transport.
 - [ ] Every successful producer/stage has a readable exact output ID.
 - [ ] Direct/parallel/chain ordinary agent paths prove exact YAML equality.
 - [ ] Orchestration proves absent-subset YAML equality and only registration-bound strict
-      subsets; empty/duplicate/equality-sized/non-YAML or dynamic declarations fail before
-      session creation, and active removal/addition/replacement fails before the model prompt.
+      subsets or the closed guarded zero-tool exception; unguarded-empty/duplicate/equality-sized/
+      non-YAML or dynamic declarations fail before session creation, and active removal/addition/
+      replacement fails before the model prompt.
 - [ ] Ordinary registered phases pin absent `allowed_tools` and exact YAML; synthetic
       registration-bound strict subsets and separate host-private tools remain independently
       covered.

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PLAYBOOK_REGISTRY } from "@penny/orchestration/source";
+import { PLAYBOOK_REGISTRY } from "@penny/orchestration";
 import { describe, expect, it } from "vitest";
 
 import { resolveSkillIngress } from "../../skill-ingress.js";
@@ -21,9 +21,40 @@ const PROJECT_ROOT = path.resolve(
   ".."
 );
 const SKILLS_DIR = path.join(PROJECT_ROOT, ".pi", "skills");
-const GENERIC_UNIVERSAL_SKILLS = ["assess", "decide", "diagnose", "plan", "produce"] as const;
+const GENERIC_UNIVERSAL_SKILLS = [
+  "assess",
+  "decide",
+  "diagnose",
+  "plan",
+  "produce",
+  "sca",
+] as const;
 
 describe("unified production skill registration", () => {
+  it("exposes exact registered V2 Define/Plan assurance at the generic ingress", () => {
+    for (const name of ["define", "plan"] as const) {
+      const resolved = resolveSkillIngress({
+        projectRoot: PROJECT_ROOT,
+        skillsDir: SKILLS_DIR,
+        name,
+      });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) throw new Error(resolved.message);
+      expect(resolved.registration.start_admission?.invocation_versions).toEqual([1, 2]);
+      expect(resolved.registration.caller_documentation?.example.constraints).toMatchObject({
+        schema_version: 2,
+        specification_assurance: "reviewed_definition",
+      });
+      expect(resolved.registration.caller_documentation?.constraints_schema).toMatchObject({
+        properties: {
+          specification_assurance: {
+            anyOf: [{ const: "reviewed_definition" }, { const: "semantic_only" }],
+          },
+        },
+      });
+    }
+  });
+
   it("binds every model-invocable orchestration package to the sole executable registry", () => {
     const discovered = discoverSkillsFromDirectory(SKILLS_DIR);
     expect(
@@ -49,20 +80,16 @@ describe("unified production skill registration", () => {
     }
   });
 
-  it("keeps an unregistered model-disabled development package discoverable but non-executable", () => {
+  it("exposes the registered SCA package to model invocation", () => {
     const discovered = discoverSkillsFromDirectory(SKILLS_DIR);
     expect(discovered.find((skill) => skill.name === "sca")).toMatchObject({
       engine: "orchestration",
-      disableModelInvocation: true,
+      disableModelInvocation: false,
       metadataValid: true,
     });
-    expect(modelInvocableSkills(discovered).map((skill) => skill.name)).not.toContain("sca");
+    expect(modelInvocableSkills(discovered).map((skill) => skill.name)).toContain("sca");
     expect(
       resolveSkillIngress({ projectRoot: PROJECT_ROOT, skillsDir: SKILLS_DIR, name: "sca" })
-    ).toEqual({
-      ok: false,
-      code: "SKILL_NOT_REGISTERED",
-      message: "skill 'sca' is not registered",
-    });
+    ).toMatchObject({ ok: true, registration: { name: "sca" } });
   });
 });

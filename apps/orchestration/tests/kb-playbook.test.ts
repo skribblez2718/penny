@@ -2,7 +2,7 @@ import { requireValue } from "./helpers/narrowing.js";
 /**
  * KB playbook FSM tests (§6.2 step 1).
  *
- * These exercise the playbook through its `PlaybookCoreV1` surface — the surface the
+ * These exercise the playbook through its `PlaybookCore` surface — the surface the
  * engine actually calls — rather than through a private KB entry point. That is the
  * whole point of the refactor: if the KB only worked when driven by its own code, it
  * would still be running beside the engine.
@@ -10,19 +10,19 @@ import { requireValue } from "./helpers/narrowing.js";
 
 import { describe, expect, it } from "vitest";
 
-import { RunContext } from "../src/context.js";
-import { evaluateCompletionGate, hasStateAwareRepair } from "../src/playbooks/playbook.js";
+import { RunContext } from "../dist/context.js";
+import { evaluateCompletionGate, hasStateAwareRepair } from "../dist/playbooks/playbook.js";
 import {
   KB_AGENT_PHASES,
   KB_STATES,
   KNOWLEDGE_BASE_SKILL_CONTRACT,
   KnowledgeBasePlaybook,
   validateKnowledgeBasePhaseDetails,
-} from "../src/playbooks/knowledge-base.js";
-import { PLAYBOOK_REGISTRY, validateRegistrationContract } from "../src/playbooks/registry.js";
-import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
-import type { GateState } from "../src/kb/gate.js";
-import type { KbIngestPlaneV1 } from "../src/kb/ingest-plane.js";
+} from "../dist/playbooks/knowledge-base.js";
+import { PLAYBOOK_REGISTRY, validateRegistrationContract } from "../dist/playbooks/registry.js";
+import type { Confidence, Directive, JsonValue } from "../dist/contracts.js";
+import type { GateState } from "../dist/kb/gate.js";
+import type { KbIngestPlaneV1 } from "../dist/kb/ingest-plane.js";
 
 const PROJECT_ROOT = "/tmp/penny-kb-playbook";
 const TEST_ROOT_RESOLVER = (projectRoot: string, profileId: string): string => {

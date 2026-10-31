@@ -5,12 +5,12 @@ import {
   CompositionAuthorityError,
   allocateComposeAuthority,
   validatePageDraftAuthority,
-} from "../src/kb/composition-authority.js";
+} from "../dist/kb/composition-authority.js";
 import type {
   GenerationCatalog,
   KbComposeAuthority,
   PageDraftArtifact,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);

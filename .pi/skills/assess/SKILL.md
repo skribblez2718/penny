@@ -8,6 +8,12 @@ metadata:
     subagents: [annie, carren, vera]
 ---
 
+## Liveness
+
+Derive values from actual operator policy, not test constants or model guesses. Do not invent finite step, agent-call, phase-cycle, semantic-repair or correction-attempt caps.
+
+Ordinary permitted work has no fixed wall-clock deadline at any layer. Productive execution may continue indefinitely while trusted activity or durable convergence renews its inactivity lease. A stall ends on inactivity expiry; explicit cancellation, errors, actual operator limits, and independent input/output/resource/containment limits remain enforceable.
+
 ## When to Use
 
 - Assess one inline target or bounded set of target statements against explicit criteria.
@@ -224,13 +230,13 @@ intake (host canonical request)
   → complete
 ```
 
-Vera `analysis_gap` or `evidence_gap` returns through Annie and then Carren. `assessment_product_gap` returns directly to Carren. Every replacement draft is resealed and reverified. There is no separate Carren approval receipt because Carren authors the judgment.
+Vera `analysis_gap` or `evidence_gap` returns through Annie and then Carren. `assessment_product_gap` returns directly to Carren. Every replacement draft is resealed and reverified. A deterministic draft rejection persists an exact seal diagnostic before a correction or negative terminal. Seal corrections follow actual operator policy, with no invented finite allowance when unspecified. Each rejected draft gets its own exact diagnostic before another attempt or honest negative terminal; previous-epoch diagnostics are not current instructions. Product and diagnostic refs use separate draft-addressed version-1 operations, not a run-global version counter. A negative terminal labels its rejected draft via `seal_diagnostics`, separately from semantic `repair_diagnostics` and any accepted best partial. There is no separate Carren approval receipt because Carren authors the judgment.
 
 ## Exact Artifact Handoff
 
 The host canonicalizes and persists `AssessmentRequestV1`. Ordinary workflow phases omit `allowed_tools`, so each phase uses its assigned catalog agent's exact YAML tool list. `artifact_read` remains mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Memory, temporary files, repository search, historical sessions, and name-only pointers are never fallback handoff channels. Other YAML tools may be used only when materially relevant, permitted by the caller and task, and within the phase consequence boundary; they cannot enlarge the closed supplied-evidence boundary.
 
-Normal permitted work has no model-turn, phase-admission, tool-call, or external-call quota. A calibrated renewable inactivity lease stops stalled workers, an independent host-operation deadline remains an upper bound, and routing-only repair remains separately count-bounded and grants no authority to browse, externally verify supplied evidence, execute, or mutate. The owner captures and re-reads exact bytes before routing, and memory availability cannot affect correctness.
+Normal permitted work has no invented model-turn, phase-admission, tool-call, or external-call quota; actual operator limits still apply. A calibrated renewable inactivity lease stops stalled workers, host operations use independent renewable inactivity leases, and routing-only repair remains separate, governed by actual operator policy and measured-error/inactivity controls and grants no authority to browse, externally verify supplied evidence, execute, or mutate. The owner captures and re-reads exact bytes before routing, and memory availability cannot affect correctness.
 
 ## Output and Terminal Truth
 

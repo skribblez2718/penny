@@ -804,7 +804,8 @@ export function parsePersistedDiagnosisDraft(
     lines.length !== 2 ||
     !lines[0]?.startsWith(DIAGNOSIS_CORE_PREFIX) ||
     !lines[1]?.startsWith(DIAGNOSIS_SUMMARY_PREFIX) ||
-    lines.some((line) => line.trim() !== line || line.includes("`"))
+    // Prefixes and JSON validation reject outer fences; backticks in strings are content.
+    lines.some((line) => line.trim() !== line)
   ) {
     throw draftFailure(
       "FRAMING_INVALID",

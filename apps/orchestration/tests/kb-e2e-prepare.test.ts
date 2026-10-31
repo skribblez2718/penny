@@ -22,16 +22,16 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer, canonicalJson, sha256 } from "../src/checkpointer.js";
-import type { Directive, JsonValue } from "../src/contracts.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer, canonicalJson, sha256 } from "../dist/checkpointer.js";
+import type { Directive, JsonValue } from "../dist/contracts.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
-import { materializeRunInput, readRunInput, settleRunInput } from "../src/private-inputs.js";
-import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
-import { CapabilityStore, mintEnvelope } from "../src/kb/capabilities.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../dist/model-client.js";
+import { materializeRunInput, readRunInput, settleRunInput } from "../dist/private-inputs.js";
+import { OrchestrationRunner, WorkerExecutor } from "../dist/worker.js";
+import { CapabilityStore, mintEnvelope } from "../dist/kb/capabilities.js";
 import {
   canonicalJson as kbCanonicalJson,
   IngestVerificationReportSchema,
@@ -43,37 +43,37 @@ import {
   sha256Hex,
   validateKbContract,
   type QueryKbRequest,
-} from "../src/kb/contracts.js";
-import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
-import { mintSourceCapability } from "../src/kb/gate.js";
+} from "../dist/kb/contracts.js";
+import { readPolicy, writePolicy } from "../dist/kb/filesystem.js";
+import { mintSourceCapability } from "../dist/kb/gate.js";
 import {
   ContentReviewService,
   authenticateLocalContentReviewer,
-} from "../src/kb/content-review.js";
-import { readSelectedGeneration } from "../src/kb/generations.js";
+} from "../dist/kb/content-review.js";
+import { readSelectedGeneration } from "../dist/kb/generations.js";
 import {
   admitOperationStart,
   completeOperationStart,
   type AdmittedOperationStart,
-} from "../src/kb/operation-starts.js";
-import { replayableResultFromRun } from "../src/kb/operation-receipts.js";
-import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
-import { KbQueryReader } from "../src/kb/query-reader.js";
-import { computeRequestSha256, validateQueryRequest } from "../src/kb/parent-delivery.js";
-import { validatePromoteRequest } from "../src/kb/promote.js";
-import { PromotionApprovalStore } from "../src/kb/promotion.js";
-import { resolveKbRoot } from "../src/kb/ingest-plane.js";
-import { RunArtifactStore, type ArtifactHandle } from "../src/kb/run-artifacts.js";
+} from "../dist/kb/operation-starts.js";
+import { replayableResultFromRun } from "../dist/kb/operation-receipts.js";
+import { KbWorkerClient } from "../dist/kb/kb-worker-client.js";
+import { KbQueryReader } from "../dist/kb/query-reader.js";
+import { computeRequestSha256, validateQueryRequest } from "../dist/kb/parent-delivery.js";
+import { validatePromoteRequest } from "../dist/kb/promote.js";
+import { PromotionApprovalStore } from "../dist/kb/promotion.js";
+import { resolveKbRoot } from "../dist/kb/ingest-plane.js";
+import { RunArtifactStore, type ArtifactHandle } from "../dist/kb/run-artifacts.js";
 import {
   SaveQueryClaimStore,
   saveClaimStoreDir,
   validateSaveRequest,
-} from "../src/kb/save-claim.js";
+} from "../dist/kb/save-claim.js";
 import {
   createTestOnlyArtifactBodyRunner,
   type KbPhaseInvocation,
-} from "../src/kb/session-tools.js";
-import { initKb, lintKb } from "../src/kb/workflows.js";
+} from "../dist/kb/session-tools.js";
+import { initKb, lintKb } from "../dist/kb/workflows.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_prepare_e2e";
@@ -267,7 +267,7 @@ async function driveAgentRun(input: {
   const workers = new WorkerExecutor(input.client, artifacts, {
     projectRoot: input.projectRoot,
     parallelConcurrency: 1,
-    workerTimeoutMs: 20_000,
+    fallbackInactivityLeaseMs: 20_000,
   });
   workers.setReceiptAuthority(engine.receiptAuthority);
   const runner = new OrchestrationRunner(engine, workers);
@@ -770,7 +770,7 @@ async function runGroundedQuery(
   const workers = new WorkerExecutor(worker, artifacts, {
     projectRoot: input.projectRoot,
     parallelConcurrency: 1,
-    workerTimeoutMs: 20_000,
+    fallbackInactivityLeaseMs: 20_000,
   });
   workers.setReceiptAuthority(engine.receiptAuthority);
   const runner = new OrchestrationRunner(engine, workers);

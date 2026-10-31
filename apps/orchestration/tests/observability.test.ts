@@ -4,40 +4,40 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
 import {
   Checkpointer,
   canonicalJson,
   sha256,
   type CheckpointObserver,
-} from "../src/checkpointer.js";
+} from "../dist/checkpointer.js";
 import type {
   ArtifactRef,
   Directive,
   JsonValue,
   LivenessSnapshotV1,
   RunIdentity,
-} from "../src/contracts.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationEngine } from "../src/engine.js";
-import type { KbIngestPlaneV1 } from "../src/kb/ingest-plane.js";
-import type { ArtifactKind, KbArtifactHandle } from "../src/kb/contracts.js";
-import { initKb, lintKb, statusKb } from "../src/kb/workflows.js";
-import { kbLivenessPolicy, LivenessController } from "../src/liveness.js";
-import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
-import { ObservabilityClient } from "../src/observability.js";
+} from "../dist/contracts.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationEngine } from "../dist/engine.js";
+import type { KbIngestPlaneV1 } from "../dist/kb/ingest-plane.js";
+import type { ArtifactKind, KbArtifactHandle } from "../dist/kb/contracts.js";
+import { initKb, lintKb, statusKb } from "../dist/kb/workflows.js";
+import { kbLivenessPolicy, LivenessController } from "../dist/liveness.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../dist/model-client.js";
+import { ObservabilityClient } from "../dist/observability.js";
 import {
   KNOWLEDGE_BASE_COMPLETION_RECEIPT_PREDICATES,
   KNOWLEDGE_BASE_SKILL_CONTRACT,
   KnowledgeBasePlaybook,
   type KbAgentPhase,
-} from "../src/playbooks/knowledge-base.js";
+} from "../dist/playbooks/knowledge-base.js";
 import {
   resolvePlaybook,
-  type PlaybookRegistrationV1,
-  type PlaybookRegistryV1,
-} from "../src/playbooks/registry.js";
-import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
+  type PlaybookRegistration,
+  type PlaybookRegistry,
+} from "../dist/playbooks/registry.js";
+import { OrchestrationRunner, WorkerExecutor } from "../dist/worker.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import { researchSemanticDraftFixture } from "./helpers/research-semantic-draft.js";
 
@@ -161,8 +161,14 @@ function successfulResearchCompletion(stateId: string): AgentCompletion {
 
 class ResearchMatrixClient implements ModelClient {
   private artifacts: ArtifactStore | undefined;
+  private malformedRepairReturned = false;
 
-  constructor(private readonly outcome: "success" | "malformed") {}
+  constructor(
+    private readonly outcome: "success" | "malformed",
+    private readonly elapse: (milliseconds: number) => void = () => {
+      throw new Error("malformed fixture requires a host-controlled clock");
+    }
+  ) {}
 
   bindArtifacts(artifacts: ArtifactStore): void {
     this.artifacts = artifacts;
@@ -171,12 +177,31 @@ class ResearchMatrixClient implements ModelClient {
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
     invocation.liveness?.({ kind: "model_turn", source: "turn_start" });
     if (this.outcome === "malformed") {
-      if (invocation.task.startsWith("Repair routing metadata only.")) {
-        return {
-          text: 'SUMMARY:{"confidence":"UNCERTAIN"}',
-          confidence: "UNCERTAIN",
-          details: {},
-        };
+      if (invocation.executionPurpose === "routing_repair") {
+        if (!this.malformedRepairReturned) {
+          this.malformedRepairReturned = true;
+          return {
+            text: 'SUMMARY:{"confidence":"UNCERTAIN"}',
+            confidence: "UNCERTAIN",
+            details: {},
+          };
+        }
+        const budget = invocation.livenessBudget;
+        if (budget === undefined || invocation.liveness === undefined) {
+          throw new Error("malformed fixture requires the current worker inactivity lease");
+        }
+        // Two identical schema failures no longer imply a default quota. Measure
+        // a real inactivity interval before a late progress signal instead.
+        this.elapse(budget.inactivity_lease.remaining_ms);
+        invocation.liveness({
+          kind: "activity",
+          activity_class: "assistant_text_delta",
+          observed_units: 1,
+        });
+        throw new Error("late progress must not revive an expired routing-repair lease");
+      }
+      if (invocation.stateId !== "researching") {
+        throw new Error(`malformed output advanced to '${invocation.stateId}'`);
       }
       return { text: "malformed research output", confidence: "UNCERTAIN", details: {} };
     }
@@ -216,6 +241,7 @@ function researchRuntime(input: {
   stateRoot: string;
   observer: CheckpointObserver | undefined;
   client: ModelClient;
+  clock?: () => number;
 }): {
   artifacts: ArtifactStore;
   checkpointer: Checkpointer;
@@ -226,12 +252,11 @@ function researchRuntime(input: {
     path.join(input.stateRoot, "orchestration-v2.db"),
     input.observer
   );
-  const liveness = new LivenessController(checkpointer, () => FIXED_CLOCK_MS);
+  const liveness = new LivenessController(checkpointer, input.clock ?? (() => FIXED_CLOCK_MS));
   const artifacts = new ArtifactStore(path.join(input.stateRoot, "artifacts"));
   if (input.client instanceof ResearchMatrixClient) input.client.bindArtifacts(artifacts);
   const engine = new OrchestrationEngine(checkpointer, {
     projectRoot: input.projectRoot,
-    maxSteps: MAX_STEPS,
     receiptAuthority: TEST_RECEIPT_AUTHORITY,
     livenessController: liveness,
     artifactRevisions: artifacts,
@@ -249,15 +274,19 @@ async function runResearchToTerminal(input: {
   projectRoot: string;
   observer: CheckpointObserver | undefined;
   outcome: "success" | "malformed";
-}): Promise<ResearchProjection> {
+}): Promise<ResearchProjection & { readonly malformed_digests: readonly string[] }> {
   const stateRoot = mkdtempSync(path.join(input.projectRoot, "research-state-"));
   const timestamp = vi.spyOn(Date.prototype, "toISOString").mockReturnValue(FIXED_TIMESTAMP);
   const runIdentity = researchIdentity(`research-${input.outcome}`);
+  let now = FIXED_CLOCK_MS;
   const runtime = researchRuntime({
     projectRoot: input.projectRoot,
     stateRoot,
     observer: input.observer,
-    client: new ResearchMatrixClient(input.outcome),
+    client: new ResearchMatrixClient(input.outcome, (milliseconds) => {
+      now += milliseconds;
+    }),
+    clock: () => now,
   });
   try {
     const runner = new OrchestrationRunner(runtime.engine, runtime.workers);
@@ -291,6 +320,14 @@ async function runResearchToTerminal(input: {
       cancel,
       selected_artifact_refs: durable.selectedArtifacts,
       liveness: runtime.engine.liveness.snapshot(runIdentity.run_id),
+      malformed_digests: runtime.checkpointer
+        .events(runIdentity.run_id)
+        .filter((event) => event.eventType === "liveness_malformed_charged")
+        .map((event) => {
+          const digest = event.payload["digest"];
+          if (typeof digest !== "string") throw new Error("malformed digest is absent");
+          return digest;
+        }),
     };
   } finally {
     timestamp.mockRestore();
@@ -433,9 +470,9 @@ function kbRootResolver(projectRoot: string, profileId: string, sessionId: strin
   return path.join(projectRoot, "private-kb", profileId, sessionId);
 }
 
-function kbRegistry(plane: KbIngestPlaneV1): PlaybookRegistryV1 {
+function kbRegistry(plane: KbIngestPlaneV1): PlaybookRegistry {
   const shipped = requireValue(resolvePlaybook("knowledge-base"), "knowledge-base registration");
-  const registration: PlaybookRegistrationV1 = {
+  const registration: PlaybookRegistration = {
     name: "knowledge-base",
     contract: KNOWLEDGE_BASE_SKILL_CONTRACT,
     ingress: shipped.ingress,
@@ -1047,7 +1084,7 @@ describe("TypeScript orchestration structured logging", () => {
   );
 
   it(
-    "keeps malformed-stall terminal truth, liveness, and exact partial refs observer-independent",
+    "keeps malformed-output inactivity expiry, terminal truth, and exact partial refs observer-independent",
     async () => {
       const projectRoot = mkdtempSync(path.join(tmpdir(), "penny-observability-research-stall-"));
       try {
@@ -1058,7 +1095,7 @@ describe("TypeScript orchestration structured logging", () => {
           action: "incomplete",
           status: "incomplete",
           met: false,
-          result: { terminal_reason: "identical_error_stall" },
+          result: { terminal_reason: "worker_inactivity_lease_expired" },
         });
         expect(baseline.status).toEqual(baseline.terminal);
         expect(baseline.recover).toEqual(baseline.terminal);
@@ -1070,13 +1107,23 @@ describe("TypeScript orchestration structured logging", () => {
         ).toEqual(
           baseline.selected_artifact_refs.filter((artifact) => artifact.kind === "agent-output")
         );
+        expect(
+          baseline.selected_artifact_refs.filter((ref) => ref.kind === "agent-output")
+        ).toHaveLength(1);
+        expect(
+          baseline.selected_artifact_refs.some((ref) =>
+            ["semantic-core", "product-envelope", "deterministic-render"].includes(ref.kind)
+          )
+        ).toBe(false);
+        expect(baseline.malformed_digests).toHaveLength(2);
+        expect(new Set(baseline.malformed_digests).size).toBe(1);
         expect(baseline.liveness).toMatchObject({
-          phase_invocations: 2,
-          repair_invocations: 1,
-          model_turns: 2,
+          phase_invocations: 3,
+          repair_invocations: 2,
+          model_turns: 3,
           malformed_results: 2,
           open_workers: 0,
-          terminal_reason: "identical_error_stall",
+          terminal_reason: "worker_inactivity_lease_expired",
         });
       } finally {
         rmSync(projectRoot, { recursive: true, force: true });
@@ -1252,7 +1299,11 @@ describe("TypeScript orchestration structured logging", () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw new Error("server down");
     });
-    const client = new ObservabilityClient({ fetchImpl, timeoutMs: OBSERVER_TIMEOUT_MS });
+    const client = new ObservabilityClient({
+      env: { PI_OBSERVABILITY_ENABLED: "true" },
+      fetchImpl,
+      timeoutMs: OBSERVER_TIMEOUT_MS,
+    });
     expect(() => client.observe(observation("phase_result_accepted"))).not.toThrow();
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
     client.observe({ ...observation("run_cancelled"), sequence: 2 });

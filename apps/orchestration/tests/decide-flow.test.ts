@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { DECIDE_FLOW } from "../src/playbooks/decide.js";
+import { DECIDE_FLOW } from "../dist/playbooks/decide.js";
 import { describe, expect, it } from "vitest";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");

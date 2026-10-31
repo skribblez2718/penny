@@ -67,6 +67,7 @@ describe("split-turn merged-window extraction", () => {
             session_id: "code-9",
             skill_name: "code",
             state: "error",
+            requires_approval: false,
             steps_total: 1,
             agents_invoked: ["coder"],
             errors: ["failed"],

@@ -16,11 +16,15 @@ Use only displayed owner-resolved envelopes and verified content. Output-shape g
 
 ## Typed Semantic Contract
 
-The task includes the mechanically projected closed schema and the owner-selected Echo evidence-slot table. Emit exactly one JSON object conforming to that schema before the final `SUMMARY` line.
+The task includes the mechanically projected closed schema and the owner-selected Echo evidence-slot table. When a coherent draft is possible, emit exactly one JSON object conforming to that schema before the final `SUMMARY` line. Otherwise return the honest negative or clarification routing line without fabricating a draft.
 
 - Use zero-based local array indexes only.
 - Every `source_index`, `evidence_index`, and `claim_index` must resolve.
-- `evidence_artifact_slot` must name the exact owner-selected Echo artifact containing `excerpt` verbatim.
+- The slot table is **considered history**: all exact supplied Echo artifacts, including earlier revisions. Read that complete history within the admitted question and include/exclude scope; do not substitute lossy summaries or a recent-artifact window.
+- `evidence_artifact_slot` is a stable zero-based history index and must name the exact supplied Echo artifact containing `excerpt` verbatim. A repair appends slots; earlier indexes do not move. Never inject an artifact ID/ref or cite an absent slot.
+- **Cited active provenance** is host-derived from the distinct history slots named by `draft.evidence`, in history order. Repeated citations count once. It is not a claim that uncited history was irrelevant or unconsidered.
+- One core may cite at most 64 distinct Echo artifacts. All stages together still use the existing 256-total-input-ref handoff and task-size bounds; request/context/core/review refs consume capacity too. The host refuses overflow with history preserved. This is one bounded working set, not unlimited partitioning.
+- Preserve material coverage, counterevidence, conflicts, and scope obligations even when uncited. Do not drop them merely to fit the active-provenance bound; disclose inability to produce one valid core rather than inventing support or shrinking the question.
 - Every evidence item names one source and one evidence artifact slot.
 - Every supported claim has supporting evidence; every qualified claim has an explicit qualification.
 - Preserve source roles, tiers, titles, locators, available timestamps, contradictions, gaps, uncertainty, and intended narrative section order.
@@ -44,10 +48,18 @@ The task includes the mechanically projected closed schema and the owner-selecte
 
 ## Complete Output
 
-Return the complete `ResearchSemanticDraftV1` JSON value, then end with exactly one `SUMMARY:` line and nothing after it:
+Return the complete `ResearchSemanticDraftV1` JSON value when possible, then end with exactly one `SUMMARY:` line containing a closed JSON object and nothing after it. For an incomplete result or clarification, the routing line alone is permitted.
+
+- Required `synthesis_complete`: boolean, the actual completion outcome, not a mandated success.
+- Required `confidence`: `CERTAIN` / `PROBABLE` / `POSSIBLE` / `UNCERTAIN`, earned from the available evidence.
+- Optional `needs_clarification`: boolean.
+- Optional `clarifying_questions`: array of questions (up to 16, each 1–4,096 characters).
+- No other keys. Use `synthesis_complete:false` when you cannot produce a coherent draft; request clarification when missing information blocks the work. Neither completion nor confidence is fixed in advance.
+
+Illustrative clarification shape only, not a required outcome. Choose every value from the actual evidence and task; successful synthesis instead reports `synthesis_complete:true` with earned confidence.
 
 ```text
-SUMMARY:{"synthesis_complete":true,"confidence":"PROBABLE","needs_clarification":false,"clarifying_questions":[]}
+SUMMARY:{"synthesis_complete":false,"confidence":"UNCERTAIN","needs_clarification":true,"clarifying_questions":["Which source scope is intended?"]}
 ```
 
 ## Reader-facing writing

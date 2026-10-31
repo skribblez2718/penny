@@ -11,9 +11,9 @@ import {
   type ArtifactRef,
   type Confidence,
   type Directive,
-  type EvaluationResultV2,
+  type EvaluationResult,
   type JsonValue,
-  type LivenessPolicyV3,
+  type LivenessPolicy,
   type LivenessSnapshotV1,
   type LivenessTerminalReason,
   type OutputArtifactMetadata,
@@ -37,7 +37,6 @@ import {
   validateDiagnosisProductEnvelope,
   validateDiagnosisProductIntegrity,
   validateDiagnosisRequest,
-  validateDiagnosisSealFeedback,
   validateDiagnosisValidityReceipt,
   DiagnosisDraftValidationError,
   type DiagnosisDraftV1,
@@ -46,6 +45,14 @@ import {
   type DiagnosisRequestV1,
   type DiagnosisValidityReceiptV1,
 } from "../skill-contracts/diagnose.js";
+import { sealAttempt } from "./seal-attempt.js";
+import {
+  sealDiagnosticsProjection,
+  sealPolicySha256,
+  runSealPolicy,
+  validateSealDiagnostic,
+  type SealPolicyV1,
+} from "../skill-contracts/sealing.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
 import {
   hostContinuation,
@@ -53,15 +60,30 @@ import {
   type HostContinuationCapabilityV1,
   type HostContinuationStepV1,
   type LivenessTerminalCapabilityV1,
-  type PlaybookCoreV1,
-  type PlaybookStepOutcomeV1,
+  type PlaybookCore,
+  type PlaybookStepOutcome,
   type RepairExhaustionCapabilityV1,
+  type RepairProgressCapabilityV1,
   type RoutingRepairCapabilityV1,
   type StateAwareRepairCapabilityV1,
 } from "./playbook.js";
-import type { PlaybookRegistrationV1, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
+import type { PlaybookRegistration, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
 
 export const DIAGNOSE_PLAYBOOK_NAME = "diagnose";
+
+export const DIAGNOSE_SEAL_POLICY: SealPolicyV1 = {
+  schema_id: "penny.seal-policy.v1",
+  schema_version: 1,
+  skill: "diagnose",
+  draft_phase: "adjudicating_diagnosis",
+  seal_phase: "sealing_diagnosis",
+  draft_schema: "penny.diagnosis-draft.v1",
+  draft_schema_version: 1,
+  draft_kind: "diagnosis-draft",
+  product_kind: "semantic-core",
+  correction_limit: null,
+  diagnostic_schema: "penny.seal-diagnostic.v1",
+};
 
 export const DIAGNOSE_AGENT_BY_STATE = {
   decomposing_causes: "annie",
@@ -101,6 +123,7 @@ export const DIAGNOSE_FLOW = {
     ["verifying_diagnosis", "decomposing_causes"],
     ["verifying_diagnosis", "adjudicating_diagnosis"],
     ["verifying_diagnosis", "admitting_diagnosis"],
+    ["verifying_diagnosis", "incomplete"],
     ["admitting_diagnosis", "complete"],
   ],
 } as const;
@@ -108,7 +131,7 @@ export const DIAGNOSE_FLOW = {
 export const DIAGNOSE_LIVENESS_POLICY = ordinaryLivenessPolicy({
   scope: "orchestrated-diagnose-workflow",
   preset: "ordinary-progress-lease-v3",
-}) satisfies LivenessPolicyV3;
+}) satisfies LivenessPolicy;
 
 const FindingSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const FindingsSchema = Type.Array(FindingSchema, { maxItems: 32 });
@@ -141,6 +164,17 @@ const VerificationSummarySchema = Type.Union([
       gap_kind: Type.Literal("none"),
       repair_owner: Type.Literal("none"),
       findings: FindingsSchema,
+      evidence: EvidenceSchema,
+      strategy_delta: StrategyDeltaSchema,
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      verdict: Type.Literal("UNVERIFIABLE"),
+      gap_kind: Type.Literal("verification_incomplete"),
+      repair_owner: Type.Literal("none"),
+      findings: Type.Array(FindingSchema, { minItems: 1, maxItems: 32 }),
       evidence: EvidenceSchema,
       strategy_delta: StrategyDeltaSchema,
     },
@@ -273,13 +307,9 @@ function selectedLatest(
   predicate: (artifact: ArtifactRef) => boolean
 ): ArtifactRef | undefined {
   return [...context.selectedArtifacts]
-    .filter(predicate)
-    .sort(
-      (left, right) =>
-        right.version - left.version || right.artifact_id.localeCompare(left.artifact_id)
-    )[0];
+    .reverse()
+    .find((artifact) => artifact.run_id === context.identity.run_id && predicate(artifact));
 }
-
 function addSelectedArtifact(context: RunContext, artifact: ArtifactRef): boolean {
   const selected = context.selectedArtifacts.find(
     (candidate) => candidate.artifact_id === artifact.artifact_id
@@ -333,14 +363,16 @@ function latestDiagnosisDraftArtifact(context: RunContext): ArtifactRef | undefi
 }
 
 function latestDiagnosisArtifact(context: RunContext): ArtifactRef | undefined {
-  return selectedLatest(
-    context,
-    (artifact) =>
-      artifact.kind === "semantic-core" &&
-      artifact.phase === "sealing_diagnosis" &&
-      artifact.content_schema?.schema_id === "penny.diagnosis.v1" &&
-      artifact.content_schema.schema_version === 1
-  );
+  return [...context.selectedArtifacts]
+    .reverse()
+    .find(
+      (artifact) =>
+        artifact.run_id === context.identity.run_id &&
+        artifact.kind === "semantic-core" &&
+        artifact.phase === "sealing_diagnosis" &&
+        artifact.content_schema?.schema_id === "penny.diagnosis.v1" &&
+        artifact.content_schema.schema_version === 1
+    );
 }
 
 function latestVeraReportArtifact(context: RunContext): ArtifactRef | undefined {
@@ -369,11 +401,39 @@ function latestEnvelopeArtifact(context: RunContext): ArtifactRef | undefined {
 }
 
 function latestSealFeedbackArtifact(context: RunContext): ArtifactRef | undefined {
-  return selectedLatest(
-    context,
-    (artifact) =>
-      artifact.kind === "diagnosis-seal-feedback" && artifact.phase === "sealing_diagnosis"
-  );
+  const anchor = latestDiagnosisArtifact(context);
+  const anchorIndex =
+    anchor === undefined
+      ? -1
+      : context.selectedArtifacts.map((ref) => ref.artifact_id).lastIndexOf(anchor.artifact_id);
+  // Checkpoint selection order, never global artifact version or imported products.
+  return [...context.selectedArtifacts.slice(anchorIndex + 1)]
+    .reverse()
+    .find(
+      (ref) =>
+        ref.run_id === context.identity.run_id &&
+        ref.phase === "sealing_diagnosis" &&
+        ref.kind === "seal-diagnostic" &&
+        ref.content_schema?.schema_id === "penny.seal-diagnostic.v1"
+    );
+}
+
+function currentSealDiagnostic(context: RunContext, store: ArtifactHostStore) {
+  const ref = latestSealFeedbackArtifact(context);
+  if (ref === undefined) return undefined;
+  const bytes = store.readById(ref.artifact_id);
+  const value: unknown = JSON.parse(bytes.toString("utf8"));
+  const diagnostic = validateSealDiagnostic(value, runSealPolicy(context, DIAGNOSE_SEAL_POLICY));
+  if (
+    canonicalJson(diagnostic) !== bytes.toString("utf8") ||
+    ref.content_digest !== sha256(bytes) ||
+    diagnostic.rejected_draft_ref.run_id !== context.identity.run_id ||
+    canonicalJson(diagnostic.epoch_anchor_ref) !==
+      canonicalJson(latestDiagnosisArtifact(context) ?? null) ||
+    canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref)
+  )
+    throw new Error("current seal diagnostic has invalid custody or epoch");
+  return { ref, diagnostic };
 }
 
 function canonicalDiagnosisRequest(
@@ -496,39 +556,42 @@ function refsForState(context: RunContext, state: DiagnoseWorkerState): readonly
   const draft = latestDiagnosisDraftArtifact(context);
   const product = latestDiagnosisArtifact(context);
   const vera = latestVeraReportArtifact(context);
+  // A Vera report marks an active repair lineage even after Annie and Ida have
+  // transitioned. Keep only the latest exact artifacts, not a history ledger.
+  const repairContext =
+    vera === undefined ? [] : [draft, product, vera, latestSealFeedbackArtifact(context)];
   if (state === "decomposing_causes") {
-    return context.previousState === "verifying_diagnosis"
-      ? uniqueRefs([request, decomposition, hypotheses, draft, product, vera])
-      : [request];
+    return vera === undefined
+      ? [request]
+      : uniqueRefs([request, decomposition, hypotheses, ...repairContext]);
   }
   if (decomposition === undefined) {
     throw new Error(`${state} requires the exact latest Annie causal decomposition`);
   }
   if (state === "generating_hypotheses") {
-    return [request, decomposition];
+    return uniqueRefs([request, decomposition, ...repairContext]);
   }
   if (hypotheses === undefined) {
     throw new Error(`${state} requires the exact latest Ida competing-hypotheses artifact`);
   }
   if (state === "adjudicating_diagnosis") {
     const base = [request, decomposition, hypotheses];
-    if (context.previousState === "verifying_diagnosis") {
-      return uniqueRefs([...base, draft, product, vera]);
-    }
     if (context.previousState === "sealing_diagnosis") {
-      return uniqueRefs([...base, draft, latestSealFeedbackArtifact(context)]);
+      return uniqueRefs([...base, draft, ...repairContext, latestSealFeedbackArtifact(context)]);
     }
-    return base;
+    return uniqueRefs([...base, ...repairContext]);
   }
   if (draft === undefined || product === undefined) {
     throw new Error("Vera requires exact decomposition, hypotheses, draft, and sealed diagnosis");
   }
-  return uniqueRefs([request, decomposition, hypotheses, draft, product]);
+  // A prior Vera report is regression context, never authority to PASS this product.
+  return uniqueRefs([request, decomposition, hypotheses, draft, product, vera]);
 }
 
 function slotForRef(ref: ArtifactRef): string {
   if (ref.kind === "diagnosis-request") return "diagnosis-request";
   if (ref.kind === "diagnosis-draft") return "latest-diagnosis-draft";
+  if (ref.kind === "seal-diagnostic") return "current-seal-diagnostic";
   if (ref.kind === "diagnosis-seal-feedback") return "diagnosis-seal-feedback";
   if (ref.content_schema?.schema_id === "penny.diagnosis.v1") return "latest-diagnosis";
   if (ref.phase === "decomposing_causes") return "latest-causal-decomposition";
@@ -537,7 +600,7 @@ function slotForRef(ref: ArtifactRef): string {
   return `input-${ref.artifact_id.slice(-12)}`;
 }
 
-function taskForState(context: RunContext, state: DiagnoseWorkerState): string {
+function taskForState(state: DiagnoseWorkerState): string {
   const boundary =
     "artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not enlarge the closed supplied-evidence boundary. Return complete stage content before one final SUMMARY. The owner captures and re-reads bytes; do not claim persistence. Analyze supplied evidence only. Do not execute tests, commands, probes, remediation, mutation, or external retrieval.";
   switch (state) {
@@ -563,7 +626,7 @@ function taskForState(context: RunContext, state: DiagnoseWorkerState): string {
       return [
         boundary,
         "Verify the exact latest canonical DiagnosisV1 against the exact request, Annie decomposition, Ida hypotheses, and Demetri draft. Check complete request coverage, competing-hypothesis integrity, evidence-index fidelity, disposition invariants, primary-cause restraint, uncertainty, proposal-only boundaries, exact source lineage, tests_executed:false, and remediation_started:false. Inconclusive and not_applicable are valid complete assessments when their invariants hold.",
-        "PASS only when the exact latest product is valid. On FAIL choose exactly one closed gap: evidence_gap/annie or analysis_gap/annie returns through Annie then Ida then Demetri; diagnosis_product_gap/demetri returns to Demetri. Never emit a target state. End with the registered closed SUMMARY.",
+        "HOST_MECHANICAL_CHECKS records native host checks already executed for this exact product, not semantic approval or effect absence. Do not compute hashes or request post-review receipts, integrity or envelopes. Unknown effect evidence alone is not a defect. PASS only when the exact latest product is valid. On FAIL choose exactly one closed gap: evidence_gap/annie or analysis_gap/annie returns through Annie then Ida then Demetri; diagnosis_product_gap/demetri returns to Demetri. When required verification evidence or capability is unavailable, use UNVERIFIABLE/verification_incomplete/none with findings and evidence limitations; no author repair or positive admission follows. This differs from a valid inconclusive product. The complete source SUMMARY is the closed judgment; routing repair may preserve it but never invent or strengthen it. Never emit a target state. End with the registered closed SUMMARY.",
       ].join("\n\n");
   }
 }
@@ -650,60 +713,10 @@ function persistVersionedHostArtifact(input: {
   return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
 }
 
-function persistSealFeedback(input: {
-  readonly context: RunContext;
-  readonly store: ArtifactHostStore;
-  readonly draft: ArtifactRef;
-  readonly failure: DiagnosisDraftValidationError;
-}): { readonly artifact: ArtifactRef; readonly added: boolean } {
-  if (input.failure.failureClass === "LINEAGE_INVALID") {
-    throw new Error("DiagnosisDraftV1 lineage failures are not model-correctable");
-  }
-  const feedback = validateDiagnosisSealFeedback({
-    schema_id: "penny.diagnosis-seal-feedback.v1",
-    schema_version: 1,
-    attempt: 1,
-    rejected_draft_artifact_id: input.draft.artifact_id,
-    failure_class: input.failure.failureClass,
-    issues: input.failure.issues,
-  });
-  const operationId = `diagnosis-seal-feedback:${sha256(input.context.identity.run_id).slice(0, 32)}`;
-  const metadata: OutputArtifactMetadata = {
-    schema_version: 2,
-    run_id: input.context.identity.run_id,
-    phase: "sealing_diagnosis",
-    branch_id: null,
-    kind: "diagnosis-seal-feedback",
-    operation_id: operationId,
-    version: 1,
-    producer: "host:diagnosis-sealer",
-    media_type: "application/json",
-    content_schema: { schema_id: "penny.diagnosis-seal-feedback.v1", schema_version: 1 },
-    parent_ref: null,
-    upstream_refs: [input.draft],
-  };
-  const content = canonicalJson(feedback);
-  const existing = input.store.refFor(
-    input.context.identity.run_id,
-    "sealing_diagnosis",
-    null,
-    "diagnosis-seal-feedback",
-    operationId,
-    1
-  );
-  const artifact = existing ?? input.store.persist({ metadata, content });
-  if (
-    canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
-    input.store.readById(artifact.artifact_id).toString("utf8") !== content
-  ) {
-    throw new Error("DiagnosisSealFeedbackV1 deterministic persistence diverged");
-  }
-  const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("DiagnosisSealFeedbackV1 manifest re-read failed");
-  input.store.select(reread);
-  return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
-}
-
+/** Product adapter retains the native revision/producer contract required by review receipts.
+ * The owner selection is versioned by successful same-run product; an orphan at the
+ * next revision must bind the exact draft, inputs and canonical product or conflict.
+ */
 function persistSealedDiagnosis(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
@@ -721,86 +734,36 @@ function persistSealedDiagnosis(input: {
     competingHypothesesRef: input.hypotheses,
     draftRef: input.draft,
   });
-  const content = canonicalJson(diagnosis);
-  const upstreamRefs = [input.request, input.decomposition, input.hypotheses, input.draft];
-  const operationId = `sealed-diagnosis:${sha256(input.context.identity.run_id).slice(0, 32)}`;
-  const parent = latestDiagnosisArtifact(input.context);
-  const storedVersion = input.store.lastVersion(
-    input.context.identity.run_id,
-    "sealing_diagnosis",
-    null,
-    "semantic-core",
-    operationId
-  );
-  const interrupted =
-    storedVersion === 0
-      ? null
-      : input.store.refFor(
-          input.context.identity.run_id,
-          "sealing_diagnosis",
-          null,
-          "semantic-core",
-          operationId,
-          storedVersion
-        );
-  if (
-    interrupted !== null &&
-    input.store.readById(interrupted.artifact_id).toString("utf8") === content &&
-    canonicalJson(input.store.metadata(interrupted).upstream_refs) === canonicalJson(upstreamRefs)
-  ) {
-    input.store.select(interrupted);
-    validateCanonicalDiagnosisBytes(input.store.readById(interrupted.artifact_id), interrupted);
-    return { artifact: interrupted, added: addSelectedArtifact(input.context, interrupted) };
-  }
-  const version = Math.max(parent?.version ?? 0, storedVersion) + 1;
-  const parentRef =
-    version === 1
-      ? null
-      : input.store.refFor(
-          input.context.identity.run_id,
-          "sealing_diagnosis",
-          null,
-          "semantic-core",
-          operationId,
-          version - 1
-        );
-  if (version > 1 && parentRef === null) {
-    throw new Error("DiagnosisV1 revision chain is missing its preceding product");
-  }
-  const metadata: OutputArtifactMetadata = {
-    schema_version: 2,
+  const attempt = sealAttempt({
+    store: input.store,
+    policy: runSealPolicy(input.context, DIAGNOSE_SEAL_POLICY),
+    registered_policy_sha256: sealPolicySha256(runSealPolicy(input.context, DIAGNOSE_SEAL_POLICY)),
     run_id: input.context.identity.run_id,
-    phase: "sealing_diagnosis",
     branch_id: null,
-    kind: "semantic-core",
-    operation_id: operationId,
-    version,
-    producer: "host:diagnosis-sealer",
-    media_type: "application/json",
-    content_schema: { schema_id: "penny.diagnosis.v1", schema_version: 1 },
-    parent_ref: parentRef,
-    upstream_refs: upstreamRefs,
+    phase: runSealPolicy(input.context, DIAGNOSE_SEAL_POLICY).seal_phase,
+    draft_ref: input.draft,
+    epoch_anchor_ref: latestDiagnosisArtifact(input.context) ?? null,
+    previous_diagnostic_ref: null,
+    rejection_ordinal: 0,
+    project: () => ({
+      status: "sealed",
+      content: canonicalJson(diagnosis),
+      content_schema: { schema_id: "penny.diagnosis.v1", schema_version: 1 },
+      upstream_refs: [input.request, input.decomposition, input.hypotheses],
+      revision_parent_ref: null,
+    }),
+    validate_product_bytes: (bytes, ref) => {
+      validateCanonicalDiagnosisBytes(bytes, ref);
+    },
+  });
+  if (attempt.status !== "sealed")
+    throw new Error(
+      `diagnose seal host fault: ${attempt.status === "fault" ? attempt.code : "unexpected rejection"}`
+    );
+  return {
+    artifact: attempt.product_ref,
+    added: addSelectedArtifact(input.context, attempt.product_ref),
   };
-  const orphan = input.store.refFor(
-    input.context.identity.run_id,
-    "sealing_diagnosis",
-    null,
-    "semantic-core",
-    operationId,
-    version
-  );
-  const artifact = orphan ?? input.store.persist({ metadata, content });
-  if (
-    canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
-    input.store.readById(artifact.artifact_id).toString("utf8") !== content
-  ) {
-    throw new Error("DiagnosisV1 host artifact diverged from deterministic sealing");
-  }
-  const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("DiagnosisV1 host artifact failed manifest re-read");
-  input.store.select(reread);
-  validateCanonicalDiagnosisBytes(input.store.readById(reread.artifact_id), reread);
-  return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
 }
 
 function eventString(value: JsonValue | undefined): string | undefined {
@@ -914,6 +877,56 @@ function subjectRefs(subject: DiagnosisSubjectV1): readonly ArtifactRef[] {
   ];
 }
 
+/** Native checks are evidence about shape/custody, never semantic approval or effect absence. */
+function validatedDiagnosisSubject(context: RunContext, store: ArtifactHostStore) {
+  const subject = currentDiagnosisSubject(context);
+  for (const ref of subjectRefs(subject)) {
+    const bytes = store.readById(ref.artifact_id);
+    if (
+      canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+      bytes.length !== ref.byte_length ||
+      sha256(bytes) !== ref.content_digest
+    )
+      throw new Error("diagnosis subject custody diverged");
+  }
+  const request = canonicalDiagnosisRequest(store, context);
+  const draft = parsePersistedDiagnosisDraft(store.readById(subject.draft.artifact_id), {
+    request,
+  }).draft;
+  const diagnosis = validateCanonicalDiagnosisBytes(
+    store.readById(subject.diagnosis.artifact_id),
+    subject.diagnosis
+  );
+  assertDiagnosisLineage({
+    diagnosis,
+    request,
+    draft,
+    requestRef: subject.request,
+    causalDecompositionRef: subject.decomposition,
+    competingHypothesesRef: subject.hypotheses,
+    draftRef: subject.draft,
+  });
+  return { subject, draft };
+}
+
+function diagnosisMechanicalChecks(context: RunContext, store: ArtifactHostStore): string {
+  const { subject } = validatedDiagnosisSubject(context, store);
+  return canonicalJson({
+    schema_version: 1,
+    product_ref: subject.diagnosis,
+    source_refs: [subject.request, subject.decomposition, subject.hypotheses, subject.draft],
+    checks: [
+      "exact_source_ref_custody",
+      "canonical_request",
+      "parsed_authored_draft",
+      "canonical_product_bytes_and_digest",
+      "exact_source_lineage",
+      "authored_no_action_literals",
+    ],
+    scope: "host_mechanical_only_not_semantic_or_effect_absence",
+  });
+}
+
 function acceptedVerificationEvidence(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
@@ -926,7 +939,7 @@ function acceptedVerificationEvidence(input: {
       readonly receiptIds: readonly string[];
     }
   | undefined {
-  const expectedUpstreams = subjectRefs(input.subject);
+  const subjectUpstreams = subjectRefs(input.subject);
   for (const event of [...input.checkpointer.events(input.context.identity.run_id)].reverse()) {
     if (eventString(event.payload.state_id) !== "verifying_diagnosis") continue;
     const sourceId =
@@ -949,12 +962,19 @@ function acceptedVerificationEvidence(input: {
       routed.run_id !== input.context.identity.run_id ||
       source.state_id !== "verifying_diagnosis" ||
       source.agent !== "vera" ||
-      routed.details.verdict !== "PASS" ||
-      canonicalJson(input.store.metadata(source.output_artifact).upstream_refs) !==
-        canonicalJson(expectedUpstreams)
+      routed.details.verdict !== "PASS"
     ) {
       continue;
     }
+    // A previous Vera revision may accompany the current subject for regression
+    // review. It is not an approval: only this revision's PASS and exact current
+    // subject can mint a validity receipt.
+    const sourceMetadata = input.store.metadata(source.output_artifact);
+    const expectedUpstreams = uniqueRefs([
+      ...subjectUpstreams,
+      sourceMetadata.parent_ref ?? undefined,
+    ]);
+    if (canonicalJson(sourceMetadata.upstream_refs) !== canonicalJson(expectedUpstreams)) continue;
     return {
       report: source.output_artifact,
       result: routed,
@@ -1217,7 +1237,8 @@ function ensureProductEnvelope(input: {
   return { ...persisted, value };
 }
 
-function reviewEvaluation(details: Record<string, JsonValue>): EvaluationResultV2 | null {
+function reviewEvaluation(details: Record<string, JsonValue>): EvaluationResult | null {
+  if (details.verdict === "UNVERIFIABLE") return null;
   if (details.verdict === "PASS") {
     if (details.gap_kind !== "none" || details.repair_owner !== "none") {
       throw new Error("Vera PASS must use gap_kind=none and repair_owner=none");
@@ -1257,11 +1278,12 @@ function bestPartial(context: RunContext): ArtifactRef | undefined {
 
 export class DiagnosePlaybook
   implements
-    PlaybookCoreV1,
+    PlaybookCore,
     HostContinuationCapabilityV1,
     LivenessTerminalCapabilityV1,
     StateAwareRepairCapabilityV1,
     RepairExhaustionCapabilityV1,
+    RepairProgressCapabilityV1,
     RoutingRepairCapabilityV1
 {
   constructor(
@@ -1284,6 +1306,19 @@ export class DiagnosePlaybook
       throw new Error(`cannot dispatch diagnose state '${context.stateId}'`);
     }
     const state = context.stateId;
+    if (state === "adjudicating_diagnosis" && latestSealFeedbackArtifact(context) !== undefined) {
+      if (this.artifactStore === undefined) throw new Error("seal diagnostic store is absent");
+      currentSealDiagnostic(context, this.artifactStore);
+    }
+    let task = taskForState(state);
+    if (state === "verifying_diagnosis") {
+      try {
+        if (this.artifactStore === undefined) throw new Error("diagnosis store is absent");
+        task += `\n\nHOST_MECHANICAL_CHECKS:${diagnosisMechanicalChecks(context, this.artifactStore)}`;
+      } catch {
+        return this.mechanicalValidationFailure(context);
+      }
+    }
     const refs = refsForState(context, state);
     const next = validateDirective({
       schema_version: 2,
@@ -1293,7 +1328,7 @@ export class DiagnosePlaybook
       agent: DIAGNOSE_AGENT_BY_STATE[state],
       attempt: context.stepCount,
       trust_profile: context.trustProfile,
-      task: taskForState(context, state),
+      task,
       input_artifacts: {
         schema_version: 2,
         artifacts: refs.map((ref) => ({ slot: slotForRef(ref), ref })),
@@ -1309,14 +1344,112 @@ export class DiagnosePlaybook
     _context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResultV2 | null {
+  ): EvaluationResult | null {
     return state === "verifying_diagnosis" ? reviewEvaluation(details) : null;
+  }
+
+  repairProgressFingerprint(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>
+  ): string | null {
+    if (state !== "verifying_diagnosis" || details.verdict !== "FAIL") return null;
+    if (this.artifactStore === undefined) throw new Error("diagnosis store is absent");
+    const { subject, draft } = validatedDiagnosisSubject(context, this.artifactStore);
+    // Decomposition and hypotheses are unstructured prose, not a closed semantic
+    // projection that can exclude embedded refs, receipts, revisions or SUMMARYs.
+    if (details.gap_kind !== "diagnosis_product_gap") return null;
+    for (const operand of [subject.decomposition, subject.hypotheses]) {
+      const operandBytes = this.artifactStore.readById(operand.artifact_id);
+      for (const ref of context.selectedArtifacts) {
+        if (
+          ref.run_id !== context.identity.run_id ||
+          ref.phase !== operand.phase ||
+          ref.kind !== operand.kind
+        )
+          continue;
+        const bytes = this.artifactStore.readById(ref.artifact_id);
+        if (
+          canonicalJson(this.artifactStore.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+          bytes.length !== ref.byte_length ||
+          sha256(bytes) !== ref.content_digest
+        )
+          throw new Error("diagnosis repair operand custody diverged");
+        // Guard all historical fingerprints, not just the last route: an
+        // intervening upstream repair must not collide with an old product gap.
+        // Any byte change disables measurement rather than claiming progress.
+        if (!bytes.equals(operandBytes)) return null;
+      }
+    }
+    // Opaque authored IDs are normalized to their referenced hypothesis positions,
+    // preserving causal relationships while ignoring an ID-only rename.
+    const {
+      hypotheses,
+      primary_supported_hypothesis_id,
+      proposed_discriminating_checks,
+      ...content
+    } = draft;
+    const candidate = {
+      ...content,
+      hypotheses: hypotheses.map(({ hypothesis_id: _id, ...hypothesis }) => hypothesis),
+      primary_supported_hypothesis_index: hypotheses.findIndex(
+        (hypothesis) => hypothesis.hypothesis_id === primary_supported_hypothesis_id
+      ),
+      proposed_discriminating_checks: proposed_discriminating_checks.map(
+        ({ check_id: _id, discriminates_hypothesis_ids, ...check }) => ({
+          ...check,
+          discriminates_hypothesis_indexes: discriminates_hypothesis_ids.map((id) =>
+            hypotheses.findIndex((hypothesis) => hypothesis.hypothesis_id === id)
+          ),
+        })
+      ),
+    };
+    const { strategy_delta: _strategy, ...failure } = details;
+    return sha256(
+      canonicalJson({
+        request: canonicalDiagnosisRequest(this.artifactStore, context),
+        candidate,
+        failure,
+      })
+    );
+  }
+
+  terminalizeRepairStall(
+    context: RunContext,
+    state: string,
+    evaluation: EvaluationResult
+  ): Directive {
+    return this.terminal(
+      context,
+      "incomplete",
+      false,
+      [`repair stalled at ${state}:${evaluation.kind}`],
+      undefined,
+      {
+        incomplete_reason: "repair_stalled",
+        stalled: true,
+        stall_reason: "exact_candidate_and_failure_repeated",
+      }
+    );
+  }
+
+  private mechanicalValidationFailure(context: RunContext): Directive {
+    return this.terminal(
+      context,
+      "incomplete",
+      false,
+      ["Host pre-review mechanical validation failed; no author repair is authorized."],
+      undefined,
+      {
+        incomplete_reason: "host_mechanical_validation_failed",
+      }
+    );
   }
 
   terminalizeRepairExhaustion(
     context: RunContext,
     state: string,
-    evaluation: EvaluationResultV2
+    evaluation: EvaluationResult
   ): Directive {
     return this.terminal(
       context,
@@ -1336,7 +1469,7 @@ export class DiagnosePlaybook
     context: RunContext,
     details: Record<string, JsonValue>,
     _confidence: Confidence
-  ): PlaybookStepOutcomeV1 {
+  ): PlaybookStepOutcome {
     switch (context.stateId) {
       case "decomposing_causes":
         if (details.complete !== true) throw new Error("causal decomposition is incomplete");
@@ -1351,6 +1484,20 @@ export class DiagnosePlaybook
         context.transition("sealing_diagnosis");
         return hostContinuation();
       case "verifying_diagnosis":
+        if (details.verdict === "UNVERIFIABLE") {
+          return this.terminal(
+            context,
+            "incomplete",
+            false,
+            ["Vera could not verify the current diagnosis."],
+            undefined,
+            {
+              incomplete_reason: "verification_incomplete",
+              verification_findings: details.findings ?? [],
+              verification_evidence_limitations: details.evidence ?? [],
+            }
+          );
+        }
         if (details.verdict !== "PASS") {
           throw new Error("Vera gap reached happy routing without engine-owned repair");
         }
@@ -1372,7 +1519,7 @@ export class DiagnosePlaybook
     ) {
       throw new Error("routing_repair_binding_invalid");
     }
-    if (context.stepCount >= context.maxSteps) {
+    if (context.maxSteps !== null && context.stepCount >= context.maxSteps) {
       throw new Error(`run exceeded max_steps=${context.maxSteps}`);
     }
     const binding = {
@@ -1437,6 +1584,25 @@ export class DiagnosePlaybook
     if (pending?.action !== "invoke_agent") return pending;
     if (pending.execution_purpose === "routing_repair") return pending;
     if (!isDiagnoseWorkerState(pending.state_id)) return pending;
+    if (pending.state_id === "verifying_diagnosis") {
+      try {
+        if (this.artifactStore === undefined) throw new Error("diagnosis store is absent");
+        // Keep the frozen task, including owner-enriched contextual guidance. Validate
+        // only this host's evidence line rather than reconstructing historical prose.
+        const checks = pending.task
+          .split("\n")
+          .filter((line) => line.startsWith("HOST_MECHANICAL_CHECKS:"));
+        if (
+          checks.length !== 1 ||
+          checks[0] !==
+            `HOST_MECHANICAL_CHECKS:${diagnosisMechanicalChecks(context, this.artifactStore)}`
+        ) {
+          throw new Error("frozen mechanical evidence diverged");
+        }
+      } catch {
+        return this.mechanicalValidationFailure(context);
+      }
+    }
     return validateDirective({
       ...pending,
       output_artifact: outputMetadata(
@@ -1573,41 +1739,83 @@ export class DiagnosePlaybook
         ),
       };
     }
+    const requestValue = canonicalDiagnosisRequest(store, context);
+    const anchor = latestDiagnosisArtifact(context) ?? null;
+    const previous = currentSealDiagnostic(context, store);
     let draftValue: DiagnosisDraftV1;
     try {
       draftValue = parsePersistedDiagnosisDraft(store.readById(draft.artifact_id), {
-        request: canonicalDiagnosisRequest(store, context),
+        request: requestValue,
       }).draft;
     } catch (error) {
-      if (!(error instanceof DiagnosisDraftValidationError)) throw error;
-      if (latestSealFeedbackArtifact(context) !== undefined) {
+      if (
+        !(error instanceof DiagnosisDraftValidationError) ||
+        error.failureClass === "LINEAGE_INVALID"
+      )
+        throw error;
+      const failureClass = error.failureClass;
+      const attempt = sealAttempt({
+        store,
+        policy: runSealPolicy(context, DIAGNOSE_SEAL_POLICY),
+        registered_policy_sha256: sealPolicySha256(runSealPolicy(context, DIAGNOSE_SEAL_POLICY)),
+        run_id: context.identity.run_id,
+        branch_id: null,
+        phase: "sealing_diagnosis",
+        draft_ref: draft,
+        epoch_anchor_ref: anchor,
+        previous_diagnostic_ref: previous?.ref ?? null,
+        rejection_ordinal: previous?.diagnostic.rejection_ordinal ?? 0,
+        project: () => ({
+          status: "rejected",
+          failure_class: failureClass,
+          issues: error.issues.map((detail, index) => ({
+            code: error.failureClass.toLowerCase(),
+            path: `/issues/${index}`,
+            detail:
+              Buffer.byteLength(detail, "utf8") <= 512
+                ? detail
+                : "Draft validation issue exceeds display limit",
+            source_ordinals: [],
+          })),
+        }),
+        validate_product_bytes: () => {
+          throw new Error("rejected draft cannot validate as a product");
+        },
+      });
+      if (attempt.status !== "rejected") {
+        throw new Error(
+          `diagnose diagnostic host fault: ${attempt.status === "fault" ? attempt.code : "unexpected product"}`
+        );
+      }
+      const added = addSelectedArtifact(context, attempt.diagnostic_ref);
+      if (added) this.hostFault?.("sealing_diagnosis:feedback-persistence");
+      if (attempt.diagnostic.disposition === "exhausted") {
         return {
           event_type: "diagnose_seal_repair_exhausted",
           payload: {
             run_id: context.identity.run_id,
-            failure_sha256: sha256(canonicalJson(error.issues)),
+            diagnostic_artifact_id: attempt.diagnostic_ref.artifact_id,
           },
           directive: this.terminal(
             context,
             "incomplete",
             false,
-            [`seal repair exhausted: ${error.failureClass}`],
+            [`seal repair exhausted: ${attempt.diagnostic.failure_class}`],
             undefined,
             {
               incomplete_reason: "seal_repair_exhausted",
               exhausted: true,
               exhaustion_reason: "seal_defect",
+              output_kind: "rejected_draft",
+              seal_diagnostics: sealDiagnosticsProjection(
+                attempt.diagnostic,
+                attempt.diagnostic_ref,
+                runSealPolicy(context, DIAGNOSE_SEAL_POLICY)
+              ),
             }
           ),
         };
       }
-      const feedback = persistSealFeedback({
-        context,
-        store,
-        draft,
-        failure: error,
-      });
-      if (feedback.added) this.hostFault?.("sealing_diagnosis:feedback-persistence");
       context.transition("adjudicating_diagnosis");
       const next = this.dispatch(context);
       return {
@@ -1615,7 +1823,7 @@ export class DiagnosePlaybook
         payload: {
           run_id: context.identity.run_id,
           rejected_draft_artifact_id: draft.artifact_id,
-          feedback_artifact_id: feedback.artifact.artifact_id,
+          feedback_artifact_id: attempt.diagnostic_ref.artifact_id,
         },
         directive: next,
       };
@@ -1652,13 +1860,21 @@ export class DiagnosePlaybook
     extraResult: Readonly<Record<string, JsonValue>> = {}
   ): Directive {
     const origin = context.stateId;
-    const output = met ? latestDiagnosisArtifact(context) : bestPartial(context);
+    const currentDiagnostic =
+      !met && this.artifactStore !== undefined
+        ? currentSealDiagnostic(context, this.artifactStore)
+        : undefined;
+    const output = met
+      ? latestDiagnosisArtifact(context)
+      : extraResult.incomplete_reason === "seal_repair_exhausted"
+        ? latestDiagnosisDraftArtifact(context)
+        : bestPartial(context);
     if (met && output === undefined) throw new Error("positive diagnose terminal has no product");
     const graph = met
       ? this.positiveTerminalArtifacts(context)
       : output === undefined
         ? []
-        : [output];
+        : uniqueRefs([output, latestVeraReportArtifact(context)]);
     context.previousState = origin;
     context.stateId = action;
     context.status = action;
@@ -1674,8 +1890,28 @@ export class DiagnosePlaybook
         met,
         output_artifact_ref: output ?? null,
         best_partial_artifact_refs: met || output === undefined ? [] : [output],
+        ...(!met && output !== undefined
+          ? {
+              output_kind:
+                output.kind === "semantic-core"
+                  ? "accepted_product_best_partial"
+                  : output.kind.endsWith("-draft")
+                    ? "rejected_draft_best_partial"
+                    : "unreviewed_best_partial",
+            }
+          : {}),
         remediation_started: false,
         tests_executed: false,
+        ...(currentDiagnostic === undefined
+          ? {}
+          : {
+              seal_diagnostics: sealDiagnosticsProjection(
+                currentDiagnostic.diagnostic,
+                currentDiagnostic.ref,
+                runSealPolicy(context, DIAGNOSE_SEAL_POLICY)
+              ),
+            }),
+        verification_report_refs: met ? [] : uniqueRefs([latestVeraReportArtifact(context)]),
         ...extraResult,
         ...(liveness === undefined ? {} : { liveness }),
       },
@@ -1856,8 +2092,10 @@ export const DIAGNOSE_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<
   ["diagnose_latest_verified_diagnosis_dod.v1", evaluateDiagnoseLatestVerifiedDiagnosisDod],
 ]);
 
-export const DIAGNOSE_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
+export const DIAGNOSE_PLAYBOOK_REGISTRATION: PlaybookRegistration = {
   name: DIAGNOSE_PLAYBOOK_NAME,
+  repair_progress_policy: "exact_fingerprint_v1",
+  seal_policy: DIAGNOSE_SEAL_POLICY,
   contract: DIAGNOSE_SKILL_CONTRACT,
   ingress: "skill",
   start_admission: DIAGNOSE_START_ADMISSION,
@@ -1925,6 +2163,7 @@ export const DIAGNOSE_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
         "verifying_diagnosis",
         {
           agent: "vera",
+          routing_repair_policy: "preserve_source_summary_v1",
           result_schema_id: "penny.diagnose.verification-summary.v1",
           result_schema_version: 1,
           schema: VerificationSummarySchema,

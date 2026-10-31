@@ -1,10 +1,10 @@
 import { existsSync, writeFileSync } from "node:fs";
 
-import { ArtifactStore } from "../../src/artifact-store.js";
-import { Checkpointer } from "../../src/checkpointer.js";
-import { ChildWorkflowStateOwner } from "../../src/child-workflows/owner.js";
-import { validateChildWorkflowCallRecord } from "../../src/child-workflows/contracts.js";
-import { RunContext } from "../../src/context.js";
+import { ArtifactStore } from "../../dist/artifact-store.js";
+import { Checkpointer } from "../../dist/checkpointer.js";
+import { ChildWorkflowStateOwner } from "../../dist/child-workflows/owner.js";
+import { validateChildWorkflowCallRecord } from "../../dist/child-workflows/contracts.js";
+import { RunContext } from "../../dist/context.js";
 
 function argument(index: number): string {
   const value = process.argv[index + 2];

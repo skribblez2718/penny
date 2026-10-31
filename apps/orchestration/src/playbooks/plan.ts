@@ -1,9 +1,21 @@
-import { Type } from "typebox";
+import { sealAttempt } from "./seal-attempt.js";
+import {
+  requirePreparedAssurance,
+  requireMaterializedAssurance,
+  validateCompositionAssurance,
+  assertSelectedSpecificationAssurance,
+  assertExistingStartAssurance,
+  CompositionAssuranceCapabilityUnavailableError,
+  type CompositionAssuranceV1,
+  type CompositionAdmissionInput,
+} from "../composition-assurance.js";
+import type { StartAdmissionReadOnlyHostV1 } from "./registry.js";
+import { Type, type TSchema } from "typebox";
 
-import type {
-  ArtifactHostStore,
-  ArtifactReader,
-  ArtifactRevisionLookup,
+import {
+  type ArtifactHostStore,
+  type ArtifactReader,
+  type ArtifactRevisionLookup,
 } from "../artifact-store.js";
 import { canonicalJson, sha256 } from "../checkpointer.js";
 import {
@@ -11,9 +23,9 @@ import {
   type ArtifactRef,
   type Confidence,
   type Directive,
-  type EvaluationResultV2,
+  type EvaluationResult,
   type JsonValue,
-  type LivenessPolicyV3,
+  type LivenessPolicy,
   type LivenessSnapshotV1,
   type LivenessTerminalReason,
   type OutputArtifactMetadata,
@@ -22,29 +34,36 @@ import {
 } from "../contracts.js";
 import { RunContext } from "../context.js";
 import { ordinaryLivenessPolicy } from "../liveness.js";
+import { validateSourceRoutingSummary } from "../source-routing-summary.js";
 import {
-  assertStrategyLineage,
-  PlanRequestConstraintsV1Schema,
+  assertStrategyV2Lineage,
+  PlanInvocationV2Schema,
+  validatePlanInvocation,
   canonicalizePlanRequest,
-  strategyDraftPromptContract,
+  planSpecificationSourceIndex,
+  validatePlanSpecificationSourceIndex,
+  strategyDraftV2PromptContract,
   strategyProductEnvelopeId,
   strategyProductIntegrityId,
   planRequestConstraints,
   planRequestSha256,
-  parseStrategyDraft,
-  sealStrategy,
-  validateCanonicalStrategyBytes,
+  parseStrategyDraftV2,
+  sealStrategyV2,
+  validateCanonicalStrategyV2Bytes,
   validateStrategyProductEnvelope,
   validateStrategyProductIntegrity,
   validatePlanRequest,
   validateStrategySealFeedback,
   StrategyDraftValidationError,
-  type StrategyDraftV1,
   type StrategyProductEnvelopeV1,
   type StrategyProductIntegrityV1,
   type PlanRequestV1,
   type StrategySealFeedbackV1,
 } from "../skill-contracts/plan.js";
+import {
+  validateCanonicalSpecificationBytes,
+  type SpecificationV1,
+} from "../skill-contracts/define.js";
 import {
   evidenceAdmissionId,
   validateEvidenceAdmission,
@@ -60,19 +79,30 @@ import {
   type ReviewSubjectV1,
 } from "../skill-contracts/review.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
+import type { SealProjectionV1 } from "./seal-attempt.js";
+import {
+  sealDiagnosticsProjection,
+  sealPolicySha256,
+  runSealPolicy,
+  validateSealDiagnostic,
+  type SealDiagnosticV1,
+  type SealIssueV1,
+  type SealPolicyV1,
+} from "../skill-contracts/sealing.js";
 import {
   hostContinuation,
   type CompletionReceiptPredicateV1,
   type HostContinuationCapabilityV1,
   type HostContinuationStepV1,
   type LivenessTerminalCapabilityV1,
-  type PlaybookCoreV1,
-  type PlaybookStepOutcomeV1,
+  type PlaybookCore,
+  type PlaybookStepOutcome,
   type RepairExhaustionCapabilityV1,
+  type RepairProgressCapabilityV1,
   type RoutingRepairCapabilityV1,
   type StateAwareRepairCapabilityV1,
 } from "./playbook.js";
-import type { PlaybookRegistrationV1, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
+import type { PlaybookRegistration, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
 
 export const PLAN_PLAYBOOK_NAME = "plan";
 export const PLAN_LIFECYCLE_STATUS = "PREPARED_NOT_MEASURED" as const;
@@ -129,10 +159,24 @@ export const PLAN_FLOW = {
   ],
 } as const;
 
+export const PLAN_SEAL_POLICY: SealPolicyV1 = {
+  schema_id: "penny.seal-policy.v1",
+  schema_version: 1,
+  skill: "plan",
+  draft_phase: "strategizing",
+  seal_phase: "sealing_strategy",
+  draft_schema: "penny.strategy-draft.v2",
+  draft_schema_version: 2,
+  draft_kind: "strategy-draft",
+  product_kind: "strategy",
+  correction_limit: null,
+  diagnostic_schema: "penny.seal-diagnostic.v1",
+};
+
 export const PLAN_LIVENESS_POLICY = ordinaryLivenessPolicy({
   scope: "orchestrated-plan-workflow",
   preset: "ordinary-progress-lease-v3",
-}) satisfies LivenessPolicyV3;
+}) satisfies LivenessPolicy;
 
 const FindingSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const StrategyDeltaSchema = Type.String({ minLength: 1, maxLength: 4_096 });
@@ -221,6 +265,17 @@ const VerificationSummarySchema = Type.Union([
     },
     { additionalProperties: false }
   ),
+  Type.Object(
+    {
+      verdict: Type.Literal("UNVERIFIABLE"),
+      gap_kind: Type.Literal("verification_incomplete"),
+      repair_owner: Type.Literal("none"),
+      findings: Type.Array(FindingSchema, { minItems: 1, maxItems: 32 }),
+      evidence: EvidenceChecksSchema,
+      strategy_delta: StrategyDeltaSchema,
+    },
+    { additionalProperties: false }
+  ),
   verificationFailureSchema("evidence_gap", "echo"),
   verificationFailureSchema("analysis_gap", "piper"),
   verificationFailureSchema("product_gap", "piper"),
@@ -303,6 +358,19 @@ function strategyContract(input: { readonly name: string }): SkillContract {
       input_ports: [
         {
           schema_version: 1,
+          name: "prior_specification",
+          direction: "input",
+          transport: "artifact",
+          schema_id: "penny.specification.v1",
+          schema_version_required: 1,
+          artifact_kind: "specification",
+          source: "either",
+          min_items: 0,
+          max_items: 1,
+          semantic_product: true,
+        },
+        {
+          schema_version: 1,
           name: "prior_grounded_synthesis",
           direction: "input",
           transport: "artifact",
@@ -347,8 +415,8 @@ function strategyContract(input: { readonly name: string }): SkillContract {
           name: "strategy",
           direction: "output",
           transport: "artifact",
-          schema_id: "penny.strategy.v1",
-          schema_version_required: 1,
+          schema_id: "penny.strategy.v2",
+          schema_version_required: 2,
           artifact_kind: "strategy",
           source: "skill",
           min_items: 1,
@@ -412,8 +480,8 @@ function strategyContract(input: { readonly name: string }): SkillContract {
       required_receipt_predicates: ["plan_latest_reviewed_strategy_dod.v2"],
       latest_product: {
         selector: "terminal_artifact",
-        schema_id: "penny.strategy.v1",
-        product_schema_version: 1,
+        schema_id: "penny.strategy.v2",
+        product_schema_version: 2,
         artifact_kind: "strategy",
         producing_state: "sealing_strategy",
       },
@@ -429,13 +497,9 @@ function selectedLatest(
   predicate: (artifact: ArtifactRef) => boolean
 ): ArtifactRef | undefined {
   return [...context.selectedArtifacts]
-    .filter(predicate)
-    .sort(
-      (left, right) =>
-        right.version - left.version || right.artifact_id.localeCompare(left.artifact_id)
-    )[0];
+    .reverse()
+    .find((artifact) => artifact.run_id === context.identity.run_id && predicate(artifact));
 }
-
 function addSelectedArtifact(context: RunContext, artifact: ArtifactRef): boolean {
   const selected = context.selectedArtifacts.find(
     (candidate) => candidate.artifact_id === artifact.artifact_id
@@ -452,6 +516,9 @@ function addSelectedArtifact(context: RunContext, artifact: ArtifactRef): boolea
 
 function isExactPlanInputRef(artifact: ArtifactRef): boolean {
   return (
+    (artifact.kind === "specification" &&
+      artifact.content_schema?.schema_id === "penny.specification.v1" &&
+      artifact.content_schema.schema_version === 1) ||
     (artifact.kind === "semantic-core" &&
       artifact.content_schema?.schema_id === "penny.grounded-synthesis.v1" &&
       artifact.content_schema.schema_version === 1) ||
@@ -468,6 +535,76 @@ function exactPlanInputRefs(context: RunContext): readonly ArtifactRef[] {
   return context.selectedArtifacts
     .filter(isExactPlanInputRef)
     .sort((left, right) => left.artifact_id.localeCompare(right.artifact_id));
+}
+
+function planSpecificationRef(context: RunContext): ArtifactRef | undefined {
+  const matches = exactPlanInputRefs(context).filter(
+    (artifact) => artifact.content_schema?.schema_id === "penny.specification.v1"
+  );
+  if (matches.length > 1) throw new Error("Plan admitted more than one SpecificationV1");
+  return matches[0];
+}
+
+function planSpecification(
+  store: Pick<ArtifactReader, "readById">,
+  context: RunContext
+): { readonly ref: ArtifactRef; readonly value: SpecificationV1 } | undefined {
+  const ref = planSpecificationRef(context);
+  if (ref === undefined) return undefined;
+  return { ref, value: validateCanonicalSpecificationBytes(store.readById(ref.artifact_id), ref) };
+}
+
+function planSourceIndexRef(context: RunContext): ArtifactRef | undefined {
+  const matches = context.selectedArtifacts.filter(
+    (ref) =>
+      ref.run_id === context.identity.run_id && ref.kind === "plan-specification-source-index"
+  );
+  if (matches.length > 1) throw new Error("Plan selected more than one specification source index");
+  const ref = matches[0];
+  if ((planSpecificationRef(context) === undefined) !== (ref === undefined)) {
+    throw new Error(
+      "Plan requires an exact specification source index iff a specification is supplied"
+    );
+  }
+  return ref;
+}
+
+function validateSelectedPlanSourceIndex(
+  context: RunContext,
+  reader?: ArtifactReader
+): ArtifactRef | undefined {
+  const ref = planSourceIndexRef(context);
+  if (ref === undefined) return undefined;
+  if (reader === undefined) throw new Error("Plan source index requires artifact storage");
+  const specificationRef = planSpecificationRef(context);
+  if (specificationRef === undefined) throw new Error("Plan source index lost its specification");
+  const stored = reader.refById(ref.artifact_id);
+  const bytes = reader.readById(ref.artifact_id);
+  if (
+    ref.phase !== "intake" ||
+    ref.branch_id !== null ||
+    ref.version !== 1 ||
+    ref.operation_id !==
+      `plan-specification-source-index:${sha256(context.identity.run_id).slice(0, 32)}` ||
+    ref.producer !== "host:request-admission" ||
+    ref.media_type !== "application/json" ||
+    ref.content_schema?.schema_id !== "penny.plan-specification-source-index.v1" ||
+    ref.content_schema.schema_version !== 1 ||
+    stored === undefined ||
+    canonicalJson(stored) !== canonicalJson(ref) ||
+    ref.byte_length !== bytes.byteLength ||
+    ref.content_digest !== sha256(bytes)
+  )
+    throw new Error("Plan specification source index artifact identity or bytes diverged");
+  const value = validatePlanSpecificationSourceIndex(
+    JSON.parse(bytes.toString("utf8")),
+    reader.readById(specificationRef.artifact_id),
+    specificationRef
+  );
+  if (canonicalJson(value) !== bytes.toString("utf8")) {
+    throw new Error("Plan specification source index is not canonical JSON");
+  }
+  return ref;
 }
 
 function admittedPlanRequestArtifact(context: RunContext): ArtifactRef {
@@ -518,14 +655,16 @@ function latestStrategyDraftArtifact(context: RunContext): ArtifactRef | undefin
 }
 
 function latestStrategyArtifact(context: RunContext): ArtifactRef | undefined {
-  return selectedLatest(
-    context,
-    (artifact) =>
-      artifact.kind === "strategy" &&
-      artifact.phase === "sealing_strategy" &&
-      artifact.content_schema?.schema_id === "penny.strategy.v1" &&
-      artifact.content_schema.schema_version === 1
-  );
+  return [...context.selectedArtifacts]
+    .reverse()
+    .find(
+      (artifact) =>
+        artifact.run_id === context.identity.run_id &&
+        artifact.kind === "strategy" &&
+        artifact.phase === "sealing_strategy" &&
+        artifact.content_schema?.schema_id === "penny.strategy.v2" &&
+        artifact.content_schema.schema_version === 2
+    );
 }
 
 function latestReviewReportArtifact(
@@ -548,14 +687,41 @@ function latestReviewReceiptArtifact(
   );
 }
 
-function selectedStrategySealFeedbackArtifact(context: RunContext): ArtifactRef | undefined {
-  return selectedLatest(
-    context,
-    (artifact) =>
-      artifact.kind === "strategy-seal-feedback" &&
-      artifact.phase === "sealing_strategy" &&
-      artifact.content_schema?.schema_id === "penny.strategy-seal-feedback.v1"
-  );
+export function planCurrentSealDiagnosticRef(context: RunContext): ArtifactRef | undefined {
+  const anchor = latestStrategyArtifact(context);
+  const after =
+    anchor === undefined
+      ? 0
+      : context.selectedArtifacts.findIndex(
+          (artifact) => artifact.artifact_id === anchor.artifact_id
+        ) + 1;
+  return [...context.selectedArtifacts.slice(after)]
+    .reverse()
+    .find(
+      (artifact) =>
+        artifact.run_id === context.identity.run_id &&
+        artifact.kind === "seal-diagnostic" &&
+        artifact.phase === "sealing_strategy" &&
+        artifact.content_schema?.schema_id === "penny.seal-diagnostic.v1"
+    );
+}
+
+function currentSealDiagnostic(context: RunContext, store: ArtifactHostStore) {
+  const ref = planCurrentSealDiagnosticRef(context);
+  if (ref === undefined) return undefined;
+  const bytes = store.readById(ref.artifact_id);
+  const parsed: unknown = JSON.parse(bytes.toString("utf8"));
+  const diagnostic = validateSealDiagnostic(parsed, runSealPolicy(context, PLAN_SEAL_POLICY));
+  if (
+    canonicalJson(diagnostic) !== bytes.toString("utf8") ||
+    canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+    diagnostic.rejected_draft_ref.run_id !== context.identity.run_id ||
+    canonicalJson(diagnostic.epoch_anchor_ref) !==
+      canonicalJson(latestStrategyArtifact(context) ?? null)
+  ) {
+    throw new Error("current seal diagnostic custody or epoch mismatch");
+  }
+  return { ref, diagnostic };
 }
 
 function latestIntegrityArtifact(context: RunContext): ArtifactRef | undefined {
@@ -632,17 +798,80 @@ function persistPlanRequestArtifact(input: {
   return reread;
 }
 
+function persistPlanSourceIndex(
+  store: ArtifactHostStore | undefined,
+  runId: string,
+  specificationRef: ArtifactRef
+): ArtifactRef {
+  if (store === undefined) throw new Error("Plan source index requires a writable artifact store");
+  const operationId = `plan-specification-source-index:${sha256(runId).slice(0, 32)}`;
+  const sourceBytes = store.readById(specificationRef.artifact_id);
+  const content = canonicalJson(planSpecificationSourceIndex(sourceBytes, specificationRef));
+  const metadata: OutputArtifactMetadata = {
+    schema_version: 2,
+    run_id: runId,
+    phase: "intake",
+    branch_id: null,
+    kind: "plan-specification-source-index",
+    operation_id: operationId,
+    version: 1,
+    producer: "host:request-admission",
+    media_type: "application/json",
+    content_schema: { schema_id: "penny.plan-specification-source-index.v1", schema_version: 1 },
+    parent_ref: null,
+    upstream_refs: [specificationRef],
+  };
+  const existing = store.refFor(runId, "intake", null, metadata.kind, operationId, 1);
+  const ref = existing ?? store.persist({ metadata, content });
+  if (
+    store.lastVersion(runId, "intake", null, metadata.kind, operationId) !== 1 ||
+    canonicalJson(store.metadata(ref)) !== canonicalJson(metadata) ||
+    store.readById(ref.artifact_id).toString("utf8") !== content
+  )
+    throw new Error("Plan specification source index deterministic persistence diverged");
+  const reread = store.refById(ref.artifact_id);
+  if (reread === undefined || canonicalJson(reread) !== canonicalJson(ref)) {
+    throw new Error("Plan specification source index failed manifest re-read");
+  }
+  store.select(reread);
+  return reread;
+}
+
+function planAssuranceInput(
+  request: import("../contracts.js").StartRequest,
+  native: PlanRequestV1,
+  mode: CompositionAssuranceV1["mode"],
+  host: StartAdmissionReadOnlyHostV1
+): CompositionAdmissionInput {
+  if (host.assurance === undefined) throw new CompositionAssuranceCapabilityUnavailableError();
+  const specificationRefs =
+    request.input_artifacts?.artifacts
+      .map((binding) => binding.ref)
+      .filter((ref) => ref.content_schema?.schema_id === "penny.specification.v1") ?? [];
+  if (specificationRefs.length > 1) throw new Error("SPECIFICATION_ASSURANCE_BINDING_INVALID");
+  return {
+    ...host.assurance,
+    invocation: request.constraints,
+    request_bytes: canonicalJson(native),
+    request_schema: { schema_id: "penny.plan-request.v1", schema_version: 1 },
+    specification_ref: specificationRefs[0] ?? null,
+    mode: specificationRefs.length === 0 ? "not_applicable" : mode,
+  };
+}
+
 export const PLAN_START_ADMISSION: StartAdmissionV1 = {
   schema_id: "penny.plan-request.v1",
   schema_version: 1,
-  prepare: (request): PreparedStartV1 => {
+  invocation_versions: [1, 2],
+  prepare: (request, host): PreparedStartV1 => {
+    const invocation = validatePlanInvocation(request.constraints);
     const exactInputArtifactIds =
       request.input_artifacts?.artifacts
         .filter((binding) => isExactPlanInputRef(binding.ref))
         .map((binding) => binding.ref.artifact_id) ?? [];
     const planRequest = canonicalizePlanRequest({
       goal: request.goal,
-      constraints: request.constraints,
+      constraints: invocation.request,
       exactInputArtifactIds,
     });
     return {
@@ -654,11 +883,35 @@ export const PLAN_START_ADMISSION: StartAdmissionV1 = {
       ...(request.input_artifacts === undefined
         ? {}
         : { input_artifacts: request.input_artifacts }),
-      admission_data: planRequest,
+      admission_data: {
+        native: planRequest,
+        assurance: host.assurance?.checkpointer.runExists(request.identity.run_id)
+          ? null
+          : requirePreparedAssurance(
+              planAssuranceInput(request, planRequest, invocation.specification_assurance, host)
+            ),
+      },
     };
   },
   materialize: (prepared, host) => {
-    const request = validatePlanRequest(prepared.admission_data);
+    const data = prepared.admission_data;
+    if (typeof data !== "object" || data === null || !("native" in data) || !("assurance" in data))
+      throw new Error("Plan start admission data is missing");
+    const request = validatePlanRequest(data.native);
+    const invocation = validatePlanInvocation(prepared.request.constraints);
+    const assuranceInput = planAssuranceInput(
+      prepared.request,
+      request,
+      invocation.specification_assurance,
+      host
+    );
+    const assuranceRef =
+      data.assurance === null
+        ? assertExistingStartAssurance(assuranceInput)
+        : requireMaterializedAssurance(
+            assuranceInput,
+            validateCompositionAssurance(data.assurance)
+          );
     const upstreamRefs = prepared.input_artifacts?.artifacts.map((binding) => binding.ref) ?? [];
     const requestRef = persistPlanRequestArtifact({
       request,
@@ -666,7 +919,19 @@ export const PLAN_START_ADMISSION: StartAdmissionV1 = {
       upstreamRefs,
       ...(host.artifactStore === undefined ? {} : { store: host.artifactStore }),
     });
-    return requestRef === undefined ? [] : [requestRef];
+    if (requestRef === undefined) throw new Error("Plan start requires a writable artifact store");
+    const specificationRef = upstreamRefs.find(
+      (ref) => ref.content_schema?.schema_id === "penny.specification.v1"
+    );
+    const sourceIndexRef =
+      specificationRef === undefined
+        ? undefined
+        : persistPlanSourceIndex(host.artifactStore, requestRef.run_id, specificationRef);
+    return [
+      requestRef,
+      ...(sourceIndexRef === undefined ? [] : [sourceIndexRef]),
+      ...(assuranceRef === undefined ? [] : [assuranceRef]),
+    ];
   },
 };
 
@@ -688,7 +953,7 @@ function outputMetadata(
       ? {
           artifactKind: "strategy-draft",
           mediaType: "text/plain; charset=utf-8",
-          contentSchema: { schema_id: "penny.strategy-draft.v1", schema_version: 1 },
+          contentSchema: { schema_id: "penny.strategy-draft.v2", schema_version: 2 },
         }
       : {}),
   });
@@ -696,7 +961,10 @@ function outputMetadata(
 
 function refsForState(context: RunContext, state: PlanWorkerState): readonly ArtifactRef[] {
   const request = admittedPlanRequestArtifact(context);
-  const inputs = exactPlanInputRefs(context);
+  const assuranceRef = context.selectedArtifacts.find(
+    (ref) => ref.kind === "composition-assurance"
+  );
+  const inputs = uniqueRefs([planSourceIndexRef(context), ...exactPlanInputRefs(context)]);
   const orientation = latestOrientationArtifact(context);
   const admission = latestEvidenceAdmissionArtifact(context);
   const evidence = latestEvidenceArtifact(context);
@@ -706,11 +974,29 @@ function refsForState(context: RunContext, state: PlanWorkerState): readonly Art
   const carrenReport = latestReviewReportArtifact(context, "critiquing_strategy");
   const validityReceipt = latestReviewReceiptArtifact(context, "validity");
   if (state === "orienting_strategy") {
-    return uniqueRefs([request, ...inputs, evidence, orientation, veraReport, carrenReport]);
+    return uniqueRefs([
+      request,
+      assuranceRef,
+      ...inputs,
+      evidence,
+      orientation,
+      product,
+      veraReport,
+      carrenReport,
+    ]);
   }
   if (state === "gathering_strategy_evidence") {
     if (orientation === undefined) throw new Error("Echo requires the exact Piper orientation");
-    return uniqueRefs([request, ...inputs, orientation, admission, veraReport, carrenReport]);
+    return uniqueRefs([
+      request,
+      assuranceRef,
+      ...inputs,
+      orientation,
+      admission,
+      product,
+      veraReport,
+      carrenReport,
+    ]);
   }
   if (state === "strategizing") {
     if (orientation === undefined) {
@@ -718,12 +1004,14 @@ function refsForState(context: RunContext, state: PlanWorkerState): readonly Art
     }
     return uniqueRefs([
       request,
+      assuranceRef,
       orientation,
       admission,
       evidence,
       ...inputs,
       draft,
-      selectedStrategySealFeedbackArtifact(context),
+      planCurrentSealDiagnosticRef(context),
+      product,
       veraReport,
       carrenReport,
     ]);
@@ -735,17 +1023,29 @@ function refsForState(context: RunContext, state: PlanWorkerState): readonly Art
     product === undefined
   ) {
     throw new Error(
-      `${state} requires exact orientation, evidence admission, draft, and latest sealed StrategyV1`
+      `${state} requires exact orientation, evidence admission, draft, and latest sealed StrategyV2`
     );
   }
   if (state === "verifying_strategy") {
-    return uniqueRefs([request, orientation, admission, draft, product, evidence, ...inputs]);
+    return uniqueRefs([
+      request,
+      assuranceRef,
+      orientation,
+      admission,
+      draft,
+      product,
+      evidence,
+      ...inputs,
+      veraReport,
+      carrenReport,
+    ]);
   }
   if (veraReport === undefined || validityReceipt === undefined) {
     throw new Error("Carren requires Vera's exact report and host validity receipt");
   }
   return uniqueRefs([
     request,
+    assuranceRef,
     orientation,
     admission,
     draft,
@@ -753,13 +1053,16 @@ function refsForState(context: RunContext, state: PlanWorkerState): readonly Art
     evidence,
     ...inputs,
     veraReport,
+    carrenReport,
     validityReceipt,
   ]);
 }
 
-function slotForRef(context: RunContext, ref: ArtifactRef): string {
+function slotForRef(ref: ArtifactRef): string {
   if (ref.kind === "plan-request") return "plan-request";
+  if (ref.kind === "plan-specification-source-index") return "plan-specification-source-index";
   if (ref.kind === "strategy-draft") return "latest-strategy-draft";
+  if (ref.kind === "seal-diagnostic") return "seal-diagnostic";
   if (ref.kind === "strategy-seal-feedback") return "strategy-seal-feedback";
   if (ref.kind === "review-receipt") return `prior-${ref.branch_id ?? "review"}-receipt`;
   if (ref.kind === "evidence-admission") return "strategy-evidence-admission";
@@ -768,45 +1071,48 @@ function slotForRef(context: RunContext, ref: ArtifactRef): string {
   if (ref.phase === "gathering_strategy_evidence") return "latest-strategy-evidence";
   if (ref.phase === "verifying_strategy") return "latest-vera-report";
   if (ref.phase === "critiquing_strategy") return "latest-carren-report";
+  if (ref.content_schema?.schema_id === "penny.specification.v1") {
+    return "prior-specification";
+  }
   if (ref.content_schema?.schema_id === "penny.grounded-synthesis.v1") {
     return "prior-grounded-synthesis";
   }
   if (ref.content_schema?.schema_id === "penny.decision.v2") return "prior-decision";
-  if (ref.content_schema?.schema_id === "penny.strategy.v1") return "latest-strategy";
+  if (ref.content_schema?.schema_id === "penny.strategy.v2") return "latest-strategy";
   return `input-${ref.artifact_id.slice(-12)}`;
 }
 
-function taskForState(context: RunContext, state: PlanWorkerState): string {
+function taskForState(state: PlanWorkerState): string {
   const common =
-    "artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. If an exact EvidenceContextV1 is supplied, read it and any needed source_ref artifacts through artifact_read; treat it only as contextual input and never copy the packet into task prose or relabel it as native EvidenceAdmissionV1, gathered evidence, approval, or proof. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not bypass host-owned evidence admission. The owner captures and re-reads complete bytes; do not claim persistence.";
+    "When SpecificationV1 is supplied, fully read both prior-specification and plan-specification-source-index from their exact input_artifacts refs. The PlanSpecificationSourceIndexV1 entries are the complete and only source_item_coverage index namespace, with exact source IDs, JSON-pointer locators and digest lineage; source bytes remain authoritative. Never reconstruct, summarize, truncate or inline its rows into task, metadata or context. If either required ref is absent, return missing_input:. artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. If an exact EvidenceContextV1 is supplied, read it and any needed source_ref artifacts through artifact_read; treat it only as contextual input and never copy the packet into task prose or relabel it as native EvidenceAdmissionV1, gathered evidence, approval, or proof. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they must not bypass host-owned evidence admission. On repair, the latest same-run sealed StrategyV2 is the exact previously reviewed product; use it and the latest reports from both review stages to fix the whole reported contract, not just one example. Reports about earlier product versions are historical feedback, never approval or evidence for a newly sealed product. Recheck the current sealed product; a current-product Vera PASS and its host validity receipt support validity only, not automatic quality approval. The owner captures and re-reads complete bytes; do not claim persistence.";
   switch (state) {
     case "orienting_strategy":
       return [
         common,
-        "Orient only. Map the exact request's goal, current state, desired outcomes, hard constraints, non-goals, prior decisions, material uncertainties, and actual causal, temporal, resource, and informational dependencies. Produce a distinct orientation artifact. Do not emit executor tasks, approve, mutate, or execute.",
+        "Orient only. Map the exact request's goal, current state, desired outcomes, hard constraints, non-goals, prior decisions, material uncertainties, and actual causal, temporal, resource, and informational dependencies. When SpecificationV1 is present, state its profile and intended use; map planning scope to its objectives and requirements; preserve assumptions and standards status; and classify material request/specification incompatibilities without rewriting either source. Caller-only or normative conflicts are not evidence gaps and must fail closed rather than produce a misleading ready strategy. Produce a distinct orientation artifact. Do not revise the specification, emit executor tasks, approve, mutate, or execute.",
         "Emit one closed gap classification in SUMMARY. basis_sufficient is orientation_complete=true/gap_kind=none/repair_owner=none. Only one concrete strategy-blocking fact that could change readiness, dependencies, blockers, or contingencies may use orientation_complete=false/gap_kind=evidence_gap/repair_owner=echo. Never emit a target state.",
       ].join("\n\n");
     case "gathering_strategy_evidence":
       return [
         common,
-        "Resolve only the exact host-admitted strategy-blocking gap. When compatible with caller constraints, use narrowly targeted read-only local inspection or web retrieval only for that gap; do not broaden into open-ended research, use memory as evidence acquisition, mutate anything, or execute application business logic. Record a precise source locator for every acquired item (a path plus line/range, or a URL plus relevant section and date), distinguish source-backed findings from inference, and report the gap honestly as unresolved when evidence is unavailable, conflicting, disallowed, or the bounded budget is exhausted. Do not design the strategy, taskify, approve, mutate, or execute.",
+        "Resolve only the exact host-admitted strategy-blocking gap. When compatible with caller constraints, use narrowly targeted read-only local inspection or web retrieval only for that gap; do not broaden into open-ended research, use memory as evidence acquisition, mutate anything, revise a supplied SpecificationV1, choose its profile, or treat external text as a new requirement. Record a precise source locator for every acquired item, distinguish source-backed findings from inference, and report the gap honestly as unresolved when evidence is unavailable, conflicting, disallowed, or the bounded budget is exhausted. Do not design the strategy, taskify, approve, mutate, or execute.",
       ].join("\n\n");
     case "strategizing":
       return [
         common,
-        `MECHANICALLY_PROJECTED_STRATEGY_DRAFT_CONTRACT:${strategyDraftPromptContract()}`,
-        "Read the exact PlanRequestV1 directly; orientation, admitted evidence, and optional GroundedSynthesisV1, DecisionV2, or EvidenceContextV1 inputs are supporting evidence, not authority. EvidenceContext remains contextual input, not native evidence admission or proof. Produce one complete replacement StrategyDraftV1 covering outcomes, meaningful dependencies, assumptions and risks, contingencies, trade-offs, decision points, and disposition while preserving implementation freedom. Plan only; do not taskify, approve, mutate, or execute.",
+        `MECHANICALLY_PROJECTED_STRATEGY_DRAFT_CONTRACT:${strategyDraftV2PromptContract()}`,
+        "Read the exact PlanRequestV1 directly. When exact SpecificationV1 is supplied, treat its requirements, acceptance conditions, scope, non-goals, constraints, standards, assumptions, risks, and domain semantics as authoritative for the defined subject while the Plan request remains authoritative for this planning assignment. The exact PlanSpecificationSourceIndexV1 artifact is the complete and only index namespace for source_item_coverage; match those exact IDs and never index objectives or acceptance criteria. Orientation, admitted evidence, GroundedSynthesisV1, DecisionV2, and EvidenceContextV1 are supporting evidence, not authority to rewrite either source. Produce one complete replacement StrategyDraftV2 with generic source-item coverage and derived-need rationales. Without a specification, emit empty source coverage and unsupported-element collections. Plan only; do not revise the specification, taskify, approve, mutate, or execute.",
       ].join("\n\n");
     case "verifying_strategy":
       return [
         common,
-        "Verify the exact latest sealed StrategyV1 against the exact PlanRequestV1, Piper orientation, Piper draft, optional admitted evidence, and every imported source ref. Check goal/outcome coverage, current-state and source fidelity, hard constraints, non-goals, prior decisions, dependencies, assumptions, blockers, disposition consistency, no manufactured executor decomposition, no taskification, and no execution. PASS only when valid.",
-        "On FAIL emit exactly one gap_kind and repair_owner: evidence_gap/echo, analysis_gap/piper, or product_gap/piper. On PASS use none/none. Never emit a target state.",
+        "Verify the exact latest sealed StrategyV2 against the exact PlanRequestV1, optional SpecificationV1, Piper orientation and draft, optional admitted evidence, and every imported source ref. Check request/specification compatibility, mandatory requirement and acceptance fidelity, constraint/non-goal/standard preservation, complete forward and backward source traceability, unsupported-scope rationales, goal/outcome coverage, dependencies, assumptions, blockers, disposition consistency, no silent specification revision, no taskification, and no execution. Without a specification, preserve current standalone Plan validity semantics. PASS only when valid.",
+        "On FAIL emit exactly one gap_kind and repair_owner: evidence_gap/echo, analysis_gap/piper, or product_gap/piper. On PASS use none/none. If the available evidence cannot establish validity, emit UNVERIFIABLE/verification_incomplete/none with findings and evidence limitations, never an author repair. A valid blocked strategy is distinct from verification inability. HOST_MECHANICAL_CHECKS is scoped host evidence, not semantic approval or proof of effect absence. Integrity/envelope artifacts are post-review and are not author deliverables. Never emit a target state.",
       ].join("\n\n");
     case "critiquing_strategy":
       return [
         common,
-        "Critique the exact Vera-passed latest StrategyV1 for strategic coherence, risk and contingency quality, useful granularity, implementation freedom, clarity, and non-misleading framing. The prior host validity receipt is evidence, not authority to overlook defects.",
+        "Critique the exact Vera-passed latest StrategyV2 for strategic coherence, risk and contingency quality, useful granularity, implementation freedom, clarity, and non-misleading framing. The prior host validity receipt is evidence, not authority to overlook defects.",
         "APPROVE only with no major or critical finding; minor nonblocking findings may remain. NEEDS_REVISION emits exactly one gap_kind and repair_owner: evidence_gap/echo, analysis_gap/piper, or product_gap/piper. APPROVE uses none/none. Never emit a target state.",
       ].join("\n\n");
   }
@@ -944,11 +1250,8 @@ function persistStrategyEvidenceAdmission(input: {
   return { ...persisted, value };
 }
 
-function strategySealFeedbackOperationId(context: RunContext): string {
-  return `strategy-seal-feedback:${sha256(context.identity.run_id).slice(0, 32)}`;
-}
-
-function readStrategySealFeedback(
+/** Legacy feedback reader for historical artifacts; new correction authority is SealDiagnosticV1. */
+export function readStrategySealFeedback(
   store: ArtifactHostStore,
   artifact: ArtifactRef
 ): StrategySealFeedbackV1 {
@@ -966,167 +1269,61 @@ function readStrategySealFeedback(
   return feedback;
 }
 
-function persistStrategySealFeedback(input: {
-  readonly context: RunContext;
-  readonly store: ArtifactHostStore;
-  readonly draftArtifact: ArtifactRef;
-  readonly failure: StrategyDraftValidationError;
-}): { readonly artifact: ArtifactRef; readonly added: boolean } {
-  const feedback = validateStrategySealFeedback({
-    schema_id: "penny.strategy-seal-feedback.v1",
-    schema_version: 1,
-    attempt: 1,
-    rejected_draft_artifact_id: input.draftArtifact.artifact_id,
-    failure_class: input.failure.failureClass,
-    issues: input.failure.issues,
-  });
-  const operationId = strategySealFeedbackOperationId(input.context);
-  const metadata: OutputArtifactMetadata = {
-    schema_version: 2,
-    run_id: input.context.identity.run_id,
-    phase: "sealing_strategy",
-    branch_id: null,
-    kind: "strategy-seal-feedback",
-    operation_id: operationId,
-    version: 1,
-    producer: "host:strategy-sealer",
-    media_type: "application/json",
-    content_schema: { schema_id: "penny.strategy-seal-feedback.v1", schema_version: 1 },
-    parent_ref: null,
-    upstream_refs: [input.draftArtifact],
-  };
-  const existing = input.store.refFor(
-    input.context.identity.run_id,
-    "sealing_strategy",
-    null,
-    "strategy-seal-feedback",
-    operationId,
-    1
-  );
-  const content = canonicalJson(feedback);
-  const artifact = existing ?? input.store.persist({ metadata, content });
-  if (
-    canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
-    input.store.readById(artifact.artifact_id).toString("utf8") !== content ||
-    canonicalJson(readStrategySealFeedback(input.store, artifact)) !== canonicalJson(feedback)
-  ) {
-    throw new Error("StrategySealFeedbackV1 deterministic persistence diverged");
+function boundedSealDetail(issue: string): string {
+  if (Buffer.byteLength(issue, "utf8") <= 512) return issue;
+  let detail = "";
+  let bytes = 0;
+  for (const character of issue) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > 509) break;
+    detail += character;
+    bytes += size;
   }
-  const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("StrategySealFeedbackV1 manifest re-read failed");
-  input.store.select(reread);
-  return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
+  return `${detail}…`;
 }
 
-function persistSealedStrategy(input: {
+function sealIssues(error: { failureClass: string; issues: readonly string[] }): SealIssueV1[] {
+  // Keep diagnostics bounded and avoid copying an authored payload into a public error.
+  if (error.issues.length === 0 || error.issues.length > 1024)
+    throw new Error("seal diagnostic issue bound violated");
+  return error.issues.map((issue, index) => ({
+    code: `${error.failureClass}_${index}`,
+    path: "/draft",
+    detail: boundedSealDetail(issue),
+    source_ordinals: [],
+  }));
+}
+
+/** Seal-attempt-compatible adapter for the artifact owner's revision-chain CAS.
+ * It requires one stable operation ID per phase/kind; the checkpointed anchor/draft
+ * determine the next revision, and exact metadata/readback enforce adopt-or-conflict. */
+function persistSealOperation(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
-  readonly requestArtifact: ArtifactRef;
-  readonly orientationArtifact: ArtifactRef;
-  readonly admissionArtifact: ArtifactRef;
-  readonly evidenceRefs: readonly ArtifactRef[];
-  readonly inputRefs: readonly ArtifactRef[];
-  readonly draftArtifact: ArtifactRef;
-  readonly draft: StrategyDraftV1;
-}): { readonly artifact: ArtifactRef; readonly added: boolean } {
-  const request = canonicalPlanRequest(input.store, input.context);
-  const draftBytes = input.store.readById(input.draftArtifact.artifact_id);
-  const strategy = sealStrategy({
-    request,
-    draft: input.draft,
-    draftBytes,
-    requestSha256: planRequestSha256(request),
-    sourceRequestArtifactId: input.requestArtifact.artifact_id,
-    sourceDraftArtifactId: input.draftArtifact.artifact_id,
-    exactInputArtifactIds: input.inputRefs.map((artifact) => artifact.artifact_id),
-  });
-  const content = canonicalJson(strategy);
-  const operationId = `sealed-strategy:${sha256(input.context.identity.run_id).slice(0, 32)}`;
-  const parent = latestStrategyArtifact(input.context);
-  const storedVersion = input.store.lastVersion(
-    input.context.identity.run_id,
-    "sealing_strategy",
-    null,
-    "strategy",
-    operationId
-  );
-  const upstreamRefs = [
-    input.requestArtifact,
-    input.orientationArtifact,
-    input.admissionArtifact,
-    ...input.evidenceRefs,
-    ...input.inputRefs,
-    input.draftArtifact,
-  ];
-  const interrupted =
-    storedVersion === 0
-      ? null
-      : input.store.refFor(
-          input.context.identity.run_id,
-          "sealing_strategy",
-          null,
-          "strategy",
-          operationId,
-          storedVersion
-        );
-  if (
-    interrupted !== null &&
-    input.store.readById(interrupted.artifact_id).toString("utf8") === content &&
-    canonicalJson(input.store.metadata(interrupted).upstream_refs) === canonicalJson(upstreamRefs)
-  ) {
-    input.store.select(interrupted);
-    validateCanonicalStrategyBytes(input.store.readById(interrupted.artifact_id), interrupted);
-    return { artifact: interrupted, added: addSelectedArtifact(input.context, interrupted) };
-  }
-  const version = Math.max(parent?.version ?? 0, storedVersion) + 1;
-  const parentRef =
-    version === 1
-      ? null
-      : input.store.refFor(
-          input.context.identity.run_id,
-          "sealing_strategy",
-          null,
-          "strategy",
-          operationId,
-          version - 1
-        );
-  if (version > 1 && parentRef === null) {
-    throw new Error("StrategyV1 revision chain is missing its preceding product");
-  }
-  const metadata: OutputArtifactMetadata = {
-    schema_version: 2,
+  readonly draft: ArtifactRef;
+  readonly anchor: ArtifactRef | null;
+  readonly previous: ReturnType<typeof currentSealDiagnostic>;
+  readonly project: (bytes: Buffer) => SealProjectionV1;
+  readonly validateProduct: (bytes: Buffer, ref: ArtifactRef) => void;
+}):
+  | { status: "sealed"; product_ref: ArtifactRef }
+  | { status: "rejected"; diagnostic_ref: ArtifactRef; diagnostic: SealDiagnosticV1 } {
+  const result = sealAttempt({
+    store: input.store,
+    policy: runSealPolicy(input.context, PLAN_SEAL_POLICY),
+    registered_policy_sha256: sealPolicySha256(runSealPolicy(input.context, PLAN_SEAL_POLICY)),
     run_id: input.context.identity.run_id,
-    phase: "sealing_strategy",
     branch_id: null,
-    kind: "strategy",
-    operation_id: operationId,
-    version,
-    producer: "host:strategy-sealer",
-    media_type: "application/json",
-    content_schema: { schema_id: "penny.strategy.v1", schema_version: 1 },
-    parent_ref: parentRef,
-    upstream_refs: upstreamRefs,
-  };
-  const orphan = input.store.refFor(
-    input.context.identity.run_id,
-    "sealing_strategy",
-    null,
-    "strategy",
-    operationId,
-    version
-  );
-  const artifact = orphan ?? input.store.persist({ metadata, content });
-  if (
-    canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
-    input.store.readById(artifact.artifact_id).toString("utf8") !== content
-  ) {
-    throw new Error("StrategyV1 host artifact diverged from deterministic sealing");
-  }
-  const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("StrategyV1 host artifact failed manifest re-read");
-  input.store.select(reread);
-  validateCanonicalStrategyBytes(input.store.readById(reread.artifact_id), reread);
-  return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
+    phase: runSealPolicy(input.context, PLAN_SEAL_POLICY).seal_phase,
+    draft_ref: input.draft,
+    epoch_anchor_ref: input.anchor,
+    previous_diagnostic_ref: input.previous?.ref ?? null,
+    rejection_ordinal: input.previous?.diagnostic.rejection_ordinal ?? 0,
+    project: input.project,
+    validate_product_bytes: input.validateProduct,
+  });
+  if (result.status === "fault") throw new Error(`plan seal host fault: ${result.code}`);
+  return result;
 }
 
 function eventString(value: JsonValue | undefined): string | undefined {
@@ -1254,12 +1451,16 @@ function currentReviewSubject(context: RunContext): ReviewSubjectV1 {
   }
   const evidenceRefs = uniqueRefs([latestEvidenceArtifact(context)]);
   const importedInputRefs = [...exactPlanInputRefs(context)];
+  const assuranceRef = context.selectedArtifacts.find(
+    (ref) => ref.kind === "composition-assurance"
+  );
   return {
     product_ref: product,
-    product_schema_id: "penny.strategy.v1",
-    product_schema_version: 1,
+    product_schema_id: "penny.strategy.v2",
+    product_schema_version: 2,
     product_sha256: product.content_digest,
     request_ref: request,
+    ...(assuranceRef === undefined ? {} : { specification_assurance_ref: assuranceRef }),
     analysis_ref: orientation,
     admission_ref: admission,
     draft_ref: draft,
@@ -1267,6 +1468,7 @@ function currentReviewSubject(context: RunContext): ReviewSubjectV1 {
     imported_input_refs: importedInputRefs,
     admitted_upstream_sha256: reviewSubjectUpstreamSha256({
       request_ref: request,
+      ...(assuranceRef === undefined ? {} : { specification_assurance_ref: assuranceRef }),
       analysis_ref: orientation,
       admission_ref: admission,
       draft_ref: draft,
@@ -1392,46 +1594,9 @@ function exactExecutionReceiptIds(input: {
   if (new Set(artifactIds).size !== artifactIds.length) {
     throw new Error("strategy execution-evidence artifacts must be unique");
   }
-  const events = input.checkpointer.events(input.context.identity.run_id);
-  const groups = input.artifacts.map((artifact) => {
-    const matches: string[][] = [];
-    for (const event of events) {
-      const acceptedId = eventString(event.payload.receipt_id);
-      if (acceptedId !== undefined) {
-        const result = input.checkpointer.receiptResultById(acceptedId);
-        if (
-          result !== undefined &&
-          result.worker_receipt.receipt_id === acceptedId &&
-          canonicalJson(result.output_artifact) === canonicalJson(artifact)
-        ) {
-          matches.push([acceptedId]);
-        }
-      }
-      const sourceId = eventString(event.payload.source_receipt_id);
-      const repairId = eventString(event.payload.repair_receipt_id);
-      if (sourceId !== undefined && repairId !== undefined) {
-        const source = input.checkpointer.receiptResultById(sourceId);
-        const repair = input.checkpointer.receiptResultById(repairId);
-        if (
-          source !== undefined &&
-          repair !== undefined &&
-          source.worker_receipt.receipt_id === sourceId &&
-          repair.worker_receipt.receipt_id === repairId &&
-          canonicalJson(source.output_artifact) === canonicalJson(artifact) &&
-          repair.output_artifact.kind === "routing-metadata"
-        ) {
-          matches.push([sourceId, repairId]);
-        }
-      }
-    }
-    if (matches.length !== 1) {
-      throw new Error(
-        `strategy artifact '${artifact.artifact_id}' requires exactly one accepted execution-evidence group`
-      );
-    }
-    return matches[0] ?? [];
-  });
-  const ids = groups.flat();
+  const ids = input.artifacts.flatMap(
+    (artifact) => exactAcceptedExecutionGroup({ ...input, artifact }).receiptIds
+  );
   if (new Set(ids).size !== ids.length) {
     throw new Error("strategy execution receipt IDs must map one-to-one to exact artifacts");
   }
@@ -1473,6 +1638,15 @@ function ensureProductIntegrity(input: {
   readonly added: boolean;
 } {
   const subject = currentReviewSubject(input.context);
+  const assuranceRef = assertSelectedSpecificationAssurance({
+    context: input.context,
+    reader: input.store,
+    checkpointer: input.checkpointer,
+    native_request_ref: subject.request_ref,
+    imported_input_refs: subject.imported_input_refs,
+  });
+  if (canonicalJson(subject.specification_assurance_ref) !== canonicalJson(assuranceRef))
+    throw new Error("strategy product integrity lacks exact assurance policy");
   assertEvidenceAdmissionExecutionBinding({
     context: input.context,
     reader: input.store,
@@ -1509,15 +1683,28 @@ function ensureProductIntegrity(input: {
   if (executionReceiptIds.length < 4 + subject.evidence_refs.length) {
     throw new Error("strategy product integrity lacks exact signed worker execution evidence");
   }
-  validateCanonicalStrategyBytes(
+  const specification = planSpecification(input.store, input.context);
+  validateCanonicalStrategyV2Bytes(
     input.store.readById(subject.product_ref.artifact_id),
-    subject.product_ref
+    subject.product_ref,
+    {
+      ...(specification === undefined
+        ? {}
+        : {
+            specification: specification.value,
+            specificationArtifactId: specification.ref.artifact_id,
+          }),
+      strictSourceValidation: true,
+    }
   );
   const body: Omit<StrategyProductIntegrityV1, "integrity_id"> = {
     schema_id: "penny.strategy-product-integrity.v1",
     schema_version: 1,
     status: "PASS",
     request_ref: subject.request_ref,
+    ...(subject.specification_assurance_ref === undefined
+      ? {}
+      : { specification_assurance_ref: subject.specification_assurance_ref }),
     orientation_ref: subject.analysis_ref,
     admission_ref: subject.admission_ref,
     evidence_refs: subject.evidence_refs,
@@ -1597,6 +1784,9 @@ function ensureProductEnvelope(input: {
     status: "complete",
     strategy_ref: subject.product_ref,
     request_ref: subject.request_ref,
+    ...(subject.specification_assurance_ref === undefined
+      ? {}
+      : { specification_assurance_ref: subject.specification_assurance_ref }),
     orientation_ref: subject.analysis_ref,
     admission_ref: subject.admission_ref,
     evidence_refs: subject.evidence_refs,
@@ -1659,8 +1849,10 @@ function gapOwner(kind: RepairGapKind): RepairOwner {
 function reviewEvaluation(
   state: ReviewState,
   details: Record<string, JsonValue>
-): EvaluationResultV2 | null {
+): EvaluationResult | null {
   const verdict = details.verdict;
+  // Inability to verify is not a repairable defect in an otherwise valid product.
+  if (state === "verifying_strategy" && verdict === "UNVERIFIABLE") return null;
   const rawKind = details.gap_kind;
   const rawOwner = details.repair_owner;
   const findings =
@@ -1727,11 +1919,12 @@ function bestPartial(context: RunContext): ArtifactRef | undefined {
 
 export class PlanPlaybook
   implements
-    PlaybookCoreV1,
+    PlaybookCore,
     HostContinuationCapabilityV1,
     LivenessTerminalCapabilityV1,
     StateAwareRepairCapabilityV1,
     RepairExhaustionCapabilityV1,
+    RepairProgressCapabilityV1,
     RoutingRepairCapabilityV1
 {
   constructor(
@@ -1764,6 +1957,25 @@ export class PlanPlaybook
         : (() => {
             throw new Error(`unknown plan state '${context.stateId}'`);
           })();
+    if (state !== "verifying_strategy")
+      validateSelectedPlanSourceIndex(context, this.artifactStore);
+    let task = taskForState(state);
+    if (state === "verifying_strategy") {
+      try {
+        task += `\n\nHOST_MECHANICAL_CHECKS:${this.mechanicalChecks(context)}`;
+      } catch {
+        return this.terminal(
+          context,
+          "incomplete",
+          false,
+          ["host mechanical validation failed"],
+          undefined,
+          {
+            incomplete_reason: "host_mechanical_validation_failed",
+          }
+        );
+      }
+    }
     const refs = refsForState(context, state);
     const next = validateDirective({
       schema_version: 2,
@@ -1773,10 +1985,10 @@ export class PlanPlaybook
       agent: PLAN_AGENT_BY_STATE[state],
       attempt: context.stepCount,
       trust_profile: context.trustProfile,
-      task: taskForState(context, state),
+      task,
       input_artifacts: {
         schema_version: 2,
-        artifacts: refs.map((ref) => ({ slot: slotForRef(context, ref), ref })),
+        artifacts: refs.map((ref) => ({ slot: slotForRef(ref), ref })),
       },
       output_artifact: outputMetadata(context, state, refs, this.revisions),
     });
@@ -1789,7 +2001,7 @@ export class PlanPlaybook
     _context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResultV2 | null {
+  ): EvaluationResult | null {
     if (state === "orienting_strategy") {
       if (details.orientation_complete === true) {
         if (details.gap_kind !== "none" || details.repair_owner !== "none") {
@@ -1821,10 +2033,210 @@ export class PlanPlaybook
     return null;
   }
 
+  /** Recomputed before dispatch and recovery. The signed task hash binds this exact
+   * product/source statement; none of these checks establishes semantic approval or
+   * absence of external effects. Post-review receipts/envelopes do not exist yet. */
+  private mechanicalChecks(context: RunContext): string {
+    const store = this.artifactStore;
+    const checkpointer = this.checkpointer;
+    if (store === undefined || checkpointer === undefined)
+      throw new Error("host mechanical validation dependencies unavailable");
+    const subject = currentReviewSubject(context);
+    const sourceIndex = validateSelectedPlanSourceIndex(context, store);
+    const refs = uniqueRefs([...reviewSubjectUpstreamRefs(subject), sourceIndex]);
+    for (const ref of refs) {
+      const bytes = store.readById(ref.artifact_id);
+      if (
+        canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+        bytes.byteLength !== ref.byte_length ||
+        sha256(bytes) !== ref.content_digest
+      )
+        throw new Error("host mechanical input custody mismatch");
+    }
+    const request = canonicalPlanRequest(store, context);
+    const imported = exactPlanInputRefs(context);
+    const specification = planSpecification(store, context);
+    const sourceOptions =
+      specification === undefined
+        ? {}
+        : {
+            specification: specification.value,
+            specificationArtifactId: specification.ref.artifact_id,
+          };
+    const draftBytes = store.readById(subject.draft_ref.artifact_id);
+    const draft = parseStrategyDraftV2(draftBytes, { request, ...sourceOptions }).draft;
+    const strategy = validateCanonicalStrategyV2Bytes(
+      store.readById(subject.product_ref.artifact_id),
+      subject.product_ref,
+      {
+        ...sourceOptions,
+        strictSourceValidation: true,
+      }
+    );
+    assertStrategyV2Lineage({
+      strategy,
+      request,
+      draft,
+      draftBytes,
+      requestArtifactId: subject.request_ref.artifact_id,
+      draftArtifactId: subject.draft_ref.artifact_id,
+      exactInputArtifactIds: imported.map((ref) => ref.artifact_id),
+      ...sourceOptions,
+    });
+    const assuranceRef = assertSelectedSpecificationAssurance({
+      context,
+      reader: store,
+      checkpointer,
+      native_request_ref: subject.request_ref,
+      imported_input_refs: imported,
+    });
+    if (canonicalJson(subject.specification_assurance_ref) !== canonicalJson(assuranceRef))
+      throw new Error("mechanical checks lack exact assurance policy");
+    const admission = assertEvidenceAdmissionExecutionBinding({
+      context,
+      reader: store,
+      checkpointer,
+      admissionRef: subject.admission_ref,
+      orientationRef: subject.analysis_ref,
+    });
+    if (admission.evidence_required && subject.evidence_refs.length !== 1)
+      throw new Error("host mechanical admission lacks evidence");
+    return canonicalJson({
+      schema_version: 1,
+      product_ref: subject.product_ref,
+      source_refs: refs.filter((ref) => ref.artifact_id !== subject.product_ref.artifact_id),
+      checks: [
+        "exact_ref_bytes_sha256",
+        "canonical_request",
+        "parsed_draft_schema_and_coverage",
+        "canonical_strategy_and_source_coverage",
+        "exact_raw_draft_lineage",
+        ...(sourceIndex === undefined ? [] : ["specification_source_index"]),
+        "specification_assurance_binding",
+        "accepted_evidence_admission_binding",
+      ],
+      draft_digest: { kind: "raw_strategy_draft_bytes", sha256: sha256(draftBytes) },
+      scope: "host_mechanical_only_not_semantic_or_effect_absence",
+    });
+  }
+
+  /** Measure exact semantic report content, not artifact/revision/receipt identities.
+   * Unparseable source judgment cannot support a recurrence measurement. */
+  private progressReport(
+    context: RunContext,
+    ref: ArtifactRef,
+    schema: TSchema
+  ): JsonValue | undefined {
+    const store = this.artifactStore;
+    if (store === undefined || this.checkpointer === undefined) return undefined;
+    const bytes = store.readById(ref.artifact_id);
+    if (
+      canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+      bytes.byteLength !== ref.byte_length ||
+      sha256(bytes) !== ref.content_digest
+    )
+      return undefined;
+    const { routed } = exactAcceptedExecutionGroup({
+      context,
+      checkpointer: this.checkpointer,
+      artifact: ref,
+    });
+    const source = validateSourceRoutingSummary(bytes, schema, routed);
+    if (source === undefined) return undefined;
+    const lines = bytes.toString("utf8").split("\n");
+    if (lines.at(-1) === "") lines.pop();
+    lines.pop(); // The validator established exactly one final SUMMARY line.
+    const { strategy_delta: _strategyDelta, ...details } = source.details;
+    return { report: lines.join("\n"), confidence: source.confidence, details };
+  }
+
+  repairProgressFingerprint(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>
+  ): string | null {
+    if (state !== "verifying_strategy" && state !== "critiquing_strategy") return null;
+    try {
+      // Request, imported and contextual inputs are frozen for the run. Native analysis,
+      // admission and gathered evidence can change on repair; historical feedback and
+      // host lineage/receipt identities must not manufacture a changed measurement.
+      this.mechanicalChecks(context);
+      const draftRef = latestStrategyDraftArtifact(context);
+      if (draftRef === undefined || this.artifactStore === undefined) return null;
+      const specification = planSpecification(this.artifactStore, context);
+      const draft = parseStrategyDraftV2(this.artifactStore.readById(draftRef.artifact_id), {
+        request: canonicalPlanRequest(this.artifactStore, context),
+        ...(specification === undefined
+          ? {}
+          : {
+              specification: specification.value,
+              specificationArtifactId: specification.ref.artifact_id,
+            }),
+      }).draft;
+      const subject = currentReviewSubject(context);
+      const analysis = this.progressReport(context, subject.analysis_ref, OrientationSummarySchema);
+      const evidence = subject.evidence_refs.map((ref) =>
+        this.progressReport(context, ref, EvidenceSummarySchema)
+      );
+      const validityRef = latestReviewReportArtifact(context, "verifying_strategy");
+      const validity =
+        state === "critiquing_strategy" && validityRef !== undefined
+          ? this.progressReport(context, validityRef, VerificationSummarySchema)
+          : null;
+      if (
+        analysis === undefined ||
+        evidence.some((value) => value === undefined) ||
+        (state === "critiquing_strategy" && (validityRef === undefined || validity === undefined))
+      )
+        return null;
+      const admission = readCanonicalJson(
+        this.artifactStore,
+        subject.admission_ref,
+        validateEvidenceAdmission
+      );
+      const { strategy_delta: _strategyDelta, ...failedChecks } = details;
+      return sha256(
+        canonicalJson({
+          candidate: draft,
+          analysis,
+          evidence,
+          admission: {
+            classification: admission.classification,
+            evidence_required: admission.evidence_required,
+          },
+          validity_review: validity,
+          failed_checks: failedChecks,
+        })
+      );
+    } catch {
+      // Missing/unverifiable measurement is not evidence of a stall (or of success).
+      return null;
+    }
+  }
+
+  terminalizeRepairStall(
+    context: RunContext,
+    state: string,
+    evaluation: EvaluationResult
+  ): Directive {
+    return this.terminal(
+      context,
+      "incomplete",
+      false,
+      [`repair stalled at ${state}:${evaluation.kind}`, ...evaluation.findings],
+      undefined,
+      {
+        incomplete_reason: "repair_stalled",
+        stalled: true,
+        stall_reason: `${state}:${evaluation.kind}`,
+      }
+    );
+  }
+
   terminalizeRepairExhaustion(
     context: RunContext,
     state: string,
-    evaluation: EvaluationResultV2
+    evaluation: EvaluationResult
   ): Directive {
     return this.terminal(
       context,
@@ -1844,7 +2256,7 @@ export class PlanPlaybook
     context: RunContext,
     details: Record<string, JsonValue>,
     _confidence: Confidence
-  ): PlaybookStepOutcomeV1 {
+  ): PlaybookStepOutcome {
     switch (context.stateId) {
       case "orienting_strategy":
         if (details.orientation_complete !== true) {
@@ -1860,6 +2272,20 @@ export class PlanPlaybook
         context.transition("sealing_strategy");
         return hostContinuation();
       case "verifying_strategy":
+        if (details.verdict === "UNVERIFIABLE") {
+          return this.terminal(
+            context,
+            "incomplete",
+            false,
+            ["verification incomplete"],
+            undefined,
+            {
+              incomplete_reason: "verification_incomplete",
+              verification_findings: details.findings ?? [],
+              evidence_limitations: details.evidence ?? [],
+            }
+          );
+        }
         if (details.verdict !== "PASS") {
           throw new Error("Vera gap reached happy routing without engine-owned repair");
         }
@@ -1887,7 +2313,7 @@ export class PlanPlaybook
     ) {
       throw new Error("routing_repair_binding_invalid");
     }
-    if (context.stepCount >= context.maxSteps) {
+    if (context.maxSteps !== null && context.stepCount >= context.maxSteps) {
       throw new Error(`run exceeded max_steps=${context.maxSteps}`);
     }
     const binding = {
@@ -1953,6 +2379,41 @@ export class PlanPlaybook
     if (pending.execution_purpose === "routing_repair") return pending;
     if (!isPlanWorkerState(pending.state_id)) return pending;
     const state = pending.state_id;
+    if (state === "verifying_strategy") {
+      try {
+        const statement = `HOST_MECHANICAL_CHECKS:${this.mechanicalChecks(context)}`;
+        const lines = pending.task
+          .split("\n")
+          .filter((line) => line.includes("HOST_MECHANICAL_CHECKS:"));
+        if (lines.length !== 1 || lines[0] !== statement)
+          throw new Error("mechanical statement diverged");
+      } catch {
+        return this.terminal(
+          context,
+          "incomplete",
+          false,
+          ["host mechanical validation failed"],
+          undefined,
+          {
+            incomplete_reason: "host_mechanical_validation_failed",
+          }
+        );
+      }
+    }
+    const indexRef = validateSelectedPlanSourceIndex(context, this.artifactStore);
+    if (indexRef !== undefined) {
+      for (const required of uniqueRefs([indexRef, planSpecificationRef(context)])) {
+        if (
+          !pending.input_artifacts.artifacts.some(
+            (entry) =>
+              entry.slot === slotForRef(required) &&
+              canonicalJson(entry.ref) === canonicalJson(required)
+          )
+        ) {
+          throw new Error("pending Plan directive lost its exact specification/source-index input");
+        }
+      }
+    }
     return validateDirective({
       ...pending,
       output_artifact: outputMetadata(
@@ -2159,24 +2620,101 @@ export class PlanPlaybook
     }
     const inputRefs = exactPlanInputRefs(context);
     const evidenceRefs = uniqueRefs([latestEvidenceArtifact(context)]);
+    const admissionArtifact = latestEvidenceAdmissionArtifact(context);
+    if (admissionArtifact === undefined) throw new Error("exact evidence admission is absent");
+    // Host operands are trusted exact inputs. A bad request/import is not an author retry.
     const request = canonicalPlanRequest(store, context);
-    let draft: StrategyDraftV1;
-    try {
-      draft = parseStrategyDraft(store.readById(draftArtifact.artifact_id), { request }).draft;
-    } catch (error) {
-      if (!(error instanceof StrategyDraftValidationError)) throw error;
-      if (selectedStrategySealFeedbackArtifact(context) !== undefined) {
+    const specification = planSpecification(store, context);
+    const anchor = latestStrategyArtifact(context);
+    const previous = currentSealDiagnostic(context, store);
+    if (previous !== undefined && previous.diagnostic.disposition !== "correction_offered")
+      throw new Error("exhausted seal diagnostic cannot authorize another draft");
+    const attempt = persistSealOperation({
+      context,
+      store,
+      draft: draftArtifact,
+      anchor: anchor ?? null,
+      previous,
+      project: (bytes) => {
+        try {
+          const draft = parseStrategyDraftV2(bytes, {
+            request,
+            ...(specification === undefined
+              ? {}
+              : {
+                  specification: specification.value,
+                  specificationArtifactId: specification.ref.artifact_id,
+                }),
+          }).draft;
+          const product = sealStrategyV2({
+            request,
+            draft,
+            draftBytes: bytes,
+            requestSha256: planRequestSha256(request),
+            sourceRequestArtifactId: requestArtifact.artifact_id,
+            sourceDraftArtifactId: draftArtifact.artifact_id,
+            exactInputArtifactIds: inputRefs.map((ref) => ref.artifact_id),
+            ...(specification === undefined
+              ? {}
+              : {
+                  specification: specification.value,
+                  specificationArtifactId: specification.ref.artifact_id,
+                }),
+          });
+          return {
+            status: "sealed",
+            content: canonicalJson(product),
+            content_schema: { schema_id: "penny.strategy.v2", schema_version: 2 },
+            upstream_refs: [
+              requestArtifact,
+              orientationArtifact,
+              admissionArtifact,
+              ...evidenceRefs,
+              ...inputRefs,
+            ],
+            revision_parent_ref: anchor ?? null,
+          };
+        } catch (error) {
+          if (!(error instanceof StrategyDraftValidationError)) throw error;
+
+          return {
+            status: "rejected",
+            failure_class: error.failureClass,
+            issues: sealIssues(error),
+          };
+        }
+      },
+      validateProduct: (bytes, ref) => {
+        validateCanonicalStrategyV2Bytes(bytes, ref, {
+          ...(specification === undefined
+            ? {}
+            : {
+                specification: specification.value,
+                specificationArtifactId: specification.ref.artifact_id,
+              }),
+          strictSourceValidation: true,
+        });
+      },
+    });
+    if (attempt.status === "rejected") {
+      const added = addSelectedArtifact(context, attempt.diagnostic_ref);
+      if (added) this.hostFault?.("sealing_strategy:feedback-persistence");
+      if (attempt.diagnostic.disposition === "exhausted") {
         return {
           event_type: "plan_seal_repair_exhausted",
           payload: {
             run_id: context.identity.run_id,
-            failure_sha256: sha256(canonicalJson(error.issues)),
+            diagnostic_artifact_id: attempt.diagnostic_ref.artifact_id,
+            rejected_draft_artifact_id: draftArtifact.artifact_id,
           },
           directive: this.terminal(
             context,
             "incomplete",
             false,
-            [`seal repair exhausted: ${error.failureClass}`],
+            [
+              `seal repair exhausted: ${attempt.diagnostic.failure_class}`,
+              `latest seal diagnostic: ${attempt.diagnostic_ref.artifact_id}`,
+            ],
             undefined,
             {
               incomplete_reason: "seal_repair_exhausted",
@@ -2186,13 +2724,6 @@ export class PlanPlaybook
           ),
         };
       }
-      const feedback = persistStrategySealFeedback({
-        context,
-        store,
-        draftArtifact,
-        failure: error,
-      });
-      if (feedback.added) this.hostFault?.("sealing_strategy:feedback-persistence");
       context.transition("strategizing");
       const next = this.dispatch(context);
       return {
@@ -2200,27 +2731,13 @@ export class PlanPlaybook
         payload: {
           run_id: context.identity.run_id,
           rejected_draft_artifact_id: draftArtifact.artifact_id,
-          feedback_artifact_id: feedback.artifact.artifact_id,
+          feedback_artifact_id: attempt.diagnostic_ref.artifact_id,
         },
         directive: next,
       };
     }
-    const admissionArtifact = latestEvidenceAdmissionArtifact(context);
-    if (orientationArtifact === undefined || admissionArtifact === undefined) {
-      throw new Error("sealed StrategyV1 requires exact Piper orientation and evidence admission");
-    }
-    const sealed = persistSealedStrategy({
-      context,
-      store,
-      requestArtifact,
-      orientationArtifact,
-      admissionArtifact,
-      evidenceRefs,
-      inputRefs,
-      draftArtifact,
-      draft,
-    });
-    if (sealed.added) this.hostFault?.("sealing_strategy:artifact-persistence");
+    const added = addSelectedArtifact(context, attempt.product_ref);
+    if (added) this.hostFault?.("sealing_strategy:artifact-persistence");
     context.transition("verifying_strategy");
     const next = this.dispatch(context);
     return {
@@ -2228,7 +2745,7 @@ export class PlanPlaybook
       payload: {
         run_id: context.identity.run_id,
         draft_artifact_id: draftArtifact.artifact_id,
-        strategy_artifact_id: sealed.artifact.artifact_id,
+        strategy_artifact_id: attempt.product_ref.artifact_id,
       },
       directive: next,
     };
@@ -2243,13 +2760,24 @@ export class PlanPlaybook
     extraResult: Readonly<Record<string, JsonValue>> = {}
   ): Directive {
     const origin = context.stateId;
-    const output = met ? latestStrategyArtifact(context) : bestPartial(context);
+    const sealFailure =
+      action === "incomplete" && extraResult.incomplete_reason === "seal_repair_exhausted"
+        ? this.artifactStore === undefined
+          ? undefined
+          : currentSealDiagnostic(context, this.artifactStore)
+        : undefined;
+    const output =
+      sealFailure === undefined
+        ? met
+          ? latestStrategyArtifact(context)
+          : bestPartial(context)
+        : latestStrategyDraftArtifact(context);
     if (met && output === undefined) throw new Error("positive plan terminal has no product");
-    const graph = met
-      ? this.positiveTerminalArtifacts(context)
-      : output === undefined
-        ? []
-        : [output];
+    const reports = uniqueRefs([
+      latestReviewReportArtifact(context, "verifying_strategy"),
+      latestReviewReportArtifact(context, "critiquing_strategy"),
+    ]);
+    const graph = met ? this.positiveTerminalArtifacts(context) : uniqueRefs([output, ...reports]);
     context.previousState = origin;
     context.stateId = action;
     context.status = action;
@@ -2267,6 +2795,17 @@ export class PlanPlaybook
         best_partial_artifact_refs: met || output === undefined ? [] : [output],
         execution_started: false,
         execution_authorized: false,
+        ...(sealFailure === undefined
+          ? {}
+          : {
+              seal_diagnostics: sealDiagnosticsProjection(
+                sealFailure.diagnostic,
+                sealFailure.ref,
+                runSealPolicy(context, PLAN_SEAL_POLICY)
+              ),
+              output_artifact_label: "rejected draft (not a sealed product)",
+            }),
+        ...(met ? {} : { feedback_report_refs: reports }),
         ...extraResult,
         ...(liveness === undefined ? {} : { liveness }),
       },
@@ -2298,6 +2837,8 @@ export class PlanPlaybook
     }
     return uniqueRefs([
       subject.request_ref,
+      planSourceIndexRef(context),
+      subject.specification_assurance_ref,
       subject.analysis_ref,
       subject.admission_ref,
       ...subject.evidence_refs,
@@ -2349,8 +2890,10 @@ export function evaluatePlanLatestReviewedStrategyDod(
     ) {
       return { passed: false, evidence_refs: [] };
     }
+    const sourceIndexRef = validateSelectedPlanSourceIndex(input.context, reader);
     const storedRefs = [
       requestRef,
+      ...uniqueRefs([sourceIndexRef]),
       orientation,
       admission,
       ...uniqueRefs([latestEvidenceArtifact(input.context)]),
@@ -2370,10 +2913,22 @@ export function evaluatePlanLatestReviewedStrategyDod(
     const request = validatePlanRequest(JSON.parse(requestBytes));
     if (canonicalJson(request) !== requestBytes) return { passed: false, evidence_refs: [] };
     const imported = exactPlanInputRefs(input.context);
+    const specification = planSpecification(reader, input.context);
     const draftBytes = reader.readById(draft.artifact_id);
-    const parsedDraft = parseStrategyDraft(draftBytes, { request });
-    const strategy = validateCanonicalStrategyBytes(reader.readById(product.artifact_id), product);
-    assertStrategyLineage({
+    const sourceOptions =
+      specification === undefined
+        ? {}
+        : {
+            specification: specification.value,
+            specificationArtifactId: specification.ref.artifact_id,
+          };
+    const parsedDraft = parseStrategyDraftV2(draftBytes, { request, ...sourceOptions });
+    const strategy = validateCanonicalStrategyV2Bytes(
+      reader.readById(product.artifact_id),
+      product,
+      { ...sourceOptions, strictSourceValidation: true }
+    );
+    assertStrategyV2Lineage({
       strategy,
       request,
       requestArtifactId: requestRef.artifact_id,
@@ -2381,6 +2936,7 @@ export function evaluatePlanLatestReviewedStrategyDod(
       draft: parsedDraft.draft,
       draftBytes,
       exactInputArtifactIds: imported.map((ref) => ref.artifact_id),
+      ...sourceOptions,
     });
     const validityRef = latestReviewReceiptArtifact(input.context, "validity");
     const qualityRef = latestReviewReceiptArtifact(input.context, "quality");
@@ -2399,6 +2955,15 @@ export function evaluatePlanLatestReviewedStrategyDod(
     const integrity = readCanonicalJson(reader, integrityRef, validateStrategyProductIntegrity);
     const envelope = readCanonicalJson(reader, envelopeRef, validateStrategyProductEnvelope);
     const subject = currentReviewSubject(input.context);
+    const assuranceRef = assertSelectedSpecificationAssurance({
+      context: input.context,
+      reader,
+      checkpointer: input.checkpointer,
+      native_request_ref: subject.request_ref,
+      imported_input_refs: subject.imported_input_refs,
+    });
+    if (canonicalJson(subject.specification_assurance_ref) !== canonicalJson(assuranceRef))
+      return { passed: false, evidence_refs: [] };
     const admissionValue = assertEvidenceAdmissionExecutionBinding({
       context: input.context,
       reader,
@@ -2425,6 +2990,7 @@ export function evaluatePlanLatestReviewedStrategyDod(
       canonicalJson(quality.subject) !== canonicalJson(subject) ||
       canonicalJson(quality.prior_review_receipt_ref) !== canonicalJson(validityRef) ||
       canonicalJson(integrity.request_ref) !== canonicalJson(subject.request_ref) ||
+      canonicalJson(integrity.specification_assurance_ref) !== canonicalJson(assuranceRef) ||
       canonicalJson(integrity.orientation_ref) !== canonicalJson(subject.analysis_ref) ||
       canonicalJson(integrity.admission_ref) !== canonicalJson(subject.admission_ref) ||
       canonicalJson(integrity.evidence_refs) !== canonicalJson(subject.evidence_refs) ||
@@ -2439,6 +3005,7 @@ export function evaluatePlanLatestReviewedStrategyDod(
         canonicalJson(expectedExecutionReceiptIds) ||
       envelope.run_id !== input.context.identity.run_id ||
       canonicalJson(envelope.request_ref) !== canonicalJson(subject.request_ref) ||
+      canonicalJson(envelope.specification_assurance_ref) !== canonicalJson(assuranceRef) ||
       canonicalJson(envelope.orientation_ref) !== canonicalJson(subject.analysis_ref) ||
       canonicalJson(envelope.admission_ref) !== canonicalJson(subject.admission_ref) ||
       canonicalJson(envelope.evidence_refs) !== canonicalJson(subject.evidence_refs) ||
@@ -2462,6 +3029,8 @@ export function evaluatePlanLatestReviewedStrategyDod(
     }
     const expectedRefs = [
       requestRef,
+      ...uniqueRefs([sourceIndexRef]),
+      assuranceRef,
       orientation,
       admission,
       ...subject.evidence_refs,
@@ -2508,7 +3077,7 @@ export const PLAN_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<string, CompletionR
 function planRegistration(input: {
   readonly name: string;
   readonly contract: SkillContract;
-}): PlaybookRegistrationV1 {
+}): PlaybookRegistration {
   const phases = new Map([
     [
       "orienting_strategy",
@@ -2544,6 +3113,7 @@ function planRegistration(input: {
         result_schema_id: "penny.plan.verification-summary.v1",
         result_schema_version: 1 as const,
         schema: VerificationSummarySchema,
+        routing_repair_policy: "preserve_source_summary_v1" as const,
       },
     ],
     [
@@ -2553,6 +3123,7 @@ function planRegistration(input: {
         result_schema_id: "penny.plan.critique-summary.v1",
         result_schema_version: 1 as const,
         schema: CritiqueSummarySchema,
+        routing_repair_policy: "preserve_source_summary_v1" as const,
       },
     ],
   ]);
@@ -2562,26 +3133,33 @@ function planRegistration(input: {
     ingress: "skill",
     start_admission: PLAN_START_ADMISSION,
     caller_documentation: {
-      constraints_schema: PlanRequestConstraintsV1Schema,
+      constraints_schema: PlanInvocationV2Schema,
       example: {
         goal: "Plan the migration.",
         constraints: {
-          schema_version: 1,
-          desired_outcomes: ["A staged migration strategy."],
-          current_state: { status: "provided", facts: ["The current system is running."] },
-          hard_constraints: ["Do not deploy."],
-          non_goals: [],
-          known_uncertainties: [],
-          prior_decisions: [],
+          schema_version: 2,
+          specification_assurance: "reviewed_definition",
+          request: {
+            schema_version: 1,
+            desired_outcomes: ["A staged migration strategy."],
+            current_state: { status: "provided", facts: ["The current system is running."] },
+            hard_constraints: ["Do not deploy."],
+            non_goals: [],
+            known_uncertainties: [],
+            prior_decisions: [],
+          },
         },
       },
-      semantic_caveat: "Produces strategy only; it does not taskify or execute the strategy.",
+      semantic_caveat:
+        "Produces strategy only; it does not taskify or execute the strategy. With no SpecificationV1 input, assurance is recorded as not_applicable.",
     },
     liveness: {
       resolver_id: "planLivenessPolicy",
       resolve: () => PLAN_LIVENESS_POLICY,
       thinking_policy: "agent_ssot",
     },
+    repair_progress_policy: "exact_fingerprint_v1",
+    seal_policy: PLAN_SEAL_POLICY,
     host_states: ["strategy_evidence_gate", "sealing_strategy", "admitting_strategy"],
     worker: {
       kind: "catalog-agent",

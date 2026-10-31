@@ -6,18 +6,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  createAgentSession,
-  SessionManager,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   createWorkerResourceLoader,
   initializePennyState,
   parseSsotTools,
-} from "@penny/orchestration/source";
-import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+} from "@penny/orchestration";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface SpawnCapture {
   readonly mode: "single" | "parallel" | "chain";
@@ -38,12 +33,9 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: mockSpawn,
 }));
 
-import { registerTool } from "../../../../lib/pi-tool-registration.js";
-import {
-  createTestExtensionApi,
-  createTestToolInfos,
-  isRecord,
-} from "../../../../lib/tests/test-narrowers.js";
+import { unavailableMemoryReplacement } from "../../../../../apps/orchestration/tests/helpers/unavailable-memory-replacement.js";
+import { createTestExtensionApi, createTestToolInfos } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 import subagentExtension from "../../index.js";
 
 const PROJECT_ROOT = path.resolve(
@@ -55,6 +47,11 @@ const PROJECT_ROOT = path.resolve(
   ".."
 );
 const AGENTS_DIR = path.join(PROJECT_ROOT, ".pi", "agents");
+
+// Resource factories load before the dispatch fixture below. Bind their actual
+// project explicitly so this test never depends on inherited operator configuration.
+beforeEach(() => vi.stubEnv("PROJECT_ROOT", PROJECT_ROOT));
+afterEach(() => vi.unstubAllEnvs());
 
 type ProductionMode = SpawnCapture["mode"];
 
@@ -123,33 +120,6 @@ function fakeProcess(agent: string) {
   return processDouble;
 }
 
-function unavailableMemoryExtension(names: readonly string[]) {
-  return (pi: ExtensionAPI): void => {
-    for (const name of names) {
-      registerTool(pi, {
-        name,
-        label: name,
-        description: "Typed unavailable optional-service test provider",
-        parameters: Type.Object({}, { additionalProperties: true }),
-        async execute() {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({
-                  ok: false,
-                  error: { code: "MEMPALACE_UNAVAILABLE", retryable: true },
-                }),
-              },
-            ],
-            details: {},
-          };
-        },
-      });
-    }
-  };
-}
-
 function restoreEnvironment(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
@@ -169,9 +139,18 @@ describe("subagent production-mode exact tool surfaces", () => {
     ];
     expect(memoryNames.length).toBeGreaterThan(0);
 
-    const resourceLoader = await createWorkerResourceLoader(PROJECT_ROOT, [
-      unavailableMemoryExtension(memoryNames),
-    ]);
+    // Replace the exact ambient source before factories run; an additive fixture
+    // duplicates real memory tools and correctly fails closed at SDK registration.
+    const resourceLoader = await createWorkerResourceLoader(
+      PROJECT_ROOT,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [unavailableMemoryReplacement(PROJECT_ROOT, memoryNames)]
+    );
     const activeByAgent = new Map<string, readonly string[]>();
     for (const agent of agents) {
       const declared = declaredByAgent.get(agent);

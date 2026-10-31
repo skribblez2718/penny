@@ -4,10 +4,13 @@ import { chmod, link, lstat, realpath, rename, unlink } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import path from "node:path";
 
+import type { ScaAdapterRegistry } from "./adapters.js";
+import type { ScaJobStore } from "./job-store.js";
 import { validateScaServiceConfig, type ScaServiceConfigInput } from "./config.js";
 import {
   createScaRouter,
   createScaServiceErrorResponse,
+  type ScaRouter,
   type ScaServiceResponseV1,
 } from "./router.js";
 
@@ -25,6 +28,13 @@ export interface ScaServiceHandle {
   activeConnections(): number;
   lastServerError(): Error | null;
   shutdown(): Promise<void>;
+}
+
+export interface ScaServiceRuntimeOptions {
+  readonly adapters?: ScaAdapterRegistry;
+  readonly now?: () => Date;
+  readonly maxRetainedJobs?: number;
+  readonly jobStore?: ScaJobStore;
 }
 
 function currentUserId(): bigint {
@@ -235,9 +245,9 @@ function serializeResponse(response: ScaServiceResponseV1, maxFrameBytes: number
 function attachConnectionHandler(
   server: Server,
   sockets: Set<Socket>,
-  config: ReturnType<typeof validateScaServiceConfig>
+  config: ReturnType<typeof validateScaServiceConfig>,
+  router: ScaRouter
 ): void {
-  const router = createScaRouter({ authenticationToken: config.authenticationToken });
   server.on("connection", (socket) => {
     sockets.add(socket);
     let buffered = Buffer.alloc(0);
@@ -272,12 +282,17 @@ function attachConnectionHandler(
       }
     };
 
-    requestTimer = setTimeout(() => {
-      respond(createScaServiceErrorResponse(null, "timeout", "request timed out"));
-    }, config.requestTimeoutMs);
-    requestTimer.unref();
+    const renewRequestInactivity = (): void => {
+      if (requestTimer !== null) clearTimeout(requestTimer);
+      requestTimer = setTimeout(() => {
+        respond(createScaServiceErrorResponse(null, "timeout", "request became inactive"));
+      }, config.requestTimeoutMs);
+      requestTimer.unref();
+    };
+    renewRequestInactivity();
     socket.on("data", (chunk: Buffer) => {
       if (frameStarted || responseStarted) return;
+      if (chunk.byteLength > 0) renewRequestInactivity();
       const newline = chunk.indexOf(0x0a);
       if (newline === -1) {
         if (buffered.length + chunk.length > config.maxFrameBytes) {
@@ -315,6 +330,10 @@ function attachConnectionHandler(
         return;
       }
       frameStarted = true;
+      if (requestTimer !== null) {
+        clearTimeout(requestTimer);
+        requestTimer = null;
+      }
       socket.pause();
       const frame = Buffer.concat([buffered, chunk.subarray(0, newline)], frameLength);
       buffered = Buffer.alloc(0);
@@ -339,7 +358,10 @@ function attachConnectionHandler(
   });
 }
 
-export async function startScaService(input: ScaServiceConfigInput): Promise<ScaServiceHandle> {
+export async function startScaService(
+  input: ScaServiceConfigInput,
+  runtime: ScaServiceRuntimeOptions = {}
+): Promise<ScaServiceHandle> {
   const config = validateScaServiceConfig(input);
   const directory = path.dirname(config.socketPath);
   const parentIdentity = await assertPrivateSocketDirectory(directory);
@@ -350,8 +372,15 @@ export async function startScaService(input: ScaServiceConfigInput): Promise<Sca
 
   const sockets = new Set<Socket>();
   const server = createServer({ allowHalfOpen: true });
+  const router = createScaRouter({
+    authenticationToken: config.authenticationToken,
+    ...(runtime.jobStore === undefined ? {} : { jobStore: runtime.jobStore }),
+    ...(runtime.adapters === undefined ? {} : { adapters: runtime.adapters }),
+    ...(runtime.now === undefined ? {} : { now: runtime.now }),
+    ...(runtime.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: runtime.maxRetainedJobs }),
+  });
   server.maxConnections = config.maxConnections;
-  attachConnectionHandler(server, sockets, config);
+  attachConnectionHandler(server, sockets, config, router);
 
   let runtimeError: Error | null = null;
   let publicIdentity: FileIdentity | null = null;
@@ -441,6 +470,7 @@ export async function startScaService(input: ScaServiceConfigInput): Promise<Sca
           cleanupError = error;
         }
         await closeServerBoundedly(server, sockets, config.shutdownTimeoutMs);
+        await router.shutdown(config.shutdownTimeoutMs);
         server.off("error", rememberRuntimeError);
         if (cleanupError !== undefined) throw cleanupError;
       })();

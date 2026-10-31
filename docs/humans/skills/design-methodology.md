@@ -4,9 +4,12 @@
 
 The design methodology is the thinking that happens _before_ a skill is built: deciding whether a skill is warranted at all, what its phases should be, where the human approval points belong, and how the domain knowledge gets packaged. The [Skill Standard](skill-standard.md) defines what a finished skill must contain; this page explains how a good one comes to exist.
 
-## The Core Idea: Extract, Don't Invent
+## The Core Idea: Justify the Workflow
 
-A Penny skill is a **recording of a workflow that already worked**, not a workflow imagined on a whiteboard. The process starts by doing the job manually — end to end, on real material — and only then encoding it. The phases of the skill are the phases the manual session actually went through, including the mistakes and what fixed them.
+A skill earns its overhead through durable state, gates, policy-led repair, fan-out, or recovery—even
+with one worker. Ground its design in requirements and evidence from existing work, source
+contracts, prototypes, or tests. A manual end-to-end run can reveal defects, but is optional;
+its incidental steps are not automatically permanent phases.
 
 For example, a research workflow should add a separate grounding phase only when observed report defects show that synthesis alone does not reliably keep material claims tied to captured sources. The phase earns its place from that evidence, not from a generic preference for more steps.
 
@@ -18,14 +21,14 @@ A few examples of what this looks like in practice:
 
 | Design choice                                                                                   | The failure it prevents                                       |
 | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Make all global decisions (conventions, naming, registries) in one early phase, then lock them  | Different output files quietly contradicting each other       |
+| Resolve shared decisions (conventions, naming, registries) before dependent work                | Different output files quietly contradicting each other       |
 | When consequences require human approval, put its gate immediately before the irreversible span | Performing expensive or external work without needed approval |
 | Route every fix back through verification                                                       | A fix to one file silently breaking the file paired with it   |
 | End exhausted retry loops with an honest "not met" report                                       | The system declaring success it didn't achieve                |
 
 ## Where the Human Fits
 
-Human gates are consequence-conditioned, not a universal phase count. When a planned gate is required, place it immediately before expensive, external, or hard-to-reverse work and offer approve / refine / deny. The six generic skill-ingress playbooks currently add no planned approval gate; knowledge-base publication paths use host-mediated review and approval where their operation requires it. Blocking ambiguity still uses the unplanned escalation seam rather than guessing.
+Human gates are consequence-conditioned, not a universal phase count. When a planned gate is required, place it immediately before expensive, external, or hard-to-reverse work and offer approve / refine / deny. The seven ordinary generic-child peers currently add no planned approval gate; knowledge-base publication paths use host-mediated review and approval where their operation requires it. Blocking ambiguity still uses the unplanned escalation seam rather than guessing.
 
 ## How Review Order Is Chosen
 
@@ -43,10 +46,10 @@ This separation keeps workflow handoff exact. If a lesson is stable and reusable
 
 ## The Shape of a Good Design
 
-1. Confirm the job needs durable workflow state, bounded repair, resume, or consequence-conditioned gates; otherwise use direct work or a single agent.
-2. Do the work manually; extract the phases; write the failure-mode table.
-3. Pull every global decision to the front and add only the approval gates its consequences justify.
-4. Match agents to phases by capability, choose review order by failure mode, and draw the flow diagram before writing code.
+1. Confirm the job needs durable workflow state, policy-led repair, resume, or consequence-conditioned gates; otherwise use direct work or a single agent.
+2. Use requirements and evidence to justify phases; write the failure-mode table. A manual run is one option.
+3. Resolve shared decisions before their consumers and add only consequence-justified approval gates.
+4. Match agents by capability and review order by failure mode. Co-design contracts, playbook, and flow mirror in any useful order; final topology and visual checks remain required.
 5. Implement registered TypeScript states and repair routes with checkpointed `RunContext` state, then test every path—including exact handoff, continuation, exhaustion, and unhappy outcomes—and curate only durable learnings that pass a value gate.
 
 ## Learn More

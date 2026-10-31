@@ -13,15 +13,15 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { CapabilityStore, mintEnvelope } from "../src/kb/capabilities.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { CapabilityStore, mintEnvelope } from "../dist/kb/capabilities.js";
 import {
   canonicalJson,
   defaultDenyPolicy,
   sha256Hex,
   type KbManifest,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 import {
   currentPath,
   pageClaimsPath,
@@ -29,15 +29,15 @@ import {
   readCurrent,
   readManifest,
   readPolicy,
-} from "../src/kb/filesystem.js";
+} from "../dist/kb/filesystem.js";
 import {
   buildCatalog,
   generationIndexDigest,
   publishGenerationTransaction,
   readSelectedGeneration,
   type PublishGenerationTransactionInput,
-} from "../src/kb/generations.js";
-import { initKb } from "../src/kb/workflows.js";
+} from "../dist/kb/generations.js";
+import { initKb } from "../dist/kb/workflows.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const roots: string[] = [];

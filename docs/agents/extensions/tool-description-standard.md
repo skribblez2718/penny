@@ -56,11 +56,9 @@ tool description.
 
 Registered and active are separate. Only active tool definitions are sent to the model.
 Large families may keep a small primary-runtime core active and load groups additively.
-Catalog authority has a closed rule: direct/parallel/chain workers and subset-absent
-TypeScript orchestration phases activate YAML `tools:` exactly. An eligible orchestration
-phase may activate only its one canonical-registration-bound non-empty duplicate-free strict
-YAML subset. Loaders may not add, inject, replace, or dynamically/task/trust-select names;
-host-private isolated matrices remain a separate non-catalog path.
+Catalog workers instead follow the [binding runtime rule](../agents/discovery-and-tools.md#binding-runtime-rule),
+including its guarded zero-tool exception: loaders cannot add, replace, or dynamically select
+worker authority. Anonymous host-private tool matrices remain a separate non-catalog path.
 
 ## Verification
 
@@ -70,9 +68,9 @@ host-private isolated matrices remain a separate non-catalog path.
 - [ ] Primitive descriptions avoid tautological routing prose.
 - [ ] Descriptions accurately match implementation outputs and side effects.
 - [ ] A catalog description is serialized once per model request.
-- [ ] Direct catalog activation preserves exact YAML equality.
-- [ ] Orchestration activation uses exact YAML or one registration/digest-bound strict subset;
-      dynamic activation never broadens, replaces, or selects worker authority.
+- [ ] Active descriptions match the surface admitted by the
+      [runtime-rule checks](../agents/discovery-and-tools.md#verification); primary-runtime
+      dynamic activation is not applied to catalog workers.
 
 Run:
 

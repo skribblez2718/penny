@@ -4,11 +4,13 @@ import { singleArtifactInput, type InputArtifactsV2 } from "./input-artifacts.js
 export function skillChainInput(options: {
   targetRunId: string;
   handoffRef: ArtifactRef;
+  designation?: "binding" | "context";
 }): InputArtifactsV2 {
   void options.targetRunId;
   return singleArtifactInput({
     slot: "previous-skill-terminal-output",
     ref: options.handoffRef,
+    ...(options.designation === undefined ? {} : { designation: options.designation }),
   });
 }
 

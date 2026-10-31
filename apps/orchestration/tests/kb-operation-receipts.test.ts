@@ -21,9 +21,9 @@ import {
   canonicalJson,
   operationSourceIdentitySha256,
   sha256,
-} from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { admitOperationStart, completeOperationStart } from "../src/kb/operation-starts.js";
+} from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { admitOperationStart, completeOperationStart } from "../dist/kb/operation-starts.js";
 import {
   OperationReceiptError,
   OperationReceiptStore,
@@ -31,9 +31,9 @@ import {
   operationEventForResult,
   operationReceiptRoot,
   toReplayableKnowledgeBaseResult,
-} from "../src/kb/operation-receipts.js";
-import { jcsCanonicalize } from "../src/kb/approval-receipts.js";
-import { OperationActionSchema, validateKbContract } from "../src/kb/contracts.js";
+} from "../dist/kb/operation-receipts.js";
+import { jcsCanonicalize } from "../dist/kb/approval-receipts.js";
+import { OperationActionSchema, validateKbContract } from "../dist/kb/contracts.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const roots: string[] = [];

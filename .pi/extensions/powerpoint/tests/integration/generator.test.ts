@@ -279,7 +279,7 @@ describe("in-process PowerPoint generation", () => {
     expect(fs.readdirSync(directory).filter((name) => name.endsWith(".tmp.pptx"))).toEqual([]);
   });
 
-  it("respects cancellation and timeout without publishing a target", async () => {
+  it("respects explicit cancellation and ignores legacy elapsed-time ceilings", async () => {
     const cancelDir = temporaryDirectory();
     const cancelOutput = path.join(cancelDir, "cancelled.pptx");
     const cancelSpec = buildSpec(
@@ -295,19 +295,21 @@ describe("in-process PowerPoint generation", () => {
     await expect(pendingCancel).resolves.toEqual({ cancelled: true });
     expect(fs.existsSync(cancelOutput)).toBe(false);
 
-    const timeoutDir = temporaryDirectory();
-    const timeoutOutput = path.join(timeoutDir, "timeout.pptx");
-    const timeoutSpec = buildSpec(
-      { slides: [{ layout: "title", title: "Slow" }], output_path: timeoutOutput },
+    const delayedDir = temporaryDirectory();
+    const delayedOutput = path.join(delayedDir, "delayed.pptx");
+    const delayedSpec = buildSpec(
+      { slides: [{ layout: "title", title: "Slow" }], output_path: delayedOutput },
       getProjectRoot()
     );
     await expect(
-      runGenerator(timeoutSpec, undefined, {
-        hooks: { before_render: (signal) => waitForAbort(signal) },
-        timeoutMs: 50,
+      runGenerator(delayedSpec, undefined, {
+        hooks: {
+          before_render: async () => await new Promise<void>((resolve) => setTimeout(resolve, 75)),
+        },
+        timeoutMs: 10,
       })
-    ).rejects.toThrow(/timed out after 50ms/);
-    expect(fs.existsSync(timeoutOutput)).toBe(false);
+    ).resolves.toMatchObject({ cancelled: false });
+    expect(fs.existsSync(delayedOutput)).toBe(true);
   });
 
   it("renders documented layouts, markdown classification, hyperlinks, and line breaks as editable OOXML", async () => {

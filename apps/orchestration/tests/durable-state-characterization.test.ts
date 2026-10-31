@@ -5,26 +5,28 @@ import type { DatabaseSync as SqliteDatabase } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer, canonicalJson, sha256 } from "../src/checkpointer.js";
+import { Checkpointer, canonicalJson, sha256 } from "../dist/checkpointer.js";
 import {
   ContractValidationError,
+  RegistrationContractBindingV1Schema,
+  validateContract,
   type ArtifactRef,
   type Directive,
   type JsonValue,
   type PhaseResult,
   type RunIdentity,
   validateDirective,
-} from "../src/contracts.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationEngine, type EngineOptions } from "../src/engine.js";
-import { kbLivenessPolicy } from "../src/liveness.js";
-import { KnowledgeBasePlaybook } from "../src/playbooks/knowledge-base.js";
+} from "../dist/contracts.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationEngine, type EngineOptions } from "../dist/engine.js";
+import { kbLivenessPolicy } from "../dist/liveness.js";
+import { KnowledgeBasePlaybook } from "../dist/playbooks/knowledge-base.js";
 import {
   resolvePlaybook,
   runtimeRegistrationSha256,
   skillContractSha256,
-} from "../src/playbooks/registry.js";
-import { ReceiptAuthority, trustedInvocationDigest } from "../src/receipts.js";
+} from "../dist/playbooks/registry.js";
+import { ReceiptAuthority, trustedInvocationDigest } from "../dist/receipts.js";
 
 const PROJECT_ROOT = "/workspace";
 const FIXTURE_MODEL = "fixture-model";
@@ -503,11 +505,12 @@ function createBareResearchRun(identity: RunIdentity): RunContext {
 }
 
 describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
-  it("locks protocol-v1 research pending writer bytes and restores the legacy fixture", () => {
-    const legacyBytes = fixture("research-pending.context.v2.json");
-    const expectedBytes = withCurrentResearchRegistrationBinding(legacyBytes);
+  it("locks current research pending writer bytes against independent F02 scope operands", () => {
+    const expectedBytes = withCurrentResearchRegistrationBinding(
+      fixture("research-pending.current.context.v2.json")
+    );
     const expectedDirective = fixtureDirective(
-      "research-pending.context.v2.json",
+      "research-pending.current.context.v2.json",
       "pending_directive"
     );
     const writerRoot = temporaryDirectory("research-pending-writer");
@@ -519,7 +522,10 @@ describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
     expect(contextJson(writerDb, RESEARCH_PENDING_IDENTITY.run_id)).toBe(expectedBytes);
     expect(canonicalJson(writer.loadRun(RESEARCH_PENDING_IDENTITY).snapshot())).toBe(expectedBytes);
     writer.close();
+  });
 
+  it("restores historical research pending bytes without rewriting the task", () => {
+    const legacyBytes = fixture("research-pending.context.v2.json");
     const readerRoot = temporaryDirectory("research-pending-reader");
     const readerDb = path.join(readerRoot, "orchestration.db");
     initializeDatabase(readerDb);
@@ -598,7 +604,9 @@ describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
 
   it("locks the protocol-v1 path-free KB projection and restores the legacy fixture", () => {
     const legacyBytes = fixture("knowledge-base-compose.context.v1.json");
-    const expectedBytes = withCompletionProtocolV1(legacyBytes);
+    const expectedBytes = withCompletionProtocolV1(legacyBytes)
+      .replace('"max_iterations":3', '"max_iterations":null')
+      .replace('"max_research_rounds":2', '"max_research_rounds":null');
     const writerRoot = temporaryDirectory("kb-writer");
     const writerDb = path.join(writerRoot, "orchestration.db");
     const writer = new Checkpointer(writerDb);
@@ -641,6 +649,98 @@ describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
 });
 
 describe("TS-200 restored-state acceptance and rejection policy", () => {
+  it("preserves retired candidate metadata in checkpoint replay and retention without restoring active authority", () => {
+    const base = requiredRecord(
+      JSON.parse(
+        withCurrentResearchRegistrationBinding(fixture("research-terminal.context.v2.json"))
+      ),
+      "research terminal checkpoint"
+    );
+    const legacyBinding = {
+      ...requiredRecord(base.registration_contract_binding, "registration binding"),
+      release_status: "candidate",
+    };
+    const serialized = canonicalJson({ ...base, registration_contract_binding: legacyBinding });
+    const root = temporaryDirectory("legacy-registration-label");
+    const dbPath = path.join(root, "orchestration.db");
+    initializeDatabase(dbPath);
+    insertRunFixture({
+      dbPath,
+      identity: RESEARCH_TERMINAL_IDENTITY,
+      status: "complete",
+      stateId: "complete",
+      serialized,
+    });
+    using checkpointer = new Checkpointer(dbPath);
+    expect(canonicalJson(checkpointer.loadRun(RESEARCH_TERMINAL_IDENTITY).snapshot())).toBe(
+      serialized
+    );
+    expect(
+      engine(checkpointer, root).handle({
+        schema_version: 2,
+        action: "recover",
+        identity: RESEARCH_TERMINAL_IDENTITY,
+      })
+    ).toEqual(fixtureDirective("research-terminal.context.v2.json", "terminal_directive"));
+    expect(checkpointer.pruneTerminalRuns()).toEqual([]);
+    expect(contextJson(dbPath, RESEARCH_TERMINAL_IDENTITY.run_id)).toBe(serialized);
+    // Historical metadata is accepted only by the checkpoint reader, never the active binding API.
+    expect(() =>
+      validateContract(
+        RegistrationContractBindingV1Schema,
+        legacyBinding,
+        "active registration binding"
+      )
+    ).toThrow();
+  });
+
+  it.each([
+    { release_status: "approved" },
+    { release_status: true },
+    { release_status: "candidate", grant_execution: true },
+  ])(
+    "rejects unsupported historical binding metadata without changing retained bytes: %j",
+    (extra) => {
+      const base = requiredRecord(
+        JSON.parse(
+          withCurrentResearchRegistrationBinding(fixture("research-terminal.context.v2.json"))
+        ),
+        "research terminal checkpoint"
+      );
+      const serialized = canonicalJson({
+        ...base,
+        registration_contract_binding: {
+          ...requiredRecord(base.registration_contract_binding, "registration binding"),
+          ...extra,
+        },
+      });
+      const root = temporaryDirectory("invalid-legacy-registration-label");
+      const dbPath = path.join(root, "orchestration.db");
+      initializeDatabase(dbPath);
+      // Retention below the cap intentionally avoids decoding checkpoints. Supply real
+      // pressure and keep the malformed checkpoint newest to exercise refusal during planning.
+      const olderIdentity = { ...RESEARCH_TERMINAL_IDENTITY, run_id: "older-valid-terminal" };
+      insertRunFixture({
+        dbPath,
+        identity: olderIdentity,
+        status: "complete",
+        stateId: "complete",
+        serialized: canonicalJson({ ...base, identity: olderIdentity }),
+      });
+      insertRunFixture({
+        dbPath,
+        identity: RESEARCH_TERMINAL_IDENTITY,
+        status: "complete",
+        stateId: "complete",
+        serialized,
+      });
+      using checkpointer = new Checkpointer(dbPath, undefined, { maxRetainedRuns: 1 });
+      expect(() => checkpointer.loadRun(RESEARCH_TERMINAL_IDENTITY)).toThrow();
+      expect(() => checkpointer.pruneTerminalRuns()).toThrow();
+      expect(contextJson(dbPath, RESEARCH_TERMINAL_IDENTITY.run_id)).toBe(serialized);
+    }
+  );
+
   it("machine-compares valid, malformed, missing, wrong-type, and extra research state", () => {
     const baseBytes = fixture("research-pending.context.v2.json");
     const base = requiredRecord(JSON.parse(baseBytes), "research pending context");
@@ -737,7 +837,7 @@ describe("TS-200 restored-state acceptance and rejection policy", () => {
 });
 
 describe("TS-200 result/details envelopes", () => {
-  it("locks the exact accepted PhaseResult bytes and persisted receipt envelope", () => {
+  it("locks current accepted PhaseResult bytes and persisted receipt against the independent F02 signature", () => {
     const root = temporaryDirectory("result-envelope");
     const dbPath = path.join(root, "orchestration.db");
     const checkpointer = new Checkpointer(dbPath);
@@ -756,7 +856,7 @@ describe("TS-200 result/details envelopes", () => {
       },
       receiptId: "receipt_ts200_valid",
     });
-    const expectedBytes = fixture("research-planning-result.v2.json");
+    const expectedBytes = fixture("research-planning-result.current.v2.json");
     expect(canonicalJson(result)).toBe(expectedBytes);
     const next = orchestration.handle({
       schema_version: 2,
@@ -772,6 +872,19 @@ describe("TS-200 result/details envelopes", () => {
     );
     expect(projection).toEqual(fixtureObject("contract-projection.v1.json").valid_phase_result);
     checkpointer.close();
+  });
+
+  it("verifies the historical signed PhaseResult fixture read-only, without rebinding it to current task bytes", () => {
+    const legacyBytes = fixture("research-planning-result.v2.json");
+    const legacy = fixtureObject("research-planning-result.v2.json");
+    const receipt = deterministicReceiptAuthority(temporaryDirectory("historical-receipt")).verify(
+      legacy.worker_receipt
+    );
+    expect(receipt.trusted_invocation_digest).toBe(
+      "e9bd621db420e72bb38b7c7f77772e7998182aa5d0c31e9730e584f090dceee3"
+    );
+    expect(canonicalJson(legacy)).toBe(legacyBytes);
+    expect(legacyBytes).not.toBe(fixture("research-planning-result.current.v2.json"));
   });
 
   it("fails closed when details are missing without changing the checkpoint", () => {

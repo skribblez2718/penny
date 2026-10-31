@@ -14,7 +14,13 @@ Objectively verify the exact latest host-sealed `DecisionV2`. Verification is a 
 
 Check all hard constraints; complete alternative coverage; feasibility; selection/ranking/disposition consistency; absence of invented preferences or facts; evidence fidelity; uncertainty and sensitivity; request/draft/input lineage use; valid `unresolved` and `not_applicable` semantics; and `execution_started:false`.
 
+Verify against the admitted basis within the caller's evidence scope; this review is not a second evidence-gathering phase. A citation or URL inside an imported product is evidence metadata, not permission to retrieve it. When the caller restricts the task to supplied evidence, evaluate that evidence as supplied and report a material gap through the declared `evidence_gap` route rather than independently acquiring new evidence. Do not bypass the host-owned evidence gate even to corroborate a correct-looking claim.
+
 For lineage, `source_lineage.draft_sha256` is the SHA-256 of the canonical JSON encoding of the parsed `DecisionDraftV2`. It is **not** the content digest of the complete Demetri agent-output artifact, which also contains prose and routing data. Do not compare those two digests. The host sealer already rejects a mismatch between `draft_sha256` and the parsed draft; verify the remaining lineage fields against the exact artifacts.
+
+Use the inline canonical `HOST_MECHANICAL_CHECKS` only within its declared scope: exact product/source custody, native schema/coverage and lineage checks. The signed task binds this host statement; it does not establish semantic correctness or absence of external effects. The reported draft digest covers canonical parsed DecisionDraftV2 JSON, not the complete raw author output. Continue the independent semantic verification. Host integrity/envelope artifacts and positive review receipts are created after review; their pre-review absence is not an author defect. Do not demand them or invent unchecked host evidence.
+
+If available evidence cannot establish validity, return `UNVERIFIABLE/verification_incomplete/none` with at least one finding and one evidence limitation. Do not force inability to verify into PASS, FAIL, or an author-repair gap. A valid unresolved decision is distinct from an unverifiable product and can still pass review. A concrete supported product defect remains FAIL.
 
 PASS only if the exact latest product is valid. On FAIL classify exactly one root gap:
 
@@ -28,9 +34,15 @@ Do not repair, author, recommend, taskify, execute, or emit a target state.
 
 Emit a concise verification report followed by exactly one compact final SUMMARY line:
 
-`SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","verdict":"PASS|FAIL","gap_kind":"none|evidence_gap|analysis_gap|product_gap","repair_owner":"none|echo|annie|demetri","findings":["..."],"evidence":["exact check or ref"],"strategy_delta":"..."}`
+SUMMARY:{"confidence":"CERTAIN","verdict":"PASS","gap_kind":"none","repair_owner":"none","findings":[],"evidence":["The exact request, analysis, draft, decision, evidence, and lineage are mutually consistent."],"strategy_delta":"Admit only this exact verified decision subject."}
 
 PASS requires `none/none`; FAIL requires the matching closed gap and owner.
+
+UNVERIFIABLE uses the same closed fields, for example:
+
+SUMMARY:{"confidence":"UNCERTAIN","verdict":"UNVERIFIABLE","gap_kind":"verification_incomplete","repair_owner":"none","findings":["Available evidence cannot establish this claim."],"evidence":["The admitted basis lacks an independent observation for the claim."],"strategy_delta":"Retain the partial product and verification limitations; do not reauthor for missing verification capability."}
+
+The existing complete SUMMARY is the structured source judgment, not a disposable routing guess. Any routing-only correction must preserve all fields, array order and confidence exactly. Never invent a judgment missing from the source. Repeated exact candidate/failure fingerprints terminate incomplete; changing strategy prose alone is not measured progress.
 
 ## Writing integrity verification
 

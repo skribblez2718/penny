@@ -1,0 +1,19 @@
+{
+  "work_package": "VG-WP-012",
+  "acceptance": {
+    "AC-036": "partial"
+  },
+  "evidence_class": "provider-free source/plugin admission, settled-journal custody and canonical reopened-store readback",
+  "audio_fixture": "silent mono PCM WAV; constructed bytes, not decoded speech",
+  "source_admission": true,
+  "generator_service": false,
+  "production_decode": false,
+  "production_playback": false,
+  "operational_skill": false,
+  "gaps": [
+    "gated effect-intent integration and capture wrapper journal milestone",
+    "independently qualified decoder deployment",
+    "retained source speech clearance and mix gain/QC",
+    "audible intelligible correctly timed production speech"
+  ]
+}

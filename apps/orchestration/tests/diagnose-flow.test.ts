@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { DIAGNOSE_FLOW } from "../src/playbooks/diagnose.js";
+import { DIAGNOSE_FLOW } from "../dist/playbooks/diagnose.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const html = readFileSync(
@@ -87,6 +87,7 @@ const EDGES = [
   "verifying_diagnosis→decomposing_causes",
   "verifying_diagnosis→adjudicating_diagnosis",
   "verifying_diagnosis→admitting_diagnosis",
+  "verifying_diagnosis→incomplete",
   "admitting_diagnosis→complete",
 ] as const;
 

@@ -9,7 +9,7 @@ import {
   pennyStatePaths,
   projectStatePaths,
   resolvePennyStateRoot,
-} from "../src/state/index.js";
+} from "../dist/state/index.js";
 
 const PROJECT_ID = "prj_0123456789abcdef0123456789abcdef";
 

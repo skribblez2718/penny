@@ -9,7 +9,10 @@ Audit the project at **`$1`** against the outcome it actually exists to produce.
 
 - **Target project:** `$1`
 - **Optional output-root token or first additional detail:** `$2`
-- **Remaining additional details:** `${@:3}`
+
+**Remaining additional details:**
+
+${@:3}
 
 If the target is missing, nonexistent, unreadable, or not a project directory, stop and ask for a valid path. Treat `$2` as the output root only when it begins `output-root=`; strip that prefix and use the remainder as the parent under which the collision-safe bundle will be created. Otherwise treat `$2` and later arguments as additional details. Quote tokens containing spaces. If `output-root=` is empty or a material value remains ambiguous, ask the minimum targeted question set before writing anything.
 

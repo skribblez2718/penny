@@ -1,6 +1,6 @@
 # Error Logging
 
-Penny's error logging is a structured system for capturing, transmitting, and querying what went wrong. Instead of free-form text like "something broke," every error carries a code, a severity, a component, and a context that makes debugging faster.
+Penny's error logging is a structured system for capturing, transmitting, and querying what went wrong. Emission policy requires taxonomy codes for error logs. The runtime logger shape still permits entries without an error or code; policy is not a guarantee that every emitted entry complies.
 
 ## What Structured Error Logging Is
 
@@ -9,7 +9,7 @@ A structured log entry is more than a message. It is a record with defined field
 - **Level** — how serious the event is: DEBUG, INFO, WARN, ERROR, or CRITICAL.
 - **Component** — which extension or subsystem produced the entry.
 - **Message** — a human-readable description.
-- **Error code** — a machine-readable identifier from a shared taxonomy.
+- **Error code** — when present, a machine-readable identifier from the logger's `ErrorCode` union, the exact taxonomy owner.
 - **Context** — extra details such as the tool name, session ID, or arguments.
 
 This structure lets both humans and machines reason about errors consistently. A human can read the message; an observability query can filter by code and component; an agent can pattern-match a known failure mode.
@@ -64,10 +64,10 @@ This dual access is intentional. Penny uses logs to diagnose a specific problem 
 
 ## Adding a New Error Code
 
-The taxonomy is maintained deliberately. A new code is added in three places:
+The taxonomy is maintained deliberately. The logger union is authoritative; related documentation and checks must agree with the parts they describe:
 
 1. The `ErrorCode` union type in the logger source file, so TypeScript enforces it.
-2. The human-readable error-codes reference, so people know what the code means.
+2. Affected selected diagnostic descriptions in the agent reference; that table is not exhaustive and does not fix severity at the type level.
 3. Any relevant system checks, so verification can catch unregistered codes.
 
 This discipline prevents code drift. If an extension invents an ad-hoc string, it will not match queries or checks, and the log becomes harder to use.
@@ -87,4 +87,4 @@ The cost is lowest when the code is chosen at the time the error is introduced. 
 ## Relationship to Other Capabilities
 
 - [Observability Server](../observability-server/observability-server.md) — the server that receives, stores, and serves log entries.
-- Agent reference: `docs/agents/capabilities/error-logging/error-codes.md` — the machine-readable code catalog.
+- Agent reference: `docs/agents/capabilities/error-logging/error-codes.md` — selected diagnostics and emission policy; `.pi/lib/logger/logger.ts` owns exact taxonomy membership.

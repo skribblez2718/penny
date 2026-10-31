@@ -19,8 +19,8 @@ abstractions in the system.
 The same framing invited the opposite error. "Complete the cognitive taxonomy" is an
 invitation to invent `learn`, `remember`, `attend` and `route` agents that earn nothing.
 
-The capability-contract definition explains all ten roles cleanly, justifies exactly the two
-that were added, and rejects the domain-agent sprawl the architecture exists to prevent.
+The capability-contract definition explains all eleven roles cleanly, including the distinct
+specification-author contract, and rejects the domain-agent sprawl the architecture exists to prevent.
 
 ## Three families
 
@@ -29,7 +29,7 @@ every role into a single ontology:
 
 - **Epistemic** — turn information into knowledge or judgment: explore, analyze,
   synthesize, critique, verify.
-- **Deliberative** — determine what should happen: ideate, decide, plan.
+- **Deliberative** — determine what should be defined or happen: ideate, decide, specify, plan.
 - **Operational** — convert intent into externalizable work: taskify, generate.
 
 Family membership is descriptive metadata, **not** a workflow constraint. Nothing has to
@@ -39,8 +39,8 @@ pass through an intermediate family: `analyze → decide`, `generate → verify`
 ## Why routing metadata replaced prose
 
 Every agent's description used to carry bilateral "do not use me for X" clauses about its
-neighbours. At eight agents that was tolerable. At ten it becomes ninety potential pairs,
-maintained by hand, in prose, across ten files — which recreates, _inside_ the reusable
+neighbours. At eight agents that was tolerable. At eleven it becomes 110 potential directed pairs,
+maintained by hand, in prose, across eleven files — which recreates, _inside_ the reusable
 architecture, a smaller copy of the maintenance problem the architecture was built to
 escape.
 
@@ -125,6 +125,7 @@ agent-facing twin:
 | `decide`     | `demetri`  | deliberative | `read`    | alternatives + objectives + uncertainty → justified choice + sensitivity |
 | `ideate`     | `ida`      | deliberative | `read`    | problem + constraints → diverse candidate possibilities                  |
 | `plan`       | `piper`    | deliberative | `read`    | goal + state + constraints → strategy                                    |
+| `specify`    | `rhea`     | deliberative | `read`    | bounded brief + evidence + constraints → specification                   |
 | `generate`   | `skribble` | operational  | `write`   | specification → materialized artifact                                    |
 | `taskify`    | `tabitha`  | operational  | `read`    | strategy/specification → executable task graph                           |
 

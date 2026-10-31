@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
+import { Checkpointer } from "../dist/checkpointer.js";
 import {
   applyStateMigration,
   createStateMigrationPlan,
@@ -20,7 +20,7 @@ import {
   prepareStateMigrationDeletion,
   resolvePennyProjectState,
   verifyStateMigration,
-} from "../src/state/index.js";
+} from "../dist/state/index.js";
 
 const roots: string[] = [];
 const sqlite = process.getBuiltinModule("node:sqlite");
@@ -39,7 +39,9 @@ function fixture() {
     using _checkpointer = new Checkpointer(database);
   }
   const source = new sqlite.DatabaseSync(database);
-  source.exec("DROP TABLE child_workflow_calls; DROP TABLE store_metadata; PRAGMA user_version=9");
+  source.exec(
+    "DROP TABLE host_operation_calls; DROP TABLE child_workflow_calls; DROP TABLE store_metadata; PRAGMA user_version=9"
+  );
   source.close();
   const key = path.join(legacy, "receipt-key");
   writeFileSync(key, Buffer.alloc(32, 0x62), { mode: 0o600 });

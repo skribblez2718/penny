@@ -11,9 +11,9 @@ import {
   decisionRequestSha256,
   sealDecisionDraft,
   type ArtifactRef,
-} from "../src/index.js";
-import { CompositionAdmissionError, validateSemanticComposition } from "../src/composition.js";
-import { validateGroundedSynthesis } from "../src/skill-contracts/research.js";
+} from "../dist/index.js";
+import { CompositionAdmissionError, validateSemanticComposition } from "../dist/composition.js";
+import { validateGroundedSynthesis } from "../dist/skill-contracts/research.js";
 import { decisionDraft, decisionRequest } from "./fixtures/decision-fixtures.js";
 import { persistEvidenceContext } from "./helpers/evidence-context.js";
 
@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe("Plan generic semantic composition", () => {
-  it("declares exactly optional GroundedSynthesisV1, DecisionV2, and EvidenceContextV1 ports at 0..1", () => {
+  it("declares exactly optional SpecificationV1, GroundedSynthesisV1, DecisionV2, and EvidenceContextV1 ports at 0..1", () => {
     expect(
       PLAN_SKILL_CONTRACT.io.input_ports.map((port) => ({
         name: port.name,
@@ -109,6 +109,14 @@ describe("Plan generic semantic composition", () => {
         semantic_product: port.semantic_product,
       }))
     ).toEqual([
+      {
+        name: "prior_specification",
+        schema_id: "penny.specification.v1",
+        schema_version: 1,
+        kind: "specification",
+        cardinality: [0, 1],
+        semantic_product: true,
+      },
       {
         name: "prior_grounded_synthesis",
         schema_id: "penny.grounded-synthesis.v1",

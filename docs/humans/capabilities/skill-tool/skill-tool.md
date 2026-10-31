@@ -23,11 +23,11 @@ files or memory rooms.
 
 All packages live under `.pi/skills`; `PLAYBOOK_REGISTRY` is the sole executable registry. Model
 visibility is independent: a visible package omits `disable-model-invocation`, while a hidden package
-sets `disable-model-invocation: true`; redundant `false` is not permitted. `.pi/skills/.ignore`
-mirrors only those hidden packages. A model-disabled development package may be documented and
-statically checked without a registration,
-but generic ingress refuses it safely until its playbook exists. Knowledge Base continues to use its
-dedicated tool.
+sets `disable-model-invocation: true`; redundant `false` is not permitted. Pi loads both classes.
+Visible packages are advertised to the model and available to the user or Penny. Hidden packages
+are omitted from automatic model advertising but remain manually invocable through
+`/skill:<name> <description>`. Registration and approvals still apply regardless of visibility.
+Knowledge Base continues to use its dedicated tool.
 
 ## Failure behavior
 

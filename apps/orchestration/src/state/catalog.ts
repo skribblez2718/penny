@@ -3,7 +3,12 @@ import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { SQLOutputValue } from "node:sqlite";
 
-import { OwnerSqliteDatabase } from "../kb/owner-sqlite.js";
+import { OwnerSqliteDatabase } from "../state/owner-sqlite.js";
+import {
+  HOST_CAPACITY_CATALOG_COLUMNS,
+  HOST_CAPACITY_CATALOG_SQL,
+  HOST_LEASE_CATALOG_V3_SQL,
+} from "../host-operations/capacity-catalog-schema.js";
 import {
   assertOwnerDirectory,
   assertOwnerFile,
@@ -19,10 +24,77 @@ import {
   type PennyStatePaths,
 } from "./paths.js";
 
-export const PROJECT_CATALOG_SCHEMA_VERSION = 2 as const;
+export const PROJECT_CATALOG_SCHEMA_VERSION = 4 as const;
 const PROJECT_ROOT_COMMITMENT_DOMAIN = "penny-project-root-v1\0";
 const PROJECT_ROOT_COMMITMENT_PATTERN = /^root_[a-f0-9]{64}$/u;
 const REQUIRED_CATALOG_COLUMNS = {
+  ...HOST_CAPACITY_CATALOG_COLUMNS,
+  host_backend_dispositions: [
+    "receipt_id",
+    "operation_record_id",
+    "backend_key_sha256",
+    "lease_id",
+    "lease_epoch",
+    "disposition_jcs",
+    "receipt_jcs",
+    "receipt_sha256",
+    "created_at",
+  ],
+  host_backend_lease_events: [
+    "event_id",
+    "backend_key_sha256",
+    "operation_record_id",
+    "event_type",
+    "event_jcs",
+    "event_sha256",
+    "created_at",
+  ],
+  host_backend_leases: [
+    "backend_key_sha256",
+    "state",
+    "active_phase",
+    "lease_id",
+    "lease_epoch",
+    "fencing_token_sha256",
+    "operation_record_id",
+    "project_id",
+    "run_id",
+    "state_id",
+    "attempt",
+    "operation_id",
+    "registration_sha256",
+    "request_sha256",
+    "remote_correlation_sha256",
+    "expires_at_ms",
+    "quarantine_id",
+    "disposition_receipt_id",
+    "updated_at",
+  ],
+  host_backend_quarantine_resets: [
+    "reset_receipt_id",
+    "backend_key_sha256",
+    "quarantine_id",
+    "disposition",
+    "evidence_sha256",
+    "reset_jcs",
+    "reset_sha256",
+    "reset_at",
+  ],
+  host_operation_queue: [
+    "operation_record_id",
+    "backend_key_sha256",
+    "project_id",
+    "run_id",
+    "state_id",
+    "attempt",
+    "operation_id",
+    "registration_sha256",
+    "request_sha256",
+    "queued_at_ms",
+    // Catalog v3 keeps its original storage name; the runtime projects this
+    // value as queue_inactivity_expires_at_ms without rewriting retained state.
+    "queue_deadline_at_ms",
+  ],
   migration_reservations: ["project_id", "migration_id", "plan_sha256", "created_at"],
   project_relinks: [
     "relink_id",
@@ -132,7 +204,10 @@ export class ProjectCatalog implements Disposable {
   readonly state: PennyStatePaths;
   private readonly store: OwnerSqliteDatabase;
 
-  constructor(stateRoot: string, options: { create: boolean; readOnly?: boolean }) {
+  constructor(
+    stateRoot: string,
+    options: { create: boolean; readOnly?: boolean; verifyIntegrity?: boolean }
+  ) {
     this.state = pennyStatePaths(stateRoot);
     if (options.create) {
       ensureOwnerDirectory(this.state.root, "Penny state root");
@@ -153,8 +228,80 @@ export class ProjectCatalog implements Disposable {
       label: "Penny state catalog",
       mode: options.create ? "provision" : "existing",
       ...(options.readOnly === true ? { readOnly: true } : {}),
+      ...(options.verifyIntegrity === undefined
+        ? {}
+        : { verifyIntegrity: options.verifyIntegrity }),
     });
-    this.initializeOrValidateSchema(options.create);
+    try {
+      this.initializeOrValidateSchema(options.create);
+    } catch (error) {
+      this.store.close();
+      throw error;
+    }
+  }
+
+  /** Verify one caller-specified upgrade backup; no scanning/adoption or schema mutation. */
+  static verifyCapacityUpgradeBackup(directory: string, databaseName: string): void {
+    using store = new OwnerSqliteDatabase({
+      directory,
+      databaseName,
+      label: "global catalog upgrade backup",
+      mode: "existing",
+      readOnly: true,
+    });
+    const version = store.db.prepare("PRAGMA user_version").get()?.user_version;
+    if (version !== 2 && version !== 3) throw new Error("catalog backup source version diverges");
+    validateCatalogTables(store, version);
+    if (
+      store.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'host_capacity_%'").get() !==
+      undefined
+    )
+      throw new Error("legacy catalog backup contains capacity state");
+  }
+
+  /** Administrative v2/v3→v4 only. Backup callback runs under the global write lock before DDL. */
+  static async upgradeCapacitySchema(
+    stateRoot: string,
+    backupBeforeMutation: (version: 2 | 3) => Promise<void>,
+    fault?: (point: "before-capacity-ddl" | "after-capacity-ddl") => void
+  ): Promise<{ sourceVersion: number; targetVersion: number; changed: boolean }> {
+    const state = pennyStatePaths(stateRoot);
+    using store = new OwnerSqliteDatabase({
+      directory: state.root,
+      databaseName: CATALOG_DATABASE_NAME,
+      label: "global catalog upgrade",
+      mode: "existing",
+    });
+    store.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = store.db.prepare("PRAGMA user_version").get();
+      const version = row?.user_version;
+      if (version === PROJECT_CATALOG_SCHEMA_VERSION) {
+        validateCatalogTables(store, 4);
+        store.db.exec("COMMIT");
+        return { sourceVersion: version, targetVersion: version, changed: false };
+      }
+      if (version !== 2 && version !== 3)
+        throw new Error("global capacity upgrade requires exact catalog schema 2 or 3");
+      validateCatalogTables(store, version);
+      await backupBeforeMutation(version);
+      store.assertCustody();
+      fault?.("before-capacity-ddl");
+      if (version === 2) store.db.exec(HOST_LEASE_CATALOG_V3_SQL);
+      store.db.exec(HOST_CAPACITY_CATALOG_SQL);
+      store.db.exec(`PRAGMA user_version = ${PROJECT_CATALOG_SCHEMA_VERSION};`);
+      validateCatalogTables(store, 4);
+      fault?.("after-capacity-ddl");
+      store.db.exec("COMMIT");
+      return {
+        sourceVersion: version,
+        targetVersion: PROJECT_CATALOG_SCHEMA_VERSION,
+        changed: true,
+      };
+    } catch (error) {
+      store.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   lookupProject(projectRoot: string): ProjectBinding | undefined {
@@ -398,6 +545,11 @@ export class ProjectCatalog implements Disposable {
       | Record<string, SQLOutputValue>
       | undefined;
     let version = Number(versionRow?.user_version ?? 0);
+    const fresh = version === 0;
+    if (!fresh && version !== PROJECT_CATALOG_SCHEMA_VERSION)
+      throw new Error(
+        `catalog schema ${version} requires explicit backup-first global catalog upgrade`
+      );
     if (version > PROJECT_CATALOG_SCHEMA_VERSION) {
       throw new Error(`project catalog schema ${version} is newer than supported`);
     }
@@ -441,8 +593,28 @@ export class ProjectCatalog implements Disposable {
             plan_sha256 TEXT NOT NULL,
             created_at TEXT NOT NULL
           ) STRICT;
-          PRAGMA user_version = ${PROJECT_CATALOG_SCHEMA_VERSION};
+          PRAGMA user_version = 2;
         `);
+      });
+      version = 2;
+    }
+    if (version === 2) {
+      if (!allowInitialization) {
+        throw new Error("Penny state catalog schema requires explicit state setup or upgrade");
+      }
+      this.store.transaction(() => {
+        this.store.db.exec(`
+          ${HOST_LEASE_CATALOG_V3_SQL}
+        `);
+      });
+      version = 3;
+    }
+    if (version === 3) {
+      if (!fresh)
+        throw new Error("catalog schema 3 requires explicit backup-first global catalog upgrade");
+      this.store.transaction(() => {
+        this.store.db.exec(HOST_CAPACITY_CATALOG_SQL);
+        this.store.db.exec(`PRAGMA user_version = ${PROJECT_CATALOG_SCHEMA_VERSION};`);
       });
       version = PROJECT_CATALOG_SCHEMA_VERSION;
     }
@@ -450,30 +622,57 @@ export class ProjectCatalog implements Disposable {
       throw new Error(`project catalog schema ${version} is unsupported`);
     }
 
-    const schemaObjects = this.store.db
-      .prepare("SELECT type, name, sql FROM sqlite_master WHERE type = 'table'")
-      .all() as Array<Record<string, SQLOutputValue>>;
-    const tables = new Map(schemaObjects.map((row) => [String(row.name), String(row.sql ?? "")]));
-    for (const [table, requiredColumns] of Object.entries(REQUIRED_CATALOG_COLUMNS)) {
-      const definition = tables.get(table);
-      if (definition === undefined) throw new Error(`project catalog is missing table '${table}'`);
-      if (!/\bSTRICT\b/u.test(definition)) {
-        throw new Error(`project catalog table '${table}' is not STRICT`);
-      }
-      const columns = new Set(
-        (
-          this.store.db.prepare(`PRAGMA table_info(${table})`).all() as Array<
-            Record<string, SQLOutputValue>
-          >
-        ).map((row) => String(row.name))
-      );
-      for (const column of requiredColumns) {
-        if (!columns.has(column)) {
-          throw new Error(`project catalog table '${table}' is missing column '${column}'`);
-        }
+    validateCatalogTables(this.store, 4);
+  }
+}
+
+function validateCatalogTables(store: OwnerSqliteDatabase, version: 2 | 3 | 4): void {
+  const schemaObjects = store.db
+    .prepare("SELECT type, name, sql FROM sqlite_master WHERE type = 'table'")
+    .all();
+  const tables = new Map(schemaObjects.map((row) => [String(row.name), String(row.sql ?? "")]));
+  for (const [table, requiredColumns] of Object.entries(REQUIRED_CATALOG_COLUMNS).filter(
+    ([table]) =>
+      version === 4 ||
+      (version === 3 ? !table.startsWith("host_capacity_") : !table.startsWith("host_"))
+  )) {
+    const definition = tables.get(table);
+    if (definition === undefined) throw new Error(`project catalog is missing table '${table}'`);
+    if (!/\bSTRICT\b/u.test(definition)) {
+      throw new Error(`project catalog table '${table}' is not STRICT`);
+    }
+    const columns = new Set(
+      store.db
+        .prepare(`PRAGMA table_info(${table})`)
+        .all()
+        .map((row) => String(row.name))
+    );
+    for (const column of requiredColumns) {
+      if (!columns.has(column)) {
+        throw new Error(`project catalog table '${table}' is missing column '${column}'`);
       }
     }
-    const foreignKeys = this.store.db.prepare("PRAGMA foreign_key_check").all();
-    if (foreignKeys.length !== 0) throw new Error("project catalog failed foreign_key_check");
+    if (table.startsWith("host_capacity_")) {
+      const expected = HOST_CAPACITY_CATALOG_SQL.split(";").find((statement) =>
+        statement.trim().startsWith(`CREATE TABLE ${table} (`)
+      );
+      if (
+        expected === undefined ||
+        definition.trim().replace(/\s+/gu, " ") !== expected.trim().replace(/\s+/gu, " ")
+      )
+        throw new Error(`capacity catalog table '${table}' schema diverges`);
+    }
+  }
+  if (version === 4) {
+    const index = store.db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_host_capacity_project'"
+      )
+      .get();
+    if (
+      index?.sql !==
+      "CREATE INDEX idx_host_capacity_project ON host_capacity_records(project_id, state)"
+    )
+      throw new Error("capacity catalog index schema diverges");
   }
 }

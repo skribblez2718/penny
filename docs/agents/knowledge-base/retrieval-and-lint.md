@@ -19,24 +19,59 @@ speculatively.
 
 ## Query results
 
-A complete query produces exactly one `query_answer` artifact handle. By default the parent receives
-that path-free handle and nothing else.
+A complete query produces exactly one `query_answer` artifact handle. This section owns query delivery for both operators and host implementations.
 
-A derived answer reaches the parent tool result **only** when all of the following hold: the host
-supplied an exact, unexpired, single-use delivery grant matching the session, invocation, action,
-profile, request digest, and byte bound; the parent model matches the policy allowlist; policy
-explicitly permits a derived answer; and the complete/met answer has supported citations plus a
-passing same-run Vera report. Missing any condition returns a refusal — it never silently
-downgrades or returns partial content. Explicit `verify_grounding:false` remains deterministic and
-visibly unverified, but it creates neither a save claim nor parent-delivery eligibility.
+`answer_delivery` is a closed field with exactly one bounded parent-facing outcome per outcome class:
 
-Even an approved derived answer contains only the derived text, citations by opaque ID,
-authority and uncertainty, and a canonical-verification reminder. Raw source, page, claim, report,
-and patch bodies never return.
+- **`artifact_ref`** (default) — the result carries the answer artifact handle only. The tool
+  result itself never carries derived content.
+- **`parent_tool_result`** — the result may carry one bounded derived answer, and only when the
+  policy permits it and exactly one host-minted grant matches.
 
-An answer with no supported citation completes as `met: false` with the evidence gap stated in
-`unknowns`. It is not parent-deliverable as a met answer. **An honest "the sources do not support
-an answer" is a correct outcome, not a failure to be papered over.**
+The grant rule is closed and fails closed. A parent-delivery grant is owner-only and binds one
+exact Pi session, host tool invocation ID, action, profile, closed-request digest, current policy digest,
+and runtime-reported parent provider/model, with a single-use byte cap and expiry. The host grant
+authority enforces one issuance per session/invocation transactionally; a byte-identical retry of
+the same grant ID is idempotent, while a competing issuance loses before delivery can become
+ambiguous. The delivered run consumes the grant atomically; an exact run retry observes the same
+consumption but never redelivers, and another run loses. A grant refused for any other reason
+(policy/model drift, byte cap, malformed answer, mismatch) is retained in its original state.
+
+The grant is not the only condition. Delivery re-hashes the current policy and requires both the
+grant's exact provider/model binding and an **exact parent allowlist match**: the provider and model
+the runtime reports for the active parent context must appear in `allowed_parent_models`, and under
+`local_only` the matched rule must itself declare `locality: "local"`. The host never guesses
+locality. An empty allowlist, policy drift, or an identity the host cannot establish denies.
+
+Delivery also requires the answer to be what the request asked for. `verify_grounding` defaults
+true: deterministic retrieval binds one selected generation and candidate set, Synthia synthesizes
+through the no-argument private-request and selected-generation readers, and Vera independently
+checks every answer citation through the same closed page/source posture. The host requires exact
+citation/finding equality, all findings supported, a passing report, and a durably created save
+claim before the run can be `complete`/`met:true` or parent-deliverable. A request flag or boolean
+report by itself has no authority.
+
+An explicit `verify_grounding: false` request retains the deterministic answer path, records
+`grounding_not_verified`, creates no save claim, and is not parent-deliverable. `page_ids` and
+`source_ids` are honored as retrieval filters (page set, and pages whose claim evidence cites an
+allowed source).
+
+The delivered answer is closed: advisory-only, non-empty text, one or more opaque
+page/claim/source citations (never locators), a contradictions array, an unknowns array, and
+`canonical_verification_required: true`. It may never present itself as canonical current state,
+and no raw source, page, claim, report, or patch body may ever appear in the tool result.
+
+On any miss the parent sees its safe handle result plus exactly one bounded warning code,
+`refused_parent_delivery` — never the answer, the diagnostic reason, or grant internals. The host
+logs a bounded reason for the operator (missing/mismatched/expired/consumed/ambiguous grant,
+policy denial, byte-cap miss, malformed answer) and never returns one to the model.
+
+The decision core and its fail-closed behavior live in the KB modules of the orchestration app
+(`kb/parent-delivery`; the adapter only builds the closed request and surfaces the decision), and
+the shape, sealed-answer extraction, and every refusal reason are pinned by the
+`test:kb-answer-quality` suite alongside the parent-delivery suite.
+
+An answer with no supported citation completes as `met: false` with the evidence gap stated in `unknowns`. It is not parent-deliverable as a met answer. An honest "the sources do not support an answer" is a correct outcome, not a failure to conceal.
 
 ## Lint
 

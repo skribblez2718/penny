@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { PRODUCE_FLOW } from "../src/playbooks/produce.js";
+import { PRODUCE_FLOW } from "../dist/playbooks/produce.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const html = readFileSync(
@@ -90,6 +90,7 @@ const EDGES = [
   "verifying_artifact→exploring_artifact_approaches",
   "verifying_artifact→materializing_artifact",
   "verifying_artifact→admitting_artifact",
+  "verifying_artifact→incomplete",
   "admitting_artifact→complete",
 ] as const;
 

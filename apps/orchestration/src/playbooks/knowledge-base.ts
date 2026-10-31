@@ -46,7 +46,7 @@ import {
   validateDirective,
   type Confidence,
   type Directive,
-  type EvaluationResultV2,
+  type EvaluationResult,
   type JsonValue,
   type LivenessSnapshotV1,
   type LivenessTerminalReason,
@@ -62,7 +62,7 @@ import type {
   GenericResponsePolicyCapabilityV1,
   HostReviewedGateValidationCapabilityV1,
   LivenessTerminalCapabilityV1,
-  PlaybookCoreV1,
+  PlaybookCore,
   ReviewInvalidationCapabilityV1,
   StateAwareRepairCapabilityV1,
 } from "./playbook.js";
@@ -812,7 +812,7 @@ export function validateKnowledgeBasePhaseDetails(
 
 export class KnowledgeBasePlaybook
   implements
-    PlaybookCoreV1,
+    PlaybookCore,
     StateAwareRepairCapabilityV1,
     LivenessTerminalCapabilityV1,
     GenericResponsePolicyCapabilityV1,
@@ -1253,7 +1253,7 @@ export class KnowledgeBasePlaybook
     context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResultV2 | null {
+  ): EvaluationResult | null {
     if (state === "lint" && counter(details, "blocking_count") > 0) {
       const blockingCount = counter(details, "blocking_count");
       return {
@@ -1294,7 +1294,7 @@ export class KnowledgeBasePlaybook
     context: RunContext,
     state: string,
     details: Record<string, JsonValue>,
-    evaluation: EvaluationResultV2,
+    evaluation: EvaluationResult,
     disposition: "repair" | "exhausted"
   ): void {
     if (!isAgentPhase(state)) {

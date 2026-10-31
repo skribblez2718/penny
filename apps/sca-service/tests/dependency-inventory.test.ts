@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sha256 } from "../../orchestration/src/canonical-json.js";
+import { sha256 } from "../../orchestration/dist/canonical-json.js";
 import {
   ScaDependencyInventoryError,
   buildScaDependencyInventoryV1,

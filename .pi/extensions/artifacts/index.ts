@@ -16,7 +16,20 @@ import {
 
 const logger = createLogger("artifacts");
 
+/** Host-selected worker state. Captured in closure, never part of the model tool parameters. */
+export function createArtifactReadExtension(host: {
+  readonly projectRoot: string;
+  readonly env: NodeJS.ProcessEnv;
+}) {
+  return (pi: ExtensionAPI): void => registerArtifactReader(pi, host);
+}
 export default function artifactExtension(pi: ExtensionAPI): void {
+  registerArtifactReader(pi);
+}
+function registerArtifactReader(
+  pi: ExtensionAPI,
+  host?: { readonly projectRoot: string; readonly env: NodeJS.ProcessEnv }
+): void {
   const telemetry: ArtifactTelemetry = {
     info(event, context) {
       logger.info(event, context);
@@ -30,16 +43,16 @@ export default function artifactExtension(pi: ExtensionAPI): void {
     name: "artifact_read",
     label: "Artifact Read",
     description: [
-      "Read one exact immutable artifact by ID.",
+      "Read one exact immutable text or canonical PNG artifact by ID.",
       "Artifact IDs are internal communication addresses, not grants, and reads do not expire.",
       "This tool cannot list, search, discover, or guess artifacts.",
-      "Use next_range for bounded continuation until truncated is false.",
+      "Use next_range for bounded text continuation until truncated is false; PNG reads do not accept ranges.",
     ].join(" "),
     parameters: ArtifactReadParamsSchema,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       let config: ArtifactRuntimeConfig;
       try {
-        config = loadArtifactRuntimeConfig(ctx.cwd, process.env);
+        config = loadArtifactRuntimeConfig(host?.projectRoot ?? ctx.cwd, host?.env ?? process.env);
       } catch (error) {
         const execution = configurationErrorResult(error);
         telemetry.warn("artifact_read_failed", {
@@ -61,7 +74,9 @@ export {
 };
 export type {
   ArtifactExecution,
+  ArtifactImageToolResult,
   ArtifactReadParams,
   ArtifactRef,
   ArtifactRuntimeConfig,
+  ArtifactToolResult,
 } from "./types.js";

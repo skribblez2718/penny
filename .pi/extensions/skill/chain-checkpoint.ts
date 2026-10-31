@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { resolvePennyRuntimeState } from "@penny/orchestration/source";
+import { resolvePennyRuntimeState } from "@penny/orchestration";
 import { randomBytes } from "node:crypto";
 
 import { ArtifactClientError, parseArtifactRef, type ArtifactRef } from "./artifact-client.js";
@@ -24,6 +24,8 @@ export interface ChainCheckpointStep {
   contract_sha256?: string;
   goal: string;
   input_artifacts?: string[];
+  context_artifacts?: string[];
+  previous_artifact_designation?: "binding" | "context";
   session_id: string;
   status: "pending" | "running" | "complete" | "failed";
   model?: string;
@@ -31,6 +33,11 @@ export interface ChainCheckpointStep {
   result_preview?: string;
   output_artifact_ref?: ArtifactRef;
   handoff_artifact_ref?: ArtifactRef;
+  input_assurance?: {
+    readonly mode: "reviewed_definition" | "semantic_only" | "not_applicable";
+    readonly specification_artifact_id: string | null;
+    readonly assurance_ref: ArtifactRef;
+  };
   error?: string;
   error_detail?: {
     agent?: string;
@@ -56,6 +63,8 @@ export interface ChainCheckpoint {
     contract_sha256?: string;
     goal: string;
     input_artifacts?: string[];
+    context_artifacts?: string[];
+    previous_artifact_designation?: "binding" | "context";
     session_id: string;
     model?: string;
     constraints?: Record<string, unknown>;
@@ -131,6 +140,22 @@ function isArtifactRef(value: unknown): value is ArtifactRef {
   }
 }
 
+function isInputAssurance(
+  value: unknown
+): value is NonNullable<ChainCheckpointStep["input_assurance"]> {
+  return (
+    isRecord(value) &&
+    (value.mode === "reviewed_definition" ||
+      value.mode === "semantic_only" ||
+      value.mode === "not_applicable") &&
+    (value.specification_artifact_id === null ||
+      (typeof value.specification_artifact_id === "string" &&
+        /^art_[a-f0-9]{64}$/u.test(value.specification_artifact_id))) &&
+    isArtifactRef(value.assurance_ref) &&
+    value.assurance_ref.kind === "composition-assurance"
+  );
+}
+
 function isCheckpointStep(value: unknown): value is ChainCheckpointStep {
   if (!isRecord(value)) return false;
   const status = value.status;
@@ -143,6 +168,10 @@ function isCheckpointStep(value: unknown): value is ChainCheckpointStep {
         /^[a-f0-9]{64}$/u.test(value.contract_sha256))) &&
     typeof value.goal === "string" &&
     (value.input_artifacts === undefined || isStringArray(value.input_artifacts)) &&
+    (value.context_artifacts === undefined || isStringArray(value.context_artifacts)) &&
+    (value.previous_artifact_designation === undefined ||
+      value.previous_artifact_designation === "context" ||
+      value.previous_artifact_designation === "binding") &&
     typeof value.session_id === "string" &&
     (status === "pending" ||
       status === "running" ||
@@ -153,6 +182,7 @@ function isCheckpointStep(value: unknown): value is ChainCheckpointStep {
     (value.result_preview === undefined || typeof value.result_preview === "string") &&
     (value.output_artifact_ref === undefined || isArtifactRef(value.output_artifact_ref)) &&
     (value.handoff_artifact_ref === undefined || isArtifactRef(value.handoff_artifact_ref)) &&
+    (value.input_assurance === undefined || isInputAssurance(value.input_assurance)) &&
     (value.error === undefined || typeof value.error === "string") &&
     (errorDetail === undefined ||
       (isRecord(errorDetail) &&
@@ -174,6 +204,10 @@ function isPendingCheckpointStep(
         /^[a-f0-9]{64}$/u.test(value.contract_sha256))) &&
     typeof value.goal === "string" &&
     (value.input_artifacts === undefined || isStringArray(value.input_artifacts)) &&
+    (value.context_artifacts === undefined || isStringArray(value.context_artifacts)) &&
+    (value.previous_artifact_designation === undefined ||
+      value.previous_artifact_designation === "context" ||
+      value.previous_artifact_designation === "binding") &&
     typeof value.session_id === "string" &&
     (value.model === undefined || typeof value.model === "string") &&
     (value.constraints === undefined || isRecord(value.constraints))
@@ -242,21 +276,27 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
     if (value.schema_version === 3 && "release_status" in step) {
       checkpointError("schema-v3 skill-chain checkpoint retains a retired release field");
     }
-    if (step.input_artifacts !== undefined) {
+    for (const ids of [step.input_artifacts, step.context_artifacts]) {
       if (
-        !Array.isArray(step.input_artifacts) ||
-        new Set(step.input_artifacts).size !== step.input_artifacts.length ||
-        step.input_artifacts.some((id) => !/^art_[a-f0-9]{64}$/u.test(id))
-      ) {
+        ids !== undefined &&
+        (new Set(ids).size !== ids.length || ids.some((id) => !/^art_[a-f0-9]{64}$/u.test(id)))
+      )
         checkpointError("skill-chain explicit input artifacts are invalid");
-      }
     }
+    if (step.input_artifacts?.some((id) => step.context_artifacts?.includes(id)))
+      checkpointError("skill-chain context/native inputs overlap");
     return {
       index: step.index,
       skill_name: step.skill_name,
       ...(step.contract_sha256 === undefined ? {} : { contract_sha256: step.contract_sha256 }),
       goal: step.goal,
       ...(step.input_artifacts === undefined ? {} : { input_artifacts: [...step.input_artifacts] }),
+      ...(step.context_artifacts === undefined
+        ? {}
+        : { context_artifacts: [...step.context_artifacts] }),
+      ...(step.previous_artifact_designation === undefined
+        ? {}
+        : { previous_artifact_designation: step.previous_artifact_designation }),
       session_id: step.session_id,
       status: step.status,
       ...(step.model === undefined ? {} : { model: step.model }),
@@ -264,6 +304,7 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
       ...(step.result_preview === undefined ? {} : { result_preview: step.result_preview }),
       ...(outputRef ? { output_artifact_ref: outputRef } : {}),
       ...(handoffRef ? { handoff_artifact_ref: handoffRef } : {}),
+      ...(step.input_assurance === undefined ? {} : { input_assurance: step.input_assurance }),
       ...(step.error === undefined ? {} : { error: step.error }),
       ...(step.error_detail === undefined ? {} : { error_detail: { ...step.error_detail } }),
     };
@@ -277,6 +318,12 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
     ) {
       checkpointError("schema-v3 pending step registration binding is missing or stale");
     }
+    if (
+      JSON.stringify(pending.context_artifacts ?? []) !==
+        JSON.stringify(step.context_artifacts ?? []) ||
+      pending.previous_artifact_designation !== step.previous_artifact_designation
+    )
+      checkpointError("pending step context designation differs from canonical step");
     if (value.schema_version === 3 && "release_status" in pending) {
       checkpointError("schema-v3 pending step retains a retired release field");
     }
@@ -287,6 +334,12 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
         ? {}
         : { contract_sha256: pending.contract_sha256 }),
       goal: pending.goal,
+      ...(pending.context_artifacts === undefined
+        ? {}
+        : { context_artifacts: [...pending.context_artifacts] }),
+      ...(pending.previous_artifact_designation === undefined
+        ? {}
+        : { previous_artifact_designation: pending.previous_artifact_designation }),
       ...(pending.input_artifacts === undefined
         ? {}
         : { input_artifacts: [...pending.input_artifacts] }),

@@ -1,11 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { canonicalJson, sha256 } from "../../../../apps/orchestration/src/canonical-json.js";
+import { canonicalJson, sha256 } from "../../../../apps/orchestration/dist/canonical-json.js";
 import { registerTool } from "../../../lib/pi-tool-registration.js";
 import { loadScaClientConfig, ScaClientConfigError, type ScaClientConfig } from "./config.js";
 import { ScaClientError, ScaServiceClient, type ScaTerminalExecutionResult } from "./client.js";
 import {
-  SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1,
+  SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2,
   SCA_EXTENSION_BROKER_MANIFEST_SHA256,
   SCA_MODEL_TOOL_ROSTER,
   SCA_TOOL_OPERATION_MAP,
@@ -55,7 +55,7 @@ export interface RegisterScaToolsOptions {
   readonly createClient?: (config: ScaClientConfig) => ScaToolClient;
 }
 
-const executeRequestDigest = SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1.schema_digests.find(
+const executeRequestDigest = SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2.schema_digests.find(
   (entry) => entry.export_name === "ScaBrokerExecuteRequestV1Schema"
 );
 if (executeRequestDigest === undefined) {
@@ -78,7 +78,7 @@ export const SCA_PROVIDER_REGISTRATION_V1 = Object.freeze({
 
 const computedProviderRegistrationSha256 = sha256(canonicalJson(SCA_PROVIDER_REGISTRATION_V1));
 export const SCA_PROVIDER_REGISTRATION_SHA256 =
-  "6d541f74a45d4356936d9d06c4a74a0a87f467dfa66f5c0c27a57fca6259b448" as const;
+  "902e47178d9f25d0c5784efc907c47440bff1172ea4f65c9dac3c5df7a60f4a7" as const;
 if (computedProviderRegistrationSha256 !== SCA_PROVIDER_REGISTRATION_SHA256) {
   throw new Error("SCA provider registration digest does not match its frozen preimage");
 }
@@ -119,7 +119,7 @@ function publicMessage(code: ScaBrokerErrorCode): string {
     case "cancelled":
       return "SCA operation was cancelled";
     case "timeout":
-      return "SCA operation did not reach a terminal result before its deadline";
+      return "SCA operation or transport became inactive before reaching a terminal result";
     case "output_truncated":
       return "SCA operation returned only bounded partial output";
     case "failed":

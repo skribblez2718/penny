@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { SkillContractSchema, validateContract, type SkillContract } from "../src/contracts.js";
+import { SkillContractSchema, validateContract, type SkillContract } from "../dist/contracts.js";
 import {
   resolvePlaybook,
   validateRegistrationContract,
-  type PlaybookRegistrationV1,
-} from "../src/playbooks/registry.js";
-import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
+  type PlaybookRegistration,
+} from "../dist/playbooks/registry.js";
+import { RESEARCH_SKILL_CONTRACT } from "../dist/playbooks/research.js";
 
 type UnknownRecord = Record<string, unknown>;
 type Disposition =
@@ -60,7 +60,7 @@ function disposition(path: string): Disposition {
     };
   }
   if (path === "objective") {
-    return { kind: "surface", surface: "PlaybookRegistrationV1.contract.objective" };
+    return { kind: "surface", surface: "PlaybookRegistration.contract.objective" };
   }
   if (path === "schema_version" || path === "name" || path.startsWith("guidance.")) {
     return { kind: "enforced", probe: "schema+validateRegistrationContract" };
@@ -105,7 +105,7 @@ function deletePath(document: UnknownRecord, path: string): void {
   delete cursor[leaf];
 }
 
-function shippedResearchRegistration(): PlaybookRegistrationV1 {
+function shippedResearchRegistration(): PlaybookRegistration {
   const registration = resolvePlaybook("research");
   if (registration === undefined) throw new Error("research registration unavailable");
   return registration;

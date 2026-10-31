@@ -80,7 +80,7 @@ An agent is a **domain-invariant capability contract** whose objective, invarian
 
 The earlier framing — agents as universal _mental faculties_ — was retired because it misdescribed its own membership. Echo, Annie and Synthia resemble epistemic functions, but Skribble is a _production authority_ with write access and Tabitha is _operationalization_. Neither is a psychological faculty, and judging the roster by that standard invites two opposite mistakes: deleting good abstractions (Skribble and Tabitha look like category errors) and inventing useless ones ("complete the taxonomy" with `learn`, `remember`, `attend`, `route`).
 
-The capability-contract definition explains all ten current roles cleanly and rejects the domain-agent proliferation the architecture was built to escape.
+The capability-contract definition explains all eleven current roles cleanly and rejects the domain-agent proliferation the architecture was built to escape.
 
 #### The transformation table
 
@@ -96,6 +96,7 @@ Every Role Definition must be expressible as a domain-free `input → output` tr
 | Ideate     | ida      | problem + constraints → diverse candidate possibilities    |
 | Decide     | demetri  | alternatives + objectives → justified choice + sensitivity |
 | Plan       | piper    | goal + state + constraints → strategy                      |
+| Specify    | rhea     | bounded brief + evidence + constraints → specification     |
 | Taskify    | tabitha  | strategy/specification → executable task graph             |
 | Generate   | skribble | specification → materialized artifact                      |
 
@@ -104,7 +105,7 @@ Every Role Definition must be expressible as a domain-free `input → output` tr
 The roster is not one flat set. Recognising three families removes the pressure to force every role into a single ontology:
 
 - **Epistemic** — turn information into knowledge or judgment: explore, analyze, synthesize, critique, verify.
-- **Deliberative** — determine what should happen: ideate, decide, plan.
+- **Deliberative** — determine what should be defined or happen: ideate, decide, specify, plan.
 - **Operational** — convert intent into externalizable work: taskify, generate.
 
 Family membership is descriptive, **not** a workflow constraint. `analyze → decide`, `generate → verify` and `explore → synthesize` are all valid without passing through an intermediate family.
@@ -288,37 +289,33 @@ This is the safety net, and it is deliberately **not** self-critique. Intrinsic 
 
 ## 10. Concrete Verbs, Not Abstract Nominalizations
 
-**Status: [HYPOTHESIS]** — no direct literature exists for nominalization effects on instruction-following. Cheap to keep as editorial hygiene. The routing rationale below (signal-verb matching for auto-invocation) is an engineering argument and stands on its own.
+**Status: [HYPOTHESIS]** — this is editorial guidance, not a demonstrated mechanism for
+better model instruction-following. A noun suffix does not establish a defect.
 
 ### The Concept
 
-Name actions with verbs, not abstract nouns. A **nominalization** turns a process ("analyze", "decide", "verify") into a thing ("analysis", "decision", "verification"). When an instruction hides its action inside a noun, it stops being a step the model can execute and becomes a topic the model must interpret.
-
-| Nominalized (AVOID)                          | Concrete verb (PREFER) |
-| -------------------------------------------- | ---------------------- |
-| "Perform an analysis of the input"           | "Analyze the input"    |
-| "Responsible for the identification of gaps" | "Identify gaps"        |
-| "Conduct a review of the plan"               | "Review the plan"      |
-| "For the purpose of verification"            | "To verify"            |
-| "Upon completion of the exploration"         | "After you explore"    |
+Prefer a concrete verb when it makes the actor and required action clearer: “Verify the
+result” may be clearer than “Perform verification of the result.” Keep nominalizations
+when they name the thing the reader needs, such as a specification or an analysis skill.
 
 ### Why
 
-This is the same failure mode as output-shaped prompts (Principle 1) and narrative rules (Principle 7): a nominalization drops the actor and the action, so the model fills the gap with probability. It also degrades **routing** — the auto-invocation surface (agent/skill descriptions, When-to-Use bullets) matches on the concrete signal verbs a user actually types ("analyze", "review", "plan"), not on abstract labels ("analysis", "review"). This is why descriptions were reworded from "Use for [nominalizations]" to "Use when [verb triggers]" on 2026-07-02.
+The useful test is reader impact: does the passage hide who acts, blur an obligation, or
+add needless words? Claims that nouns inherently prevent execution or that routing relies
+on signal-verb matching are not the basis for this rule.
 
 ### The Test
 
-Flag a nominalization only when it disguises an action inside an **instruction or a description of behavior**. Look for a weak verb (perform / conduct / carry out / provide / do / ensure / facilitate) paired with an `-tion`/`-ment`/`-ance`/`-ing` noun, or a "the {noun} of X" construction.
-
-Do NOT flag legitimate uses:
-
-- Domain or label names ("the analysis skill", "verification agent").
-- Artifact nouns that name a thing, not a hidden action ("the specification", "the documentation", "a requirement").
-- Established technical terms (function, extension, session, information).
+Weak verbs paired with abstract nouns are watch patterns, not automatic findings. Quote
+the passage and explain a concrete ambiguity or burden before requesting revision. Keep
+legitimate labels, artifact nouns, established technical terms, and protected machine content.
+Do not use suffix counts, a blacklist, a style score, or an authorship detector.
 
 ### Application
 
-Applies to every authored layer: Cognitive Frame (`SYSTEM.md`), Role Definition (`.pi/agents/*.md`), Domain Guidance (`.pi/skills/*/assets/prompts/*.md`), skill and agent `description` fields, and the docs that instruct authors. Enforced by review, not by a linter — a suffix-based check flags too many legitimate domain nouns to be useful. See `cognitive-frame-standards.md` Rule 6 and `role-and-domain-standards.md`.
+Apply the [shared writing standard](../../agents/writing/standard.md#language-and-structure)
+to human-readable prompt text and documentation. The Cognitive Frame standard's Rule 6
+uses the same impact-based rule; exact vocabulary and wire contracts are not style edits.
 
 ## 11. Goals, Constraints, Capabilities — Never Procedure (The Bitter-Lesson Rule)
 

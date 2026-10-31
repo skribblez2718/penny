@@ -1,17 +1,14 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  createAgentSession,
-  SessionManager,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { registerTool } from "../../../.pi/lib/pi-tool-registration.js";
-import { createWorkerResourceLoader, parseSsotTools } from "../src/model-client.js";
+import { createWorkerResourceLoader, parseSsotTools } from "../dist/model-client.js";
+import { unavailableMemoryReplacement } from "./helpers/unavailable-memory-replacement.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const AGENTS_DIR = path.join(PROJECT_ROOT, ".pi", "agents");
@@ -23,7 +20,52 @@ function agentNames(): string[] {
     .sort();
 }
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("real SDK worker tool surfaces", () => {
+  it("uses this checkout's skills independent of the test cwd and inherited roots", () => {
+    expect(process.env.PENNY_SKILLS_DIR).toBe(path.join(PROJECT_ROOT, ".pi", "skills"));
+  });
+
+  it("still refuses registration when a test explicitly selects missing skill packages", async () => {
+    const emptySkillsDir = mkdtempSync(path.join(os.tmpdir(), "pi-compat-missing-skills-"));
+    vi.stubEnv("PENNY_SKILLS_DIR", emptySkillsDir);
+    const errorDigest = createHash("sha256")
+      .update(
+        "Failed to load extension: registry/package mismatch for 'assess': skill package or SKILL.md is unavailable"
+      )
+      .digest("hex");
+    try {
+      await expect(createWorkerResourceLoader(PROJECT_ROOT)).rejects.toThrow(errorDigest);
+    } finally {
+      rmSync(emptySkillsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses duplicate memory providers when exact source replacement is omitted or unrelated", async () => {
+    // An unconfigured primary may correctly register no memory tools. Worker-read
+    // registers an unavailable read surface even without a valid isolated config,
+    // so this conflict oracle does not depend on an operator's optional service.
+    vi.stubEnv("PENNY_RUNTIME_ROLE", "worker-read");
+    vi.stubEnv("PENNY_MEMORY_TRUST_MODE", "none");
+    const replacement = unavailableMemoryReplacement(PROJECT_ROOT, ["memory_smart_search"]);
+    await expect(createWorkerResourceLoader(PROJECT_ROOT, [replacement.extension])).rejects.toThrow(
+      /EXTENSION_CONFLICT/u
+    );
+    await expect(
+      createWorkerResourceLoader(
+        PROJECT_ROOT,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        [{ ...replacement, source: path.join(PROJECT_ROOT, ".pi/extensions/artifacts/index.ts") }]
+      )
+    ).rejects.toThrow(/EXTENSION_CONFLICT/u);
+  });
+
   it("activates exactly YAML tools for every catalog agent with optional services unconfigured", async () => {
     const declaredByAgent = new Map(
       agentNames().map((agent) => {
@@ -34,31 +76,16 @@ describe("real SDK worker tool surfaces", () => {
     const memoryNames = [
       ...new Set([...declaredByAgent.values()].flat().filter((name) => name.startsWith("memory_"))),
     ];
-    const unavailableMemory = (pi: ExtensionAPI): void => {
-      for (const name of memoryNames) {
-        registerTool(pi, {
-          name,
-          label: name,
-          description: "Typed unavailable optional-service test provider",
-          parameters: Type.Object({}, { additionalProperties: true }),
-          async execute() {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify({
-                    ok: false,
-                    error: { code: "MEMPALACE_UNAVAILABLE", retryable: true },
-                  }),
-                },
-              ],
-              details: {},
-            };
-          },
-        });
-      }
-    };
-    const resourceLoader = await createWorkerResourceLoader(PROJECT_ROOT, [unavailableMemory]);
+    const resourceLoader = await createWorkerResourceLoader(
+      PROJECT_ROOT,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [unavailableMemoryReplacement(PROJECT_ROOT, memoryNames)]
+    );
 
     for (const [agent, declared] of declaredByAgent) {
       const { session } = await createAgentSession({

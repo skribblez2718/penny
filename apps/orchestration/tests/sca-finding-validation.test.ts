@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../src/canonical-json.js";
+import { canonicalJson, sha256 } from "../dist/canonical-json.js";
 import {
   ScaFindingValidationError,
   buildScaM3ManifestV1,
@@ -9,7 +9,7 @@ import {
   sealScaFindingValidationResultV1,
   validateScaFindingValidationResultV1,
   validateScaM3ManifestV1,
-} from "../src/sca/finding-validation.js";
+} from "../dist/sca/finding-validation.js";
 
 const FINDING_ID = `scafind_${"a".repeat(64)}`;
 const CANDIDATE_ID = `scaobs_${"b".repeat(64)}`;

@@ -1,12 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { resolveToolResultBudget } from "../../lib/tool-result-budget.js";
-import {
-  createTestExtensionApi,
-  isRecord,
-  parseJson,
-  requireFunction,
-} from "../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../lib/tests/pi-test-host.js";
+import { isRecord, parseJson, requireFunction } from "../../../lib/tests/test-narrowers.js";
 import type { TextToolResult } from "../../lib/tool-result-budget.js";
 import type { MemoryRuntimeConfig } from "../types.js";
 

@@ -2,7 +2,7 @@ import {
   assertRegisteredBrowserPolicyCarrier,
   canonicalBrowserNetworkAllowlist,
   runWithRegisteredBrowserPolicy,
-} from "../../../../../apps/orchestration/src/browser-policy-carrier.js";
+} from "../../../../../apps/orchestration/dist/browser-policy-carrier.js";
 
 export interface RegisteredBrowserPolicyTestInput {
   readonly ownerScopeId: string;

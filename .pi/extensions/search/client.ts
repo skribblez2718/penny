@@ -25,6 +25,7 @@ export const MAX_PROVIDER_JSON_VALUES = 50_000;
 export interface SearchConfig {
   baseUrl: string;
   apiKey: string;
+  /** Backward-compatible name for the renewable transport inactivity interval. */
   timeoutMs: number;
 }
 
@@ -452,9 +453,42 @@ export function normalizeGithubApiFallbackPage(
 
 // ── HTTP ─────────────────────────────────────────────────
 
-function combineSignals(timeoutMs: number, signal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+interface RenewableInactivitySignal {
+  readonly signal: AbortSignal;
+  readonly expired: () => boolean;
+  readonly renew: () => void;
+  readonly dispose: () => void;
+}
+
+function renewableInactivitySignal(
+  inactivityMs: number,
+  callerSignal?: AbortSignal
+): RenewableInactivitySignal {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inactivityExpired = false;
+  const forwardAbort = (): void => controller.abort(callerSignal?.reason);
+  const renew = (): void => {
+    if (controller.signal.aborted) return;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      inactivityExpired = true;
+      controller.abort(new Error("search transport inactivity lease expired"));
+    }, inactivityMs);
+    timer.unref?.();
+  };
+  if (callerSignal?.aborted) forwardAbort();
+  else callerSignal?.addEventListener("abort", forwardAbort, { once: true });
+  renew();
+  return {
+    signal: controller.signal,
+    expired: () => inactivityExpired,
+    renew,
+    dispose: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", forwardAbort);
+    },
+  };
 }
 
 interface JsonResponse {
@@ -474,6 +508,25 @@ interface ApiRequestContext {
 
 function operationLabel(operation: SearchOperation): string {
   return operation === "web_fetch" ? "Ollama Web Fetch" : "Ollama Web Search";
+}
+
+function transportAbortError(
+  request: ApiRequestContext,
+  inactivityMs: number,
+  cancelled: boolean
+): SearchApiError {
+  const message = cancelled
+    ? request.operation === "web_fetch"
+      ? "Unable to fetch the requested URL because the caller cancelled Ollama Web Fetch"
+      : "Ollama Web Search was cancelled by the caller"
+    : request.operation === "web_fetch"
+      ? `Unable to fetch the requested URL because Ollama Web Fetch was inactive for ${inactivityMs}ms`
+      : `Ollama Web Search was inactive for ${inactivityMs}ms`;
+  return new SearchApiError(message, "aborted", {
+    operation: request.operation,
+    reason: cancelled ? "cancelled" : "timeout",
+    targetUrl: request.targetUrl,
+  });
 }
 
 function malformedResponse(
@@ -590,7 +643,8 @@ function assertBoundedJsonComplexity(
 
 async function readBoundedResponseJson(
   response: Response,
-  request: ApiRequestContext
+  request: ApiRequestContext,
+  reportActivity: () => void
 ): Promise<unknown> {
   const contentLength = response.headers.get("content-length")?.trim();
   if (contentLength !== undefined && /^\d+$/u.test(contentLength)) {
@@ -614,6 +668,7 @@ async function readBoundedResponseJson(
     while (true) {
       const part = await reader.read();
       if (part.done) break;
+      reportActivity();
       total += part.value.byteLength;
       if (total > MAX_PROVIDER_RESPONSE_BYTES) {
         await reader.cancel();
@@ -656,87 +711,89 @@ async function postJson(
     });
   }
 
-  let response: Response;
+  const inactivity = renewableInactivitySignal(config.timeoutMs, signal);
   try {
-    response = await fetchImpl(`${config.baseUrl}${request.path}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: combineSignals(config.timeoutMs, signal),
-    });
-  } catch (e: unknown) {
-    const name = e instanceof Error ? e.name : "";
-    if (name === "AbortError" || name === "TimeoutError") {
-      const cancelled = signal?.aborted === true;
-      const message = cancelled
-        ? request.operation === "web_fetch"
-          ? "Unable to fetch the requested URL because the caller cancelled Ollama Web Fetch"
-          : "Ollama Web Search was cancelled by the caller"
-        : request.operation === "web_fetch"
-          ? `Unable to fetch the requested URL because Ollama Web Fetch timed out after ${config.timeoutMs}ms`
-          : `Ollama Web Search timed out after ${config.timeoutMs}ms`;
-      throw new SearchApiError(message, "aborted", {
+    let response: Response;
+    try {
+      response = await fetchImpl(`${config.baseUrl}${request.path}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: inactivity.signal,
+      });
+      inactivity.renew();
+    } catch (e: unknown) {
+      const name = e instanceof Error ? e.name : "";
+      if (
+        signal?.aborted === true ||
+        inactivity.expired() ||
+        name === "AbortError" ||
+        name === "TimeoutError"
+      ) {
+        throw transportAbortError(request, config.timeoutMs, signal?.aborted === true);
+      }
+      const message = e instanceof Error && e.message ? e.message : String(e);
+      const diagnostic =
+        request.operation === "web_fetch"
+          ? `Unable to fetch the requested URL because Ollama Web Fetch could not be reached: ${message}`
+          : `Network error calling Ollama Web Search: ${message}`;
+      throw new SearchApiError(diagnostic, "network_error", {
         operation: request.operation,
-        reason: cancelled ? "cancelled" : "timeout",
+        reason: "network",
         targetUrl: request.targetUrl,
       });
     }
-    const message = e instanceof Error && e.message ? e.message : String(e);
-    const diagnostic =
-      request.operation === "web_fetch"
-        ? `Unable to fetch the requested URL because Ollama Web Fetch could not be reached: ${message}`
-        : `Network error calling Ollama Web Search: ${message}`;
-    throw new SearchApiError(diagnostic, "network_error", {
-      operation: request.operation,
-      reason: "network",
-      targetUrl: request.targetUrl,
-    });
-  }
 
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      const guidance = `Authentication failed (HTTP ${response.status}) — check that OLLAMA_API_KEY is valid.`;
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        const guidance = `Authentication failed (HTTP ${response.status}) — check that OLLAMA_API_KEY is valid.`;
+        const message =
+          request.operation === "web_fetch"
+            ? `Unable to fetch the requested URL because ${guidance}`
+            : guidance;
+        throw new SearchApiError(message, "client_error", {
+          operation: request.operation,
+          reason: "authentication",
+          status: response.status,
+          targetUrl: request.targetUrl,
+        });
+      }
       const message =
         request.operation === "web_fetch"
-          ? `Unable to fetch the requested URL because ${guidance}`
-          : guidance;
-      throw new SearchApiError(message, "client_error", {
+          ? `Unable to fetch the requested URL through Ollama Web Fetch (provider HTTP ${response.status}). The provider status does not establish that the destination URL itself returned HTTP ${response.status}; the destination may be unavailable, blocked, or unsupported by the fetch service.`
+          : `Ollama Web Search request failed (HTTP ${response.status}).`;
+      throw new SearchApiError(message, response.status >= 500 ? "server_error" : "client_error", {
         operation: request.operation,
-        reason: "authentication",
+        reason: response.status >= 500 ? "provider_response" : "fetch_response",
         status: response.status,
         targetUrl: request.targetUrl,
       });
     }
-    const message =
-      request.operation === "web_fetch"
-        ? `Unable to fetch the requested URL through Ollama Web Fetch (provider HTTP ${response.status}). The provider status does not establish that the destination URL itself returned HTTP ${response.status}; the destination may be unavailable, blocked, or unsupported by the fetch service.`
-        : `Ollama Web Search request failed (HTTP ${response.status}).`;
-    throw new SearchApiError(message, response.status >= 500 ? "server_error" : "client_error", {
-      operation: request.operation,
-      reason: response.status >= 500 ? "provider_response" : "fetch_response",
-      status: response.status,
-      targetUrl: request.targetUrl,
-    });
-  }
 
-  try {
-    const value = await readBoundedResponseJson(response, request);
-    return { value, status: response.status };
-  } catch (error) {
-    if (error instanceof SearchApiError) throw error;
-    const message =
-      request.operation === "web_fetch"
-        ? "Unable to fetch the requested URL because Ollama Web Fetch returned invalid JSON"
-        : `${operationLabel(request.operation)} returned invalid JSON`;
-    throw new SearchApiError(message, "server_error", {
-      operation: request.operation,
-      reason: "provider_response",
-      status: response.status,
-      targetUrl: request.targetUrl,
-    });
+    try {
+      const value = await readBoundedResponseJson(response, request, inactivity.renew);
+      return { value, status: response.status };
+    } catch (error) {
+      if (error instanceof SearchApiError) throw error;
+      if (signal?.aborted === true || inactivity.expired()) {
+        throw transportAbortError(request, config.timeoutMs, signal?.aborted === true);
+      }
+      const message =
+        request.operation === "web_fetch"
+          ? "Unable to fetch the requested URL because Ollama Web Fetch returned invalid JSON"
+          : `${operationLabel(request.operation)} returned invalid JSON`;
+      throw new SearchApiError(message, "server_error", {
+        operation: request.operation,
+        reason: "provider_response",
+        status: response.status,
+        targetUrl: request.targetUrl,
+      });
+    }
+  } finally {
+    inactivity.dispose();
   }
 }
 

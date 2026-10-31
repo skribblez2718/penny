@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "rootDir": "../..",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "smoke/ordinary-skills-live*.ts",
+    "tests/ordinary-skills-live-contract.test.ts",
+    "tests/ordinary-skills-live-guard.test.ts",
+    "tests/ordinary-skills-live-guard.ts",
+    "vitest.ordinary-skills-live.config.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

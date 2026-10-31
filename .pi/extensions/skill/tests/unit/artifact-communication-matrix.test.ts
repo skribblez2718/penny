@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { initializePennyState } from "@penny/orchestration/source";
+import { initializePennyState } from "@penny/orchestration";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -12,7 +12,8 @@ import {
 } from "../../artifact-client.js";
 import type { InputArtifactsV2 } from "../../input-artifacts.js";
 import type { SkillResult } from "../../skill-utils.js";
-import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 
 interface ServiceCapture {
   readonly runId: string;
@@ -41,8 +42,8 @@ const { serviceCaptures } = vi.hoisted(() => ({
   serviceCaptures: [] as ServiceCapture[],
 }));
 
-vi.mock("@penny/orchestration/source", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@penny/orchestration/source")>();
+vi.mock("@penny/orchestration", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@penny/orchestration")>();
   const record = (value: unknown): value is Record<string, unknown> =>
     value !== null && typeof value === "object" && !Array.isArray(value);
   return {

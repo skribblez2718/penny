@@ -3,8 +3,8 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { parseSsotTools, resolveDomainGuidancePath } from "../src/model-client.js";
-import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
+import { parseSsotTools, resolveDomainGuidancePath } from "../dist/model-client.js";
+import { RESEARCH_SKILL_CONTRACT } from "../dist/playbooks/research.js";
 
 const PROJECT_ROOT = path.resolve(new URL("../../..", import.meta.url).pathname);
 const AGENTS_DIR = path.join(PROJECT_ROOT, ".pi", "agents");

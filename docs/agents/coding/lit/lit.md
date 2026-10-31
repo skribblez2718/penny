@@ -1,20 +1,20 @@
 # Lit — Documentation Lookup
 
-> **Hybrid lookup.** The table below is a self-healing cache of known-good URLs.
-> Fetch the URL for your concept; if it 404s or drifts, repair the row per
-> [../library-docs.md](../library-docs.md). It is an entry point, not a data
-> source — fetch the live page for current, version-correct API.
+> **Hybrid lookup.** The table below supplies cached entry points. Fetch the URL
+> for your concept; follow [library lookup](../library-docs.md) for version/content
+> verification and failures. Repair rows only within authorized documentation
+> maintenance. It is an entry point, not a data source — fetch the live page for
+> current, version-correct API.
 
 - **Canonical docs:** https://lit.dev/docs/
 - **URL scheme:** `https://lit.dev/docs/<section>/<page>/` (trailing slash)
-- **Version:** confirm from the project's `package.json` (`lit` — currently
-  v3.x). Lit v2 → v3 changed decorators and imports; fetch docs for the
-  installed major version.
+- **Version:** confirm `lit` from the project's `package.json` / lockfile;
+  fetch docs for the installed major version, including decorator and import guidance.
 
-## Concept → URL table (self-healing cache)
+## Concept → URL table (cached entry points)
 
 `Verified`: `✓ <date>` = confirmed live that date · `seed` = curated, confirm on
-first use (a failed fetch self-heals and dates the row).
+first use. Dates change only after live verification in authorized maintenance.
 
 | Concept                                   | URL                                           | Verified     |
 | ----------------------------------------- | --------------------------------------------- | ------------ |
@@ -54,17 +54,17 @@ an integration. Other selected styling systems need their own documented boundar
 
 ## Secure Coding
 
-Lit auto-escapes text and attribute bindings, but several APIs bypass that and
-form the main client-side risk surface. Read the triggered secure-coding guides when building Lit UIs:
+Use the mandatory security baseline and positive triggers in the
+[security index](../security/AGENTS.md); this section adds Lit-specific reminders,
+not a second guide selector.
 
-- [XSS](../security/xss.md) — **Most relevant.** `unsafeHTML`, `unsafeSVG`, the `unsafeStatic`/`html` helpers from `static-html`, and binding to `.innerHTML` bypass Lit's auto-escaping. Never pass untrusted data to them; sanitize first.
-- [Input Validation](../security/input-validation.md) — Validate and constrain user input at the component boundary before use or dispatch.
-- [Secrets](../security/secrets.md) — Never embed API keys or tokens in client-side bundles; anything in the JS ships to the browser.
-- [Session Security](../security/session-security.md) — browser session storage and lifecycle.
-- [CSRF](../security/csrf.md) — cookie-authenticated state transitions.
-- [API Security](../security/api-security.md) — Components call APIs; guard against IDOR and excessive data exposure server-side.
-- [Browser Security](../security/browser-security.md) and [Configuration](../security/configuration.md) — CORS, browser policy, headers, and CSP. `unsafeCSS()`/inline styles interact with CSP — only ever pass trusted, compiled CSS to `unsafeCSS()`.
-- [Dependencies](../security/dependencies.md) and [Supply Chain](../security/supply-chain.md) — package and build/release trust.
-- [Security Verification](../security/security-verification.md) — evidence for security-sensitive UI work.
-
-See [security/AGENTS.md](../security/AGENTS.md) for the full secure-coding index.
+- Lit's normal escaping does not make raw rendering safe. `unsafeHTML`, `unsafeSVG`,
+  the `unsafeStatic`/`html` helpers from `static-html`, and `.innerHTML` are privileged
+  sinks. Never pass untrusted values without an explicit, reviewed sanitization
+  boundary and tests under [XSS](../security/xss.md).
+- Validate and constrain user input at the component boundary before use or dispatch;
+  client validation does not replace server-side validation or authorization.
+- Never embed API keys or tokens in client-side bundles; bundled JavaScript is public
+  to the browser.
+- `unsafeCSS()`/inline styles interact with CSP. Only trusted, compiled CSS may reach
+  `unsafeCSS()`; never user input. Verify actual rendering and browser-policy behavior.

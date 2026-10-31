@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../src/checkpointer.js";
+import { canonicalJson, sha256 } from "../dist/checkpointer.js";
 import {
   CHILD_EXECUTION_LEASE_PROFILE_V1,
   LIVENESS_CALIBRATION_SHA256,
@@ -9,7 +9,7 @@ import {
   childExecutionProgressLeaseBinding,
   resolveWorkerLeaseProfile,
   workerProgressLeaseBinding,
-} from "../src/liveness-profiles.js";
+} from "../dist/liveness-profiles.js";
 
 describe("immutable calibrated worker inactivity profiles", () => {
   it("selects exact provider/model profiles and conservative unknown-provider fallbacks", () => {

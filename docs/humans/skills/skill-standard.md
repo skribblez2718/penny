@@ -16,12 +16,18 @@ A well-formed Penny skill has:
 A registration owns how a workflow enters, validates its request, opens workers, chooses liveness
 and model posture, and proves completion. `.pi/skills` is the one package root and
 `PLAYBOOK_REGISTRY` is the sole executable registry. Visibility is a separate manifest choice: any
-valid package is model-visible and omits `disable-model-invocation`. Only a hidden package declares
-`disable-model-invocation: true`; redundant `false` is not permitted. `.pi/skills/.ignore` exactly
-mirrors explicit disablement. Penny also omits the upstream optional per-skill `license` field because
-its repository-level license governs tracked packages. A model-disabled development package may
-remain unregistered for documentation and static checks, but generic invocation refuses safely until
-a playbook exists. Knowledge Base remains a dedicated tool rather than a generic skill entry.
+visible package omits `disable-model-invocation` and is available to the user or Penny. A hidden
+package declares `disable-model-invocation: true`; redundant `false` is not permitted. Pi loads both
+classes, but omits hidden packages from automatic model advertising. The user can still invoke a
+hidden package with `/skill:<name> <description>`. Visibility does not grant registration or
+approval; unregistered workflows cannot execute. Penny also omits the upstream optional per-skill
+`license` field because its repository-level license governs tracked packages. Knowledge Base
+remains a dedicated tool rather than a generic skill entry.
+
+Manifest syntax is owned by [SKILL.md Format](../../agents/skills/skill-md-format.md); architecture
+requirements by the [agent standard](../../agents/skills/skill-standard.md), and verification by the
+[testing evidence matrix](../../agents/skills/testing.md#required-coverage). Closed phase schemas
+own SUMMARY keys; confidence and clarification fields are not universally optional additions.
 
 ## Artifact and state separation
 

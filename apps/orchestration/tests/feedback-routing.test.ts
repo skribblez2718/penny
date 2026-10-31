@@ -5,41 +5,44 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer, canonicalJson } from "../src/checkpointer.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer, canonicalJson } from "../dist/checkpointer.js";
 import {
-  EvaluationResultV2Schema,
+  EvaluationResultSchema,
   validateContract,
   validateDirective,
   type Confidence,
   type Directive,
-  type EvaluationResultV2,
+  type EvaluationResult,
   type JsonValue,
   type RunIdentity,
   type SkillContract,
-} from "../src/contracts.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationEngine } from "../src/engine.js";
-import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
+} from "../dist/contracts.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationEngine } from "../dist/engine.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../dist/model-client.js";
 import {
   hasStateAwareRepair,
-  type PlaybookCoreV1,
-  type PlaybookV1,
+  type PlaybookCore,
   type StateAwareRepairCapabilityV1,
-} from "../src/playbooks/playbook.js";
+} from "../dist/playbooks/playbook.js";
 import {
   KB_AGENT_PHASES,
   KNOWLEDGE_BASE_SKILL_CONTRACT,
   KnowledgeBasePlaybook,
-} from "../src/playbooks/knowledge-base.js";
+} from "../dist/playbooks/knowledge-base.js";
 import {
   resolvePlaybook,
   validateRegistrationContract,
-  type PlaybookRegistrationV1,
-  type PlaybookRegistryV1,
-} from "../src/playbooks/registry.js";
-import { RESEARCH_SKILL_CONTRACT, ResearchPlaybook } from "../src/playbooks/research.js";
-import { WorkerExecutor } from "../src/worker.js";
+  type PlaybookRegistration,
+  type PlaybookRegistry,
+} from "../dist/playbooks/registry.js";
+import {
+  RESEARCH_SKILL_CONTRACT,
+  ResearchPlaybook,
+  researchSummarySchema,
+} from "../dist/playbooks/research.js";
+import { WorkerExecutor } from "../dist/worker.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const roots: string[] = [];
@@ -101,7 +104,7 @@ function knowledgeBaseContext(): RunContext {
   return context;
 }
 
-const research = new ResearchPlaybook() as PlaybookV1;
+const research = new ResearchPlaybook();
 const knowledgeBase = new KnowledgeBasePlaybook();
 
 function routeKey(originState: string, feedbackKind: string): string {
@@ -111,19 +114,24 @@ function routeKey(originState: string, feedbackKind: string): string {
 class SummaryClient implements ModelClient {
   constructor(private readonly details: Record<string, JsonValue>) {}
 
-  async runAgent(_invocation: AgentInvocation): Promise<AgentCompletion> {
+  async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
+    for (let index = 0; index < 6; index += 1) {
+      invocation.liveness?.({ kind: "model_turn", source: "turn_start" });
+    }
     return {
-      text: `deterministic fixture\nSUMMARY:${JSON.stringify({
-        confidence: "CERTAIN",
-        ...this.details,
-      })}`,
+      text: `${invocation.executionPurpose === "routing_repair" ? "" : "deterministic fixture\n"}SUMMARY:${JSON.stringify(
+        {
+          confidence: "CERTAIN",
+          ...this.details,
+        }
+      )}`,
     };
   }
 }
 
 const MUTATING_PLAYBOOK = "mutating-repair-fixture";
 
-class MutatingRepairPlaybook implements PlaybookCoreV1, StateAwareRepairCapabilityV1 {
+class MutatingRepairPlaybook implements PlaybookCore, StateAwareRepairCapabilityV1 {
   initialize(context: RunContext): Directive {
     context.transition("working");
     return this.dispatch(context);
@@ -200,7 +208,7 @@ class MutatingRepairPlaybook implements PlaybookCoreV1, StateAwareRepairCapabili
     _context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResultV2 | null {
+  ): EvaluationResult | null {
     if (state !== "working" || details.needs_repair !== true) return null;
     return {
       schema_version: 2,
@@ -254,7 +262,7 @@ const MUTATING_CONTRACT: SkillContract = {
   },
 };
 
-const MUTATING_REGISTRATION: PlaybookRegistrationV1 = {
+const MUTATING_REGISTRATION: PlaybookRegistration = {
   name: MUTATING_PLAYBOOK,
   contract: MUTATING_CONTRACT,
   ingress: "dedicated_tool",
@@ -288,6 +296,143 @@ const MUTATING_REGISTRATION: PlaybookRegistrationV1 = {
   },
   completionReceiptPredicates: new Map(),
   construct: () => new MutatingRepairPlaybook(),
+};
+
+// W5 tests the shared router, not Research's sealed-product/review lifecycle. Use native
+// classification/bookkeeping with explicit synthetic dispatch and no product fingerprint policy.
+// Real Research must refuse a jump to Vera without host-validated product/evidence custody.
+class FeedbackRoutingPlaybook implements PlaybookCore, StateAwareRepairCapabilityV1 {
+  initialize(context: RunContext): Directive {
+    context.research.max_sub_queries = 4;
+    context.research.research_round = 1;
+    context.transition("validating");
+    return this.dispatch(context);
+  }
+
+  dispatch(context: RunContext): Directive {
+    const next =
+      context.stateId === "rendering"
+        ? validateDirective({
+            schema_version: 2,
+            action: "incomplete",
+            identity: context.identity,
+            status: "incomplete",
+            met: false,
+            result: {},
+            artifacts: context.selectedArtifacts,
+            unresolved: ["Synthetic evaluator exhausted its declared repair allowance."],
+          })
+        : validateDirective({
+            schema_version: 2,
+            action: "invoke_agent",
+            identity: context.identity,
+            state_id: context.stateId,
+            agent: "fixture-agent",
+            attempt: context.stepCount,
+            trust_profile: context.trustProfile,
+            task: "Return the declared W5 routing fixture SUMMARY.",
+            input_artifacts: {
+              schema_version: 2,
+              artifacts: context.selectedArtifacts.map((ref, index) => ({
+                slot: `source-${index}`,
+                ref,
+              })),
+            },
+            output_artifact: {
+              schema_version: 2,
+              run_id: context.identity.run_id,
+              phase: context.stateId,
+              branch_id: null,
+              kind: "agent-output",
+              operation_id: `feedback-${context.identity.run_id}-${context.stateId}`,
+              version: 1,
+              producer: "agent:fixture-agent",
+              media_type: "text/plain; charset=utf-8",
+              parent_ref: null,
+              upstream_refs: context.selectedArtifacts,
+            },
+          });
+    context.pendingDirective = next;
+    if (next.action === "incomplete") {
+      context.status = "incomplete";
+      context.met = false;
+      context.terminalDirective = next;
+    }
+    return next;
+  }
+
+  resume(_context: RunContext, _response: JsonValue): Directive {
+    throw new Error("W5 fixture has no user gate");
+  }
+
+  cancel(context: RunContext, reason: string): Directive {
+    return research.cancel(context, reason);
+  }
+
+  acceptSummary(): Directive {
+    throw new Error("W5 failure must take the declared repair route");
+  }
+
+  rebindPendingDirective(context: RunContext): Directive | null {
+    return context.pendingDirective;
+  }
+
+  evaluateRepair(context: RunContext, state: string, details: Record<string, JsonValue>) {
+    return research.evaluateRepair(context, state, details);
+  }
+
+  applyRepairBookkeeping(...args: Parameters<ResearchPlaybook["applyRepairBookkeeping"]>): void {
+    research.applyRepairBookkeeping(...args);
+  }
+}
+
+const FEEDBACK_REGISTRATION: PlaybookRegistration = {
+  name: "feedback-routing-fixture",
+  ingress: "dedicated_tool",
+  liveness: {
+    resolver_id: MUTATING_CONTRACT.budget_policy.resolver_id,
+    resolve: () => undefined,
+    thinking_policy: "agent_ssot",
+  },
+  contract: {
+    ...MUTATING_CONTRACT,
+    name: "feedback-routing-fixture",
+    repair_routing: {
+      schema_version: 1,
+      routes: RESEARCH_SKILL_CONTRACT.repair_routing.routes.filter(
+        (route) => route.origin_state === "validating"
+      ),
+    },
+    completion_gate: {
+      ...MUTATING_CONTRACT.completion_gate,
+      allowed_terminal_origins: ["rendering"],
+    },
+  },
+  // Deliberately omit repair_progress_policy: no native semantic candidate exists to measure.
+  host_states: ["rendering"],
+  worker: {
+    kind: "catalog-agent",
+    workflow_name: "feedback-routing-fixture",
+    guidance: MUTATING_CONTRACT.guidance,
+    guidance_required: true,
+    result_transport: "persisted_summary",
+    opening_policy: "registration_guidance_task_artifacts",
+    model_policy: "directive_override_or_runtime_default",
+    phases: new Map(
+      ["validating", "researching", "synthesizing"].map((state) => [
+        state,
+        {
+          agent: "fixture-agent",
+          result_schema_id: `penny.test.feedback-${state}-summary`,
+          result_schema_version: 1,
+          schema: researchSummarySchema(state),
+          routing_repair_policy: "preserve_source_summary_v1",
+        },
+      ])
+    ),
+  },
+  completionReceiptPredicates: new Map(),
+  construct: () => new FeedbackRoutingPlaybook(),
 };
 
 async function stepWithSummary(input: {
@@ -354,12 +499,14 @@ async function researchRouteScenario(input: {
     artifactRevisions: artifacts,
     artifactStore: artifacts,
     artifactReader: artifacts,
+    playbookName: FEEDBACK_REGISTRATION.name,
+    playbookRegistry: new Map([[FEEDBACK_REGISTRATION.name, FEEDBACK_REGISTRATION]]),
   });
   const identity: RunIdentity = {
     schema_version: 2,
     run_id: `run-route-${input.maxIterations}-${input.observerThrows ? "off" : "on"}`,
     session_id: "session-route",
-    playbook: "research",
+    playbook: FEEDBACK_REGISTRATION.name,
     engine_owner: "typescript",
   };
   let current = engine.handle({
@@ -367,26 +514,9 @@ async function researchRouteScenario(input: {
     action: "start",
     identity,
     goal: "Exercise engine-owned repair.",
-    constraints: { mode: "quick", max_iterations: input.maxIterations },
+    constraints: { max_iterations: input.maxIterations },
     project_root: root,
     trust_profile: "trusted-interactive",
-  });
-  current = await stepWithSummary({
-    engine,
-    artifacts,
-    projectRoot: root,
-    directive: requireInvocation(current),
-    details: { explore_complete: true },
-  });
-  // Typed semantic drafting now enters deterministic host projection immediately. This focused W5
-  // fixture isolates the unchanged engine-owned validating route by placing the already-durable
-  // post-research run at that registered evaluator boundary before Synthia is invoked.
-  const validatingContext = checkpointer.loadRun(identity);
-  validatingContext.transition("validating");
-  current = research.dispatch(validatingContext);
-  checkpointer.saveRun(validatingContext, "feedback_fixture_validating", {
-    run_id: identity.run_id,
-    state_id: "validating",
   });
   current = await stepWithSummary({
     engine,
@@ -400,6 +530,16 @@ async function researchRouteScenario(input: {
       evidence_needed: ["private-evidence-request-must-not-enter-route-event"],
     },
   });
+  const [source] = checkpointer.loadRun(identity).selectedArtifacts;
+  if (source === undefined) throw new Error("accepted evaluator report was not retained");
+  expect(Buffer.from(artifacts.readById(source.artifact_id)).toString("utf8")).toContain(
+    "claim-body-must-not-enter-route-event"
+  );
+  if (current.action === "invoke_agent") {
+    expect(current.input_artifacts.artifacts.map((input) => input.ref)).toEqual([source]);
+  } else if (current.action === "incomplete") {
+    expect(current.artifacts).toContainEqual(source);
+  }
   const event = [...checkpointer.events(identity.run_id)]
     .reverse()
     .find((candidate) => candidate.payload.feedback_route_evidence_v1 !== undefined);
@@ -411,6 +551,8 @@ async function researchRouteScenario(input: {
     projectRoot: root,
     maxSteps: 32,
     receiptAuthority: TEST_RECEIPT_AUTHORITY,
+    playbookName: FEEDBACK_REGISTRATION.name,
+    playbookRegistry: new Map([[FEEDBACK_REGISTRATION.name, FEEDBACK_REGISTRATION]]),
   });
   const recovered = restarted.handle({
     schema_version: 2,
@@ -423,7 +565,7 @@ async function researchRouteScenario(input: {
 }
 
 describe("W5 typed evaluation and declared routes", () => {
-  it("uses EvaluationResultV2 and rejects playbook-selected targets or exhaustion", () => {
+  it("uses EvaluationResult and rejects playbook-selected targets or exhaustion", () => {
     const valid = {
       schema_version: 2,
       kind: "evidence_gap",
@@ -431,16 +573,16 @@ describe("W5 typed evaluation and declared routes", () => {
       findings: ["claim-1"],
       strategy_delta: "Gather the missing evidence.",
     };
-    expect(() => validateContract(EvaluationResultV2Schema, valid, "evaluation")).not.toThrow();
+    expect(() => validateContract(EvaluationResultSchema, valid, "evaluation")).not.toThrow();
     expect(() =>
       validateContract(
-        EvaluationResultV2Schema,
+        EvaluationResultSchema,
         { ...valid, target_state: "researching" },
         "evaluation"
       )
     ).toThrow();
     expect(() =>
-      validateContract(EvaluationResultV2Schema, { ...valid, exhausted: false }, "evaluation")
+      validateContract(EvaluationResultSchema, { ...valid, exhausted: false }, "evaluation")
     ).toThrow();
   });
 
@@ -558,11 +700,22 @@ describe("W5 typed evaluation and declared routes", () => {
 });
 
 describe("W5 engine-owned state-aware repair", () => {
+  it("keeps native Research pre-review custody refusal separate from the shared routing fixture", () => {
+    const context = researchContext({});
+    context.transition("validating");
+    expect(research.dispatch(context)).toMatchObject({
+      action: "incomplete",
+      met: false,
+      result: { incomplete_reason: "host_mechanical_validation_failed" },
+    });
+    expect(FEEDBACK_REGISTRATION.repair_progress_policy).toBeUndefined();
+  });
+
   it("rejects playbook bookkeeping that mutates engine-owned control fields", async () => {
     const root = temporaryRoot();
     using checkpointer = new Checkpointer(path.join(root, "orchestration.db"));
     using artifacts = new ArtifactStore(path.join(root, "artifacts"));
-    const registry: PlaybookRegistryV1 = new Map([
+    const registry: PlaybookRegistry = new Map([
       [MUTATING_REGISTRATION.name, MUTATING_REGISTRATION],
     ]);
     const engine = new OrchestrationEngine(checkpointer, {
@@ -648,6 +801,114 @@ describe("W5 engine-owned state-aware repair", () => {
 });
 
 describe("P1.2 malformed routing remains isolated", () => {
+  it.each([false, true])(
+    "retries repeated malformed metadata with original custody and exact recovery (parallel=%s)",
+    async (parallel) => {
+      const root = temporaryRoot();
+      using checkpointer = new Checkpointer(path.join(root, "orchestration.db"));
+      using artifacts = new ArtifactStore(path.join(root, "artifacts"));
+      const engine = new OrchestrationEngine(checkpointer, {
+        projectRoot: root,
+        receiptAuthority: TEST_RECEIPT_AUTHORITY,
+        artifactRevisions: artifacts,
+        artifactStore: artifacts,
+        artifactReader: artifacts,
+      });
+      const runIdentity: RunIdentity = {
+        schema_version: 2,
+        run_id: `run-metadata-repeat-${parallel}`,
+        session_id: "session-metadata-repeat",
+        playbook: "research",
+        engine_owner: "typescript",
+      };
+      let current = engine.handle({
+        schema_version: 2,
+        action: "start",
+        identity: runIdentity,
+        goal: "Preserve semantic source while correcting metadata",
+        constraints: { mode: parallel ? "quick" : "standard" },
+        project_root: root,
+        trust_profile: "trusted-interactive",
+      });
+      // Planning is a single assignment; Quick is a one-branch parallel fan.
+      let sourceId: string | undefined;
+      for (let index = 0; index < 5; index += 1) {
+        const workers = new WorkerExecutor(new SummaryClient({ invalid_field: true }), artifacts, {
+          projectRoot: root,
+          parallelConcurrency: 1,
+          registration: engine.registration,
+        });
+        workers.setReceiptAuthority(engine.receiptAuthority);
+        workers.setLivenessController(engine.liveness);
+        const results = await workers.execute(current);
+        if (results.length !== 1) throw new Error("expected one malformed assignment");
+        const result = results[0];
+        if (result === undefined) throw new Error("missing malformed result");
+        const next = engine.handle({
+          schema_version: 2,
+          action: "step",
+          identity: runIdentity,
+          result,
+        });
+        workers.acceptArtifact(result);
+        const assignment =
+          next.action === "invoke_agent"
+            ? next
+            : next.action === "invoke_agents_parallel"
+              ? next.branches[0]
+              : undefined;
+        if (assignment?.routing_repair_binding === undefined)
+          throw new Error(`metadata attempt ${index} terminated: ${next.action}`);
+        const binding = assignment.routing_repair_binding;
+        if (sourceId === undefined) sourceId = binding.source_artifact_ref.artifact_id;
+        expect(binding.source_artifact_ref.artifact_id).toBe(sourceId);
+        expect(assignment.output_artifact.version).toBe(index + 1);
+        expect(assignment.input_artifacts.artifacts.map((input) => input.ref.artifact_id)).toEqual([
+          sourceId,
+        ]);
+        expect(
+          engine.handle({ schema_version: 2, action: "recover", identity: runIdentity })
+        ).toEqual(next);
+        current = next;
+      }
+      const details = parallel
+        ? { explore_complete: true }
+        : { plan_complete: true, plan_steps: ["one query"] };
+      const workers = new WorkerExecutor(new SummaryClient(details), artifacts, {
+        projectRoot: root,
+        parallelConcurrency: 1,
+        registration: engine.registration,
+      });
+      workers.setReceiptAuthority(engine.receiptAuthority);
+      workers.setLivenessController(engine.liveness);
+      const [result] = await workers.execute(current);
+      if (result === undefined) throw new Error("corrected metadata absent");
+      const next = engine.handle({
+        schema_version: 2,
+        action: "step",
+        identity: runIdentity,
+        result,
+      });
+      workers.acceptArtifact(result);
+      expect(next.action).toBe(parallel ? "invoke_agent" : "invoke_agents_parallel");
+      expect(checkpointer.loadRun(runIdentity).maxSteps).toBeNull();
+      expect(engine.liveness.snapshot(runIdentity.run_id)).toMatchObject({
+        malformed_results: 5,
+        repair_invocations: 5,
+      });
+      const cancelled = engine.handle({
+        schema_version: 2,
+        action: "cancel",
+        identity: runIdentity,
+        reason: "operator stop",
+      });
+      expect(cancelled).toMatchObject({ action: "cancelled", met: false });
+      expect(
+        engine.handle({ schema_version: 2, action: "recover", identity: runIdentity })
+      ).toEqual(cancelled);
+    }
+  );
+
   it("keeps malformed_result out of declarative repair routes", () => {
     expect(
       [

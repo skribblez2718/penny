@@ -1,4 +1,9 @@
 import {
+  enforceNativeAutoCompaction,
+  createCompactionProgressObserver,
+  type CompactionProgressObserver,
+} from "../../../.pi/lib/compaction-policy.mjs";
+import {
   buildCatalogPrompt,
   catalogRoleBody,
   loadPromptDocumentation,
@@ -14,20 +19,26 @@ import {
   fsyncSync,
   lstatSync,
   openSync,
+  realpathSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  DefaultPackageManager,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
   SettingsManager,
   createAgentSession,
+  createEventBus,
+  type EventBus,
   getAgentDir,
   parseSessionEntries,
-  resolveModelScopeWithDiagnostics,
+  parseFrontmatter,
+  resolveCliModel,
   type AgentSessionEvent,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
@@ -41,6 +52,7 @@ import {
   registeredBrowserPolicyOwnerScopeId,
 } from "./browser-policy-carrier.js";
 import {
+  ContractValidationError,
   ArtifactRefSchema,
   LivenessTerminalReasonSchema,
   validateContract,
@@ -50,8 +62,23 @@ import {
   type LivenessTerminalReason,
   type SkillContract,
 } from "./contracts.js";
-import { isExternalCallTool, LivenessExhaustedError, type WorkerPromptBudget } from "./liveness.js";
+import { LivenessExhaustedError, type WorkerPromptBudget } from "./liveness.js";
+import {
+  admitImageInputModel,
+  recheckImageInputModel,
+  type ModelImageCapabilityEvidenceV1,
+} from "./model-vision.js";
+import {
+  PhaseResultProjectionDeclarationV1Schema,
+  type PhaseResultProjectionDeclarationV1,
+} from "./phase-result-projection.js";
+import { isProviderOpeningGuardId } from "./provider-opening-guard.js";
 import type { ResearchContextOverlay } from "./research-context.js";
+import {
+  assertResolvedModelIdentity,
+  validateRequiredModelIdentity,
+  type RequiredModelIdentityV1,
+} from "./required-model.js";
 import {
   assertOwnerDirectory,
   assertOwnerFile,
@@ -80,13 +107,26 @@ export interface ActiveWorkerRegistrationMetadataV1 {
   readonly documentation_sources?: readonly StaticDocumentSource[];
   readonly prompt_sources?: readonly StaticDocumentSource[];
   readonly result_transport: "persisted_summary" | "host_typed";
-  readonly opening_policy: "registration_guidance_task_artifacts" | "host_private_opening";
-  readonly model_policy: "directive_override_or_runtime_default" | "host_private_ssot_model";
+  /** Exact active phase declaration; absent preserves the model-authored SUMMARY opening. */
+  readonly result_projection?: PhaseResultProjectionDeclarationV1;
+  readonly opening_policy: "registration_guidance_task_artifacts" | "host_private_opening" | "none";
+  readonly model_policy:
+    | "directive_override_or_runtime_default"
+    | "host_private_ssot_model"
+    | "none";
   /**
-   * Exact phase surface projected from the active PlaybookRegistrationV1. Absence preserves
+   * Exact phase surface projected from the active PlaybookRegistration. Absence preserves
    * YAML equality; presence is the registration-digest-bound strict subset revalidated here.
    */
   readonly allowed_tools?: readonly string[];
+  /** Registration-bound final-opening authorization policy for an explicit zero-tool phase. */
+  readonly provider_opening_guard?:
+    | "sca_p04_payload_disclosure_v1"
+    | "sca_p05_payload_disclosure_v1"
+    | "sca_p06_payload_disclosure_v1"
+    | "sca_p08_payload_disclosure_v1"
+    | "sca_p10_payload_disclosure_v1"
+    | "sca_p11_payload_disclosure_v1";
   /**
    * Present only for a generic-child YAML-maximum phase. Absence means no such carrier; a present
    * null snapshot means registration binding was unbound and must fail closed.
@@ -94,6 +134,12 @@ export interface ActiveWorkerRegistrationMetadataV1 {
   readonly generic_child_yaml_authority?: GenericChildCatalogAgentYamlMaximumCarrierV1;
   /** Exact immutable phase policy; only WorkerExecutor may project it from registration. */
   readonly browser_network_allowlist?: readonly string[];
+  /** Optional prompt filename state for internal fan-branch execution states. */
+  readonly guidance_state_id?: string;
+  /** Registration-owned exact model identity; no catalog default or fallback is permitted. */
+  readonly required_model?: RequiredModelIdentityV1;
+  /** Registration-bound demand for positive image-input metadata before every model prompt. */
+  readonly requires_image_input?: true;
 }
 
 export interface WorkflowSessionCorrelationV1 {
@@ -130,6 +176,7 @@ export type CatalogWorkerSessionMetadataV1 = Readonly<
 >;
 
 export const CATALOG_WORKER_CONTINUITY_METADATA = "penny.orchestration.worker-continuity" as const;
+export const CATALOG_WORKER_CONTINUITY_OPENING_MAX_CHARACTERS = 1_048_576 as const;
 
 /**
  * Closed, path-free assignment material appended before the first model prompt.
@@ -155,7 +202,10 @@ export const CatalogWorkerContinuityMetadataV1Schema = Type.Object(
       Type.Object(
         {
           mode: Type.Literal("exact_opening"),
-          opening: Type.String({ minLength: 1, maxLength: 1_048_576 }),
+          opening: Type.String({
+            minLength: 1,
+            maxLength: CATALOG_WORKER_CONTINUITY_OPENING_MAX_CHARACTERS,
+          }),
         },
         { additionalProperties: false }
       ),
@@ -208,7 +258,7 @@ export interface AgentInvocation {
   readonly executionPurpose?: "phase" | "routing_repair";
   /**
    * Bounded owner-resolved content plus use-time validation metadata. WorkerExecutor supplies
-   * this only after its cancellable resolver Promise has passed the host-owned deadline race.
+   * this only after its cancellable resolver Promise has passed the host-owned inactivity lease.
    */
   readonly contextOverlays?: readonly ResearchContextOverlay[];
   readonly signal?: AbortSignal;
@@ -217,7 +267,12 @@ export interface AgentInvocation {
   /** Read-only projection of the host-enforced counters for this open worker lease. */
   readonly livenessBudget?: WorkerPromptBudget;
   readonly modelOverride?: string;
-  /** Host-owned per-invocation policy; when absent, session-level fallback remains authoritative. */
+  /**
+   * Exact positive image-input evidence captured at admission. When present, an explicit override
+   * is checked before session creation and every created session is checked again before prompt.
+   */
+  readonly requiredImageCapability?: ModelImageCapabilityEvidenceV1;
+  /** Host-owned policy (including Research presets), ahead of test and catalog/settings defaults. */
   readonly thinkingLevel?: SessionThinkingLevel;
   /**
    * Pre-session admission hook.
@@ -232,6 +287,16 @@ export interface AgentInvocation {
    * rather than run on an unadmitted default.
    */
   readonly admitResolvedModel?: (resolved: { provider: string; model: string }) => void;
+  /**
+   * Lazily materialized provider-visible appendix. Pi calls this only after final session-model and
+   * tool-surface checks, immediately before serializing the complete opening.
+   */
+  readonly providerOpeningAppendix?: () => string;
+  /**
+   * Durable dispatch fence. Pi supplies the exact complete opening immediately before the first
+   * provider prompt. Throwing proves that no prompt was dispatched by this invocation.
+   */
+  readonly guardModelDispatch?: (serializedOpening: string) => void;
   /**
    * Post-creation, pre-prompt binding for host controls that need Pi's actual session model when
    * no explicit override was supplied. Unlike admitResolvedModel, this does not authorize session
@@ -294,7 +359,7 @@ export interface AgentSessionSpecV1 {
 
 /**
  * W6 — resolved worker posture. YAML is the maximum; only the active TypeScript
- * PlaybookRegistrationV1 may bind one fixed strict subset for an orchestration phase.
+ * PlaybookRegistration may bind one fixed strict subset for an orchestration phase.
  */
 export interface WorkerPostureV1 {
   readonly agentGuidancePath: string;
@@ -653,9 +718,29 @@ export function contentFreeSessionTraceRecord(
   };
 }
 
+/**
+ * Trusted host composition, never a model/request-selected tool policy. The source must
+ * identify one exact extension entry file; symlink aliases share its canonical identity.
+ * The scoped factory also loads when that source is absent from the enabled inventory.
+ */
+export interface WorkerExtensionSourceReplacement {
+  readonly source: string;
+  readonly extension: InlineExtension;
+}
+
 export interface PiAgentClientOptions {
-  readonly resolveModel?: (modelId: string) => Promise<PiModel> | PiModel;
+  /** Host-only SDK instrumentation. Omitted ordinary clients retain their existing defaults. */
+  readonly sessionRuntime?: {
+    readonly settingsManager: SettingsManager;
+    readonly noAmbientExtensions: true;
+    readonly attach: (
+      session: Awaited<ReturnType<typeof createAgentSession>>["session"],
+      invocation: AgentInvocation
+    ) => () => void;
+  };
+  readonly resolveModel?: (modelId: string, provider?: string) => Promise<PiModel> | PiModel;
   readonly workerExtensions?: readonly InlineExtension[];
+  readonly workerExtensionReplacements?: readonly WorkerExtensionSourceReplacement[];
   /** Optional content-free lifecycle accounting for ordinary and private sessions. */
   readonly sessionTrace?: AgentSessionTraceSink;
   /** Existing owner-resolved project partition; no path selector or fallback is accepted. */
@@ -666,8 +751,8 @@ export interface PiAgentClientOptions {
   /** TEST-ONLY session seam. Production catalog workers must use catalogSessions. */
   readonly testOnlySessionManagerFactory?: (invocation: AgentInvocation) => SessionManager;
   /**
-   * TEST-ONLY fallback used only when host invocation policy is absent. Other
-   * production sessions omit both fields and retain normal settings behavior.
+   * TEST-ONLY fallback used only when host invocation policy is absent. Catalog YAML
+   * supplies the ordinary default; anonymous private sessions retain SDK settings.
    */
   readonly testOnlyThinkingLevelOverride?: SessionThinkingLevel;
 }
@@ -708,26 +793,65 @@ function piAssistantLivenessReason(
   }
 }
 
-export function canonicalAssistantText(messages: readonly unknown[]): string {
+/** Terminal failure is independent of exact captured text; neither is a successful completion. */
+export class AgentTerminalError extends Error {
+  readonly code = "agent_terminal_error" as const;
+  readonly #partialText: string;
+
+  constructor(
+    readonly stopReason: "error" | "aborted",
+    partialText: string
+  ) {
+    // Provider errors and partial output can contain private data. Keep ordinary error
+    // serialization content-free; exact non-sensitive evidence is available explicitly.
+    super(`agent session ended with assistant terminal stop reason: ${stopReason}`);
+    this.name = "AgentTerminalError";
+    this.#partialText = partialText;
+  }
+
+  get partialText(): string {
+    return this.#partialText;
+  }
+}
+
+function finalAssistantMessage(messages: readonly unknown[]): Record<string, unknown> | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = objectValue(messages[index], "agent message");
-    if (message.role !== "assistant") continue;
-    const livenessReason = piAssistantLivenessReason(message);
-    if (livenessReason !== undefined) throw new LivenessExhaustedError(livenessReason);
-    if (typeof message.content === "string") {
-      return requireNonEmptyStageOutput(message.content);
-    }
-    if (Array.isArray(message.content)) {
-      const text = message.content
-        .map((part) => objectValue(part, "assistant content part"))
-        .filter((part) => part.type === "text" && typeof part.text === "string")
-        .map((part) => String(part.text))
-        .join("");
-      return requireNonEmptyStageOutput(text);
-    }
-    throw new EmptyStageOutputError();
+    if (message.role === "assistant") return message;
   }
-  throw new EmptyStageOutputError();
+  return undefined;
+}
+
+function assistantMessageText(message: Readonly<Record<string, unknown>>): string {
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .map((part) => objectValue(part, "assistant content part"))
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => String(part.text))
+    .join("");
+}
+
+function assertAssistantTerminalSucceeded(
+  message: Readonly<Record<string, unknown>> | undefined,
+  sensitiveOutput = false
+): void {
+  if (message === undefined) return;
+  const livenessReason = piAssistantLivenessReason(message);
+  if (livenessReason !== undefined) throw new LivenessExhaustedError(livenessReason);
+  if (message.stopReason === "error" || message.stopReason === "aborted") {
+    throw new AgentTerminalError(
+      message.stopReason,
+      sensitiveOutput ? "" : assistantMessageText(message)
+    );
+  }
+}
+
+export function canonicalAssistantText(messages: readonly unknown[]): string {
+  const message = finalAssistantMessage(messages);
+  assertAssistantTerminalSucceeded(message);
+  if (message === undefined) throw new EmptyStageOutputError();
+  return requireNonEmptyStageOutput(assistantMessageText(message));
 }
 
 /**
@@ -751,6 +875,34 @@ export function ssotModel(agentDoc: string): string | undefined {
     .find((candidate) => candidate.startsWith("model:"));
   const value = line?.slice(line.indexOf(":") + 1).trim();
   return value && value.length > 0 ? value : undefined;
+}
+
+/** The provider pin is independent of the model alias and must not fall back to session settings. */
+export function ssotProvider(agentDoc: string): string | undefined {
+  const match = agentDoc.match(/^---\r?\n([\s\S]*?)\r?\n---/u);
+  const line = (match?.[1] ?? "")
+    .split(/\r?\n/)
+    .find((candidate) => candidate.startsWith("provider:"));
+  const value = line?.slice(line.indexOf(":") + 1).trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
+/** Optional catalog default, validated against the SDK thinking vocabulary without coercion. */
+export function ssotThinkingLevel(agentDoc: string): SessionThinkingLevel | undefined {
+  const { frontmatter } = parseFrontmatter<Record<string, unknown>>(agentDoc);
+  const level = frontmatter.thinking;
+  switch (level) {
+    case undefined:
+    case "off":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return level;
+    default:
+      throw new Error("invalid catalog thinking level");
+  }
 }
 
 /** The agent SSOT body with its frontmatter removed. */
@@ -792,33 +944,145 @@ export function parseSsotTools(agentDoc: string, agent: string): readonly string
   return names;
 }
 
+// Disclosure ceiling, not a retry/factory limit: every error still refuses the loader.
+const WORKER_EXTENSION_DIAGNOSTIC_LIMIT = 8;
+
+interface WorkerExtensionDiagnostic {
+  readonly source: "installed_artifact_reader" | "inline_extension" | "external_extension";
+  readonly classification:
+    | "ORCHESTRATION_BUILD_STALE"
+    | "INSTALLED_ARTIFACT_READER_UNAVAILABLE"
+    | "EXTENSION_CONFLICT"
+    | "EXTENSION_LOAD_ERROR";
+  readonly path_sha256: string;
+  readonly error_sha256: string;
+}
+
+/** SDK diagnostics may embed arbitrary private paths, inputs or secrets, even in names. */
+class WorkerExtensionLoadError extends ContractValidationError {
+  readonly code = "WORKER_EXTENSION_LOAD_FAILED" as const;
+
+  constructor(errors: readonly { path: string; error: string }[]) {
+    const installedReader = (entry: { path: string }): boolean =>
+      entry.path === "<inline:artifact-worker-read>";
+    // Keep the fixed reader's failure intelligible even behind many unrelated loader errors.
+    const ordered = [
+      ...errors.filter(installedReader),
+      ...errors.filter((entry) => !installedReader(entry)),
+    ];
+    const diagnostics: WorkerExtensionDiagnostic[] = ordered
+      .slice(0, WORKER_EXTENSION_DIAGNOSTIC_LIMIT)
+      .map((entry) => ({
+        source:
+          entry.path === "<inline:artifact-worker-read>"
+            ? "installed_artifact_reader"
+            : entry.path.startsWith("<inline:")
+              ? "inline_extension"
+              : "external_extension",
+        // These are diagnostic classifications, never authority or permission decisions.
+        classification: entry.error.startsWith("ORCHESTRATION_BUILD_STALE:")
+          ? "ORCHESTRATION_BUILD_STALE"
+          : entry.error === "Installed artifact reader unavailable"
+            ? "INSTALLED_ARTIFACT_READER_UNAVAILABLE"
+            : /^(?:Tool ".*"|Flag "--.*") conflicts with /u.test(entry.error)
+              ? "EXTENSION_CONFLICT"
+              : "EXTENSION_LOAD_ERROR",
+        path_sha256: sha256(entry.path),
+        error_sha256: sha256(entry.error),
+      }));
+    // Reuse the structured contract-error transport; never retain a raw cause or stack.
+    super("WORKER_EXTENSION_LOAD_FAILED before model/session creation", [
+      `extension_errors=${errors.length}; omitted=${errors.length - diagnostics.length}; installed_reader_errors=${errors.filter(installedReader).length}; stale_build_errors=${errors.filter((entry) => entry.error.startsWith("ORCHESTRATION_BUILD_STALE:")).length}`,
+      ...diagnostics.map((diagnostic) => canonicalJson(diagnostic)),
+    ]);
+    this.name = "WorkerExtensionLoadError";
+    this.message = `WORKER_EXTENSION_LOAD_FAILED: extension registration refused before model/session creation; ${this.issues.join("; ")}`;
+  }
+}
+
 export async function createWorkerResourceLoader(
   projectRoot: string,
   extensionFactories: readonly InlineExtension[] = [],
-  catalogSystemPrompt?: string
+  catalogSystemPrompt?: string,
+  runtime?: PiAgentClientOptions["sessionRuntime"],
+  sharedSettings?: SettingsManager,
+  eventBus?: EventBus,
+  compactionProgress?: CompactionProgressObserver,
+  replacements: readonly WorkerExtensionSourceReplacement[] = []
 ) {
   const agentDir = getAgentDir();
-  const settingsManager = SettingsManager.create(projectRoot, agentDir);
-  const loader = new DefaultResourceLoader({
-    cwd: projectRoot,
-    agentDir,
-    settingsManager,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-    ...(catalogSystemPrompt === undefined
-      ? {}
-      : {
-          systemPrompt: catalogSystemPrompt,
-          systemPromptOverride: () => catalogSystemPrompt,
-          appendSystemPromptOverride: () => [],
-          agentsFilesOverride: () => ({ agentsFiles: [] }),
-        }),
-    ...(extensionFactories.length > 0 ? { extensionFactories: [...extensionFactories] } : {}),
-  });
-  await loader.reload();
-  return loader;
+  const settingsManager = enforceNativeAutoCompaction(
+    sharedSettings ?? runtime?.settingsManager ?? SettingsManager.create(projectRoot, agentDir)
+  );
+  try {
+    // Resolve the native inventory without executing any extension factory. Do not
+    // hand-enumerate directories: settings, package manifests/filters, project trust,
+    // global providers and native discovery all participate in this same catalog.
+    let extensionPaths: readonly string[] | undefined;
+    const replacedSources = new Set<string>();
+    for (const replacement of replacements) {
+      if (!path.isAbsolute(replacement.source) || !statSync(replacement.source).isFile()) {
+        throw new Error("Replacement source must be an absolute extension entry file");
+      }
+      const source = realpathSync(replacement.source);
+      if (replacedSources.has(source)) throw new Error("Duplicate extension source replacement");
+      replacedSources.add(source);
+    }
+    if (replacements.length > 0 && runtime === undefined) {
+      await settingsManager.reload();
+      const inventory = await new DefaultPackageManager({
+        cwd: projectRoot,
+        agentDir,
+        settingsManager,
+      }).resolve(async () => "error");
+      extensionPaths = Object.freeze(
+        inventory.extensions
+          .filter((resource) => resource.enabled)
+          .filter((resource) => !replacedSources.has(realpathSync(resource.path)))
+          .map((resource) => resource.path)
+      );
+    }
+    const factories = [
+      ...extensionFactories,
+      ...replacements.map((replacement) => replacement.extension),
+    ];
+    const loader = new DefaultResourceLoader({
+      cwd: projectRoot,
+      agentDir,
+      settingsManager,
+      ...(eventBus === undefined ? {} : { eventBus }),
+      ...(compactionProgress === undefined
+        ? {}
+        : { extensionsOverride: compactionProgress.extensionsOverride }),
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      ...(runtime === undefined && extensionPaths === undefined ? {} : { noExtensions: true }),
+      ...(extensionPaths === undefined ? {} : { additionalExtensionPaths: [...extensionPaths] }),
+      ...(catalogSystemPrompt === undefined
+        ? {}
+        : {
+            systemPrompt: catalogSystemPrompt,
+            systemPromptOverride: () => catalogSystemPrompt,
+            appendSystemPromptOverride: () => [],
+            agentsFilesOverride: () => ({ agentsFiles: [] }),
+          }),
+      ...(factories.length > 0 ? { extensionFactories: factories } : {}),
+    });
+    await loader.reload();
+    const extensionErrors = loader.getExtensions().errors;
+    if (extensionErrors.length > 0) throw new WorkerExtensionLoadError(extensionErrors);
+    return loader;
+  } catch (error) {
+    if (error instanceof WorkerExtensionLoadError) throw error;
+    throw new WorkerExtensionLoadError([
+      {
+        path: "<worker-resource-loader>",
+        error: error instanceof Error ? error.message : "non-Error resource loader failure",
+      },
+    ]);
+  }
 }
 
 /**
@@ -831,7 +1095,7 @@ export async function createPrivateSessionResourceLoader(input: {
   systemPrompt: string;
   agentDir?: string;
 }) {
-  const settingsManager = SettingsManager.inMemory();
+  const settingsManager = enforceNativeAutoCompaction(SettingsManager.inMemory());
   const loader = new DefaultResourceLoader({
     cwd: input.projectRoot,
     agentDir: input.agentDir ?? getAgentDir(),
@@ -1040,8 +1304,27 @@ export function buildAgentOpening(input: {
   readonly agentGuidance: string;
   readonly domainGuidance: string;
   readonly activeToolNames: readonly string[];
+  readonly providerOpeningAppendix?: string;
 }): string {
   const repair = input.invocation.executionPurpose === "routing_repair";
+  const projection = input.registration.result_projection;
+  if (projection !== undefined) {
+    const declaration = validateContract(
+      PhaseResultProjectionDeclarationV1Schema,
+      projection,
+      "opening result projection"
+    );
+    if (
+      declaration.registration_name !== input.registration.playbook_name ||
+      declaration.state_id !== input.invocation.stateId ||
+      declaration.agent !== input.invocation.agent ||
+      input.registration.result_transport !== "persisted_summary" ||
+      input.registration.opening_policy !== "registration_guidance_task_artifacts" ||
+      input.registration.provider_opening_guard !== undefined
+    ) {
+      throw new Error("opening result projection does not match the active catalog phase");
+    }
+  }
   const operativeGuidance = repair ? input.invocation.routingRepairGuidance : input.domainGuidance;
   if (repair && !operativeGuidance?.trim()) {
     throw new Error("routing repair has no mechanically projected summary-only guidance");
@@ -1050,44 +1333,27 @@ export function buildAgentOpening(input: {
   const livenessContext =
     budget === undefined
       ? ""
-      : budget.schema_version === 3
-        ? [
-            "HOST-ENFORCED RENEWABLE INACTIVITY LEASE:",
-            "The host renews the lease only from trusted non-empty assistant/thinking deltas,",
-            "admitted tool lifecycle progress, provider turn completion, or durable workflow",
-            "convergence. Total elapsed work is not a liveness budget; stalled work is stopped.",
-          ].join("\n")
-        : budget.schema_version === 2
-          ? [
-              "HOST-ENFORCED ACTIVE-WORK ENVELOPE:",
-              canonicalJson(budget),
-              "Ordinary permitted model turns and tool calls have no call-count budget. Continue",
-              "only while work is useful, respect the registered authority boundary, and finish",
-              "before the host active-work deadline.",
-            ].join("\n\n")
-          : [
-              "HOST-ENFORCED LEGACY V1 LIVENESS BUDGET:",
-              canonicalJson(budget),
-              "EXTERNAL-BUDGET TOOLS:",
-              canonicalJson(input.activeToolNames.filter(isExternalCallTool).sort()),
-              [
-                "Each assistant response consumes one model turn. Reserve one effective model",
-                "turn for the final assistant answer. Before emitting tool calls, ensure another",
-                "model turn remains for that answer. Every requested tool call—including each",
-                "call in a parallel batch—is charged individually. Stop tool use and answer with",
-                "the best supported result when evidence is sufficient or another tool round",
-                "would consume the reserve.",
-              ].join("\n"),
-            ].join("\n\n");
+      : [
+          "HOST-ENFORCED RENEWABLE INACTIVITY LEASE:",
+          "The host renews the lease only from trusted non-empty assistant/thinking deltas,",
+          "admitted tool lifecycle progress, provider turn completion, or durable workflow",
+          "convergence. Total elapsed work is not a liveness budget; stalled work is stopped.",
+        ].join("\n");
   return [
     `You are executing the '${input.invocation.agent}' role for a registered workflow.`,
     livenessContext,
     "TASK:",
     input.invocation.task,
     input.invocation.inputArtifacts.length > 0
-      ? `INPUT ARTIFACTS:\n${input.invocation.inputArtifacts
-          .map((ref) => JSON.stringify(ref))
-          .join("\n")}\nRead each needed ID with artifact_read before working.`
+      ? input.registration.provider_opening_guard !== undefined
+        ? `INPUT ARTIFACT IDENTITIES:\n${input.invocation.inputArtifacts
+            .map((ref) => JSON.stringify(ref))
+            .join(
+              "\n"
+            )}\nThe host has embedded the exact admitted payload below. Use only that inline input; no tools are available.`
+        : `INPUT ARTIFACTS:\n${input.invocation.inputArtifacts
+            .map((ref) => JSON.stringify(ref))
+            .join("\n")}\nRead each needed ID with artifact_read before working.`
       : "INPUT ARTIFACTS: none.",
     (input.invocation.contextOverlays?.length ?? 0) > 0
       ? `OWNER-RESOLVED RESEARCH CONTEXT:\n${input.invocation.contextOverlays
@@ -1100,12 +1366,22 @@ export function buildAgentOpening(input: {
           })
           .join("\n\n")}`
       : "",
+    input.providerOpeningAppendix ?? "",
     repair
       ? "Return exactly the one summary-only line required above. Do not return prose or semantic body bytes."
-      : "Return the complete stage output in assistant text and end with the closed SUMMARY line defined by the domain guidance.",
+      : projection === undefined
+        ? "Return the complete stage output in assistant text and end with the closed SUMMARY line defined by the domain guidance."
+        : "Return the complete immutable core required by the domain guidance in assistant text. The registered host projection derives routing confidence/details; no model-authored SUMMARY is required. If the domain guidance permits an optional redundant SUMMARY, it must match the entire core exactly.",
   ]
     .filter((part) => part.length > 0)
     .join("\n\n");
+}
+
+export class RemoteModelOutcomeUnknownError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "RemoteModelOutcomeUnknownError";
+  }
 }
 
 export class PiAgentClient implements ModelClient {
@@ -1122,6 +1398,23 @@ export class PiAgentClient implements ModelClient {
       throw new Error(
         `agent '${invocation.agent}' state '${invocation.stateId}' has no active-registration guidance`
       );
+    }
+    const requiredModel = registration.required_model;
+    if (requiredModel !== undefined) {
+      validateRequiredModelIdentity(requiredModel, "active worker required model");
+      if (invocation.modelOverride !== requiredModel.override) {
+        throw new Error(
+          `agent '${invocation.agent}' state '${invocation.stateId}' requires model override '${requiredModel.override}'`
+        );
+      }
+      if (
+        invocation.admitResolvedModel === undefined ||
+        invocation.guardModelDispatch === undefined
+      ) {
+        throw new Error(
+          `agent '${invocation.agent}' state '${invocation.stateId}' lacks required model admission or dispatch fencing`
+        );
+      }
     }
     const browserNetworkAllowlist = registration.browser_network_allowlist;
     if (browserNetworkAllowlist !== undefined && invocation.workflowSession === undefined) {
@@ -1179,6 +1472,13 @@ export class PiAgentClient implements ModelClient {
       );
     }
     const agentGuidance = isolated ? "" : catalogAgentDoc;
+    // Explicit Research/host policy and the test seam keep their precedence. Ordinary
+    // agent_ssot callers supply neither, so use the same catalog YAML as direct workers.
+    // Anonymous private sessions deliberately never inherit a catalog default.
+    const thinkingLevel =
+      invocation.thinkingLevel ??
+      this.options.testOnlyThinkingLevelOverride ??
+      (isolated ? undefined : ssotThinkingLevel(agentGuidance));
     const yamlMaximum = isolated ? [] : [...parseSsotTools(agentGuidance, invocation.agent)];
     if (
       genericChildYamlSnapshot !== undefined &&
@@ -1207,7 +1507,7 @@ export class PiAgentClient implements ModelClient {
             resolveDomainGuidancePath({
               projectRoot: invocation.projectRoot,
               agent: invocation.agent,
-              stateId: invocation.stateId,
+              stateId: registration.guidance_state_id ?? invocation.stateId,
               guidance: registration.guidance,
             })
           );
@@ -1224,9 +1524,10 @@ export class PiAgentClient implements ModelClient {
           ? loadPromptDocumentation(invocation.projectRoot, registration.guidance.documentation)
           : verifyPromptDocumentation(invocation.projectRoot, registration.documentation_sources);
     // This is the sole catalog narrowing gate. WorkerExecutor may copy only the active
-    // PlaybookRegistrationV1 phase value here; task/trust/runtime state has no selector.
+    // PlaybookRegistration phase value here; task/trust/runtime state has no selector.
     // Validate strict membership before createAgentSession, then pass the accepted list unchanged.
     const registeredSubset = registration.allowed_tools;
+    const providerOpeningGuard = registration.provider_opening_guard;
     if (isolated && registeredSubset !== undefined) {
       throw new Error("private session cannot carry a catalog registration tool subset");
     }
@@ -1235,15 +1536,27 @@ export class PiAgentClient implements ModelClient {
     }
     if (!isolated && registeredSubset !== undefined) {
       if (
-        registeredSubset.length === 0 ||
         new Set(registeredSubset).size !== registeredSubset.length ||
         registeredSubset.some((tool) => !yamlMaximum.includes(tool)) ||
-        registeredSubset.length >= yamlMaximum.length
+        registeredSubset.length >= yamlMaximum.length ||
+        (registeredSubset.length === 0 && providerOpeningGuard === undefined)
       ) {
         throw new Error(
-          `agent '${invocation.agent}' state '${invocation.stateId}' registration tools must be one non-empty exact strict subset of YAML`
+          `agent '${invocation.agent}' state '${invocation.stateId}' registration tools must be a non-empty exact strict subset of YAML; zero tools require a provider-opening guard`
         );
       }
+    }
+    if (
+      providerOpeningGuard !== undefined &&
+      (!isProviderOpeningGuardId(providerOpeningGuard) ||
+        registeredSubset?.length !== 0 ||
+        requiredModel === undefined ||
+        invocation.providerOpeningAppendix === undefined ||
+        invocation.contextOverlays?.length)
+    ) {
+      throw new Error(
+        `agent '${invocation.agent}' state '${invocation.stateId}' has an invalid guarded zero-tool opening posture`
+      );
     }
     const allowed = isolated
       ? [...(spec?.tools ?? [])]
@@ -1268,6 +1581,17 @@ export class PiAgentClient implements ModelClient {
             projectRoot: invocation.projectRoot,
             systemPrompt: isolatedSystemPrompt,
           });
+    // The loader and actual SDK factory MUST share this exact enforced manager.
+    const settingsManager =
+      isolatedResources?.settingsManager ??
+      enforceNativeAutoCompaction(
+        this.options.sessionRuntime?.settingsManager ??
+          SettingsManager.create(invocation.projectRoot, getAgentDir())
+      );
+    const compactionEvents = createEventBus();
+    const compactionProgress = createCompactionProgressObserver((progress) =>
+      invocation.liveness?.({ kind: "activity", ...progress })
+    );
     const resourceLoader =
       isolatedResources?.resourceLoader ??
       (await createWorkerResourceLoader(
@@ -1279,43 +1603,102 @@ export class PiAgentClient implements ModelClient {
           role: agentGuidance,
           domainGuidance: routingRepair ? (invocation.routingRepairGuidance ?? "") : domainGuidance,
           documentation,
-        }).systemPrompt
+        }).systemPrompt,
+        this.options.sessionRuntime,
+        settingsManager,
+        compactionEvents,
+        compactionProgress,
+        this.options.workerExtensionReplacements
       ));
     let resolvedModel: PiModel | undefined;
     let resolvedRuntime: CreateSessionOptions["modelRuntime"];
-    if (invocation.modelOverride !== undefined) {
+    // Anonymous host-private sessions retain their separate model/settings contract.
+    if (!isolated || invocation.modelOverride !== undefined) {
+      const configuredModel = isolated ? undefined : ssotModel(agentGuidance);
+      const configuredProvider = isolated ? undefined : ssotProvider(agentGuidance);
+      if (
+        invocation.modelOverride === undefined &&
+        (configuredModel === undefined || configuredProvider === undefined)
+      ) {
+        throw new Error(
+          `agent '${invocation.agent}' requires both 'model:' and 'provider:' in its SSOT frontmatter; refusing the global session default`
+        );
+      }
+      const requestedModel = invocation.modelOverride ?? configuredModel;
+      if (requestedModel === undefined || requestedModel.trim().length === 0) {
+        throw new Error(`agent '${invocation.agent}' has no non-empty model identity to resolve`);
+      }
+      const separator = requestedModel.indexOf("/");
+      const explicitProvider = invocation.modelOverride !== undefined && separator > 0;
+      const provider = explicitProvider ? requestedModel.slice(0, separator) : configuredProvider;
+      const modelId = explicitProvider ? requestedModel.slice(separator + 1) : requestedModel;
+      if (modelId.trim().length === 0 || provider?.trim().length === 0) {
+        throw new Error(`agent '${invocation.agent}' has an invalid configured model identity`);
+      }
       if (this.options.resolveModel !== undefined) {
-        resolvedModel = await this.options.resolveModel(invocation.modelOverride);
+        // Preserve the existing composite-override resolver seam. Defaults carry their provider
+        // separately so aliases resolve within the declared provider, not the global session.
+        resolvedModel = await this.options.resolveModel(requestedModel, provider);
       } else {
         const runtime = await ModelRuntime.create();
+        const extensions = resourceLoader.getExtensions().runtime;
+        for (const entry of extensions.pendingNativeProviderRegistrations) {
+          runtime.registerNativeProvider(entry.provider);
+        }
+        for (const entry of extensions.pendingProviderRegistrations) {
+          runtime.registerProvider(entry.name, entry.config);
+        }
         await runtime.refresh({ allowNetwork: false });
-        const separator = invocation.modelOverride.indexOf("/");
-        if (separator > 0 && separator !== invocation.modelOverride.length - 1) {
-          const provider = invocation.modelOverride.slice(0, separator);
-          const modelId = invocation.modelOverride.slice(separator + 1);
-          const model = runtime.getModel(provider, modelId);
-          if (model === undefined) {
-            throw new Error(`model override '${invocation.modelOverride}' is unavailable`);
-          }
-          resolvedModel = model;
-        } else {
-          // A catalog alias (an agent SSOT declares `model: sol`, not a
-          // provider/model pair). Previously any non-slash override threw, so
-          // resolving one here is additive rather than a behaviour change.
-          const resolved = await resolveModelScopeWithDiagnostics(
-            [invocation.modelOverride],
-            runtime
+        const resolved = resolveCliModel({
+          cliModel: modelId,
+          ...(provider === undefined ? {} : { cliProvider: provider }),
+          modelRuntime: runtime,
+        });
+        if (
+          resolved.model === undefined ||
+          resolved.error !== undefined ||
+          resolved.warning !== undefined
+        ) {
+          throw new Error(
+            `agent '${invocation.agent}' model '${requestedModel}' is unavailable or not configured`
           );
-          const scoped = resolved.scopedModels[0];
-          if (scoped === undefined) {
-            throw new Error(
-              `model override '${invocation.modelOverride}' does not resolve to an available model`
-            );
-          }
-          resolvedModel = scoped.model;
+        }
+        const selectedModel = resolved.model;
+        resolvedModel = selectedModel;
+        const available = await runtime.getAvailable(
+          provider,
+          invocation.signal === undefined ? {} : { signal: invocation.signal }
+        );
+        if (
+          !available.some(
+            (model) => model.provider === selectedModel.provider && model.id === selectedModel.id
+          )
+        ) {
+          throw new Error(`agent '${invocation.agent}' model '${requestedModel}' is unavailable`);
         }
         resolvedRuntime = runtime;
       }
+      // Pi deliberately supports fuzzy CLI matching and synthesized custom IDs. Catalog workers
+      // must instead use an exact configured ID or display-name alias, never a near match.
+      if (
+        (provider !== undefined && resolvedModel.provider !== provider) ||
+        (resolvedModel.id !== modelId && resolvedModel.name !== modelId)
+      ) {
+        throw new Error(
+          `agent '${invocation.agent}' resolved model '${resolvedModel.provider}/${resolvedModel.id}' does not match configured identity '${provider === undefined ? "" : `${provider}/`}${modelId}'`
+        );
+      }
+    }
+
+    let imageCapabilityEvidence = invocation.requiredImageCapability;
+    if (invocation.registration.requires_image_input === true && resolvedModel !== undefined) {
+      // An explicit override is known before createAgentSession. Resolve positive evidence from
+      // Pi's model metadata now; the final session identity is still rechecked before prompt.
+      imageCapabilityEvidence = admitImageInputModel(resolvedModel);
+    } else if (imageCapabilityEvidence !== undefined && resolvedModel !== undefined) {
+      // An explicit override is known before createAgentSession, so deny unsupported/drifted
+      // models before a session is created or a prompt is dispatched.
+      recheckImageInputModel(imageCapabilityEvidence, resolvedModel);
     }
 
     if (invocation.admitResolvedModel !== undefined) {
@@ -1326,8 +1709,12 @@ export class PiAgentClient implements ModelClient {
           `agent '${invocation.agent}' state '${invocation.stateId}': no resolved model identity to admit; refusing to create a session`
         );
       }
+      const observed = { provider, model: id };
+      if (requiredModel !== undefined) {
+        assertResolvedModelIdentity(requiredModel, observed, "Pi resolved model");
+      }
       // Throws on denial. Nothing below this line may create a session.
-      invocation.admitResolvedModel({ provider, model: id });
+      invocation.admitResolvedModel(observed);
     }
 
     const sessionManager = isolated
@@ -1350,12 +1737,11 @@ export class PiAgentClient implements ModelClient {
             correlation,
           });
         })());
-    const thinkingLevel = invocation.thinkingLevel ?? this.options.testOnlyThinkingLevelOverride;
     const sessionOptions: CreateSessionOptions = {
       cwd: invocation.projectRoot,
       sessionManager,
       resourceLoader,
-      ...(isolatedResources ? { settingsManager: isolatedResources.settingsManager } : {}),
+      settingsManager,
       ...(isolated && spec?.noTools !== undefined ? { noTools: spec.noTools } : {}),
       tools: allowed,
       ...(isolated && spec?.customTools !== undefined
@@ -1374,6 +1760,41 @@ export class PiAgentClient implements ModelClient {
       throw error;
     }
     const { session } = created;
+    if (
+      resolvedModel !== undefined &&
+      (session.model?.provider !== resolvedModel.provider || session.model.id !== resolvedModel.id)
+    ) {
+      await closeCreatedSession(session, sessionManager);
+      throw new Error(
+        `agent '${invocation.agent}' Pi session model does not match the resolved configured identity`
+      );
+    }
+    if (requiredModel !== undefined) {
+      const provider = typeof session.model?.provider === "string" ? session.model.provider : "";
+      const model = typeof session.model?.id === "string" ? session.model.id : "";
+      try {
+        assertResolvedModelIdentity(requiredModel, { provider, model }, "Pi session model");
+      } catch (error) {
+        await closeCreatedSession(session, sessionManager);
+        throw error;
+      }
+    }
+    if (
+      invocation.registration.requires_image_input === true ||
+      imageCapabilityEvidence !== undefined
+    ) {
+      try {
+        // The session model is Pi's final active identity. Establish positive evidence when the
+        // runtime default was not knowable earlier, or recheck the already-admitted identity.
+        imageCapabilityEvidence =
+          imageCapabilityEvidence === undefined
+            ? admitImageInputModel(session.model)
+            : recheckImageInputModel(imageCapabilityEvidence, session.model);
+      } catch (error) {
+        await closeCreatedSession(session, sessionManager);
+        throw error;
+      }
+    }
     if (invocation.bindResolvedSessionModel !== undefined) {
       const provider = typeof session.model?.provider === "string" ? session.model.provider : "";
       const id = typeof session.model?.id === "string" ? session.model.id : "";
@@ -1434,6 +1855,8 @@ export class PiAgentClient implements ModelClient {
               }
             }
           });
+    let releaseRuntime: (() => void) | undefined;
+    let releaseCompactionProgress: (() => void) | undefined;
     const abort = (): void => {
       void session.abort();
     };
@@ -1442,6 +1865,7 @@ export class PiAgentClient implements ModelClient {
       if (invocation.signal?.aborted) {
         throw new Error("agent invocation aborted before prompt");
       }
+      const providerOpeningAppendix = invocation.providerOpeningAppendix?.();
       const opening =
         spec?.opening ??
         buildAgentOpening({
@@ -1450,6 +1874,7 @@ export class PiAgentClient implements ModelClient {
           agentGuidance,
           domainGuidance,
           activeToolNames: activeTools,
+          ...(providerOpeningAppendix === undefined ? {} : { providerOpeningAppendix }),
         });
       if (!isolated && this.options.catalogSessions !== undefined) {
         appendCatalogWorkerContinuity({
@@ -1462,7 +1887,25 @@ export class PiAgentClient implements ModelClient {
           opening,
         });
       }
-      await session.prompt(opening, { expandPromptTemplates: false, source: "rpc" });
+      releaseRuntime = this.options.sessionRuntime?.attach(session, invocation);
+      if (invocation.liveness !== undefined) {
+        releaseCompactionProgress = compactionProgress.observe(session, invocation.signal);
+      }
+      invocation.guardModelDispatch?.(opening);
+      try {
+        await session.prompt(opening, { expandPromptTemplates: false, source: "rpc" });
+      } catch (error) {
+        throw new RemoteModelOutcomeUnknownError(
+          `agent '${invocation.agent}' state '${invocation.stateId}' provider outcome is remote_unknown; automatic replay is prohibited`,
+          { cause: error }
+        );
+      }
+      // Even a typed private result cannot turn a failed/aborted provider terminal into
+      // success. Durable catalog JSONL is finalized below and retains the original turn.
+      assertAssistantTerminalSucceeded(
+        finalAssistantMessage(session.messages),
+        spec?.sensitiveOutput === true
+      );
       if (spec?.readResult !== undefined) {
         const body = spec.readResult();
         if (body === undefined) {
@@ -1489,7 +1932,12 @@ export class PiAgentClient implements ModelClient {
       invocation.signal?.removeEventListener("abort", abort);
       unsubscribeLiveness?.();
       unsubscribeTrace?.();
-      await closeCreatedSession(session, sessionManager);
+      try {
+        releaseCompactionProgress?.();
+        releaseRuntime?.();
+      } finally {
+        await closeCreatedSession(session, sessionManager);
+      }
     }
   }
 }

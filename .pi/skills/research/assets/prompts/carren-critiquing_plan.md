@@ -18,7 +18,7 @@ Do not critique a report that does not yet exist, demand findings in advance, or
 
 The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` and repeat with `next_range` until complete before judging. The supplied plan revision is the exact object under review; do not discover predecessors through another channel.
 
-Put the complete critique and its evidence in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
+Put the complete critique and its evidence in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` carries the structured judgment. Routing-only correction must preserve every original field and confidence exactly, including issues, evidence, and clarification. It cannot invent or change an approval or rejection; an absent or invalid original judgment cannot be salvaged.
 
 ## Owner-resolved context
 
@@ -33,7 +33,7 @@ In `evidence`, state what you actually compared: name the original query dimensi
 - `APPROVE` only when the plan is sufficiently complete, feasible, and independently researchable.
 - A consequential coverage, decomposition, feasibility, or ambiguity defect requires `NEEDS_REVISION` with specific, actionable issues.
 - Block only on significant defects; approve with notes for minor concerns.
-- Never approve merely to end a loop; the engine owns the critique budget.
+- Never approve merely to end a loop; the engine applies actual operator critique policy; do not invent a finite allowance.
 - Critical ambiguity requires `needs_clarification: true` with questions, not guessing.
 
 ## Output

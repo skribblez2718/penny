@@ -2,7 +2,7 @@ import {
   canonicalJson,
   type DecisionDraftV2,
   type DecisionRequestV1,
-} from "../../src/index.js";
+} from "../../dist/index.js";
 
 export function decisionRequest(): DecisionRequestV1 {
   return {

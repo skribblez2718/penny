@@ -15,35 +15,35 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { scoreAnswerQuality, type AnswerQualityCaseObservation } from "../../src/kb/answer-quality.js";
+import { scoreAnswerQuality, type AnswerQualityCaseObservation } from "../../dist/kb/answer-quality.js";
 import {
   canonicalJson,
   sha256Hex,
   type KbRetrievalFixtureV1,
   type RetrievalFixtureCaseV1,
-} from "../../src/kb/contracts.js";
-import { parseRetrievalFixture } from "../../src/kb/gate-decisions.js";
+} from "../../dist/kb/contracts.js";
+import { parseRetrievalFixture } from "../../dist/kb/gate-decisions.js";
 import {
   pageClaimsPath,
   pageMarkdownPath,
   readManifest,
   readPolicy,
   writePageRevision,
-} from "../../src/kb/filesystem.js";
-import { buildCatalog, buildGenerationIndex, publishGeneration } from "../../src/kb/generations.js";
-import { defaultKbIngestPlane, type KbQueryOutcome } from "../../src/kb/ingest-plane.js";
-import { KbWorkerClient } from "../../src/kb/kb-worker-client.js";
-import { validateQueryRequest } from "../../src/kb/parent-delivery.js";
-import { KbQueryReader } from "../../src/kb/query-reader.js";
-import { assessQueryVerification } from "../../src/kb/query-verification.js";
-import { RunArtifactStore } from "../../src/kb/run-artifacts.js";
-import { createTestOnlyArtifactBodyRunner } from "../../src/kb/session-tools.js";
-import { initKb } from "../../src/kb/workflows.js";
+} from "../../dist/kb/filesystem.js";
+import { buildCatalog, buildGenerationIndex, publishGeneration } from "../../dist/kb/generations.js";
+import { defaultKbIngestPlane, type KbQueryOutcome } from "../../dist/kb/ingest-plane.js";
+import { KbWorkerClient } from "../../dist/kb/kb-worker-client.js";
+import { validateQueryRequest } from "../../dist/kb/parent-delivery.js";
+import { KbQueryReader } from "../../dist/kb/query-reader.js";
+import { assessQueryVerification } from "../../dist/kb/query-verification.js";
+import { RunArtifactStore } from "../../dist/kb/run-artifacts.js";
+import { createTestOnlyArtifactBodyRunner } from "../../dist/kb/session-tools.js";
+import { initKb } from "../../dist/kb/workflows.js";
 import type {
   ActiveWorkerRegistrationMetadataV1,
   AgentInvocation,
-} from "../../src/model-client.js";
-import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../../src/playbooks/knowledge-base.js";
+} from "../../dist/model-client.js";
+import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../../dist/playbooks/knowledge-base.js";
 import { kbArtifactControl } from "./kb-artifact-control.js";
 
 type TrackedCase = RetrievalFixtureCaseV1;

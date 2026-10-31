@@ -14,21 +14,18 @@ admission, recovery, and observability. Skill directories contain no executable 
 1. Closed requests: `start`, `step`, `status`, `recover`, `respond`, `cancel`.
 2. Persist control state in the Node SQLite checkpointer keyed by exact `run_id`.
 3. Every cognitive directive carries exact input IDs/refs and output metadata.
-4. Preflight every input by direct manifest lookup and exact-byte verification; cross-run fan-in is valid.
-5. Persist and re-read complete finalized worker bytes before routing fields can advance.
+4. Apply [Invocation](../agents/invocation.md) for input preflight and complete reads.
+5. Apply its exact final-text capture, readback-before-SUMMARY, fan-in, and failure semantics.
 6. Keep payload bytes out of `RunContext`; retain exact selected refs.
-7. Require active-registration guidance. Refuse unknown playbook/state/agent bindings before
-   input reads or session work. Catalog phases request and activate YAML exactly when their
-   registration omits `allowed_tools`. When present, accept only one explicit non-empty,
-   duplicate-free strict YAML subset bound into the canonical registration digest and worker
-   invocation metadata; validate it before session creation, pass it exactly to Pi, and check
-   active equality before the model prompt. Task/trust/input/runtime/model/liveness/service state
-   cannot select tools. Host-private matrices remain separate.
+7. Require active-registration guidance; reject unknown playbook/state/agent bindings before input
+   reads or session work. Apply the [binding runtime rule](../agents/discovery-and-tools.md#binding-runtime-rule),
+   including the guarded zero-tool exception's registered exact model, admitted payload/disclosure,
+   and final-opening authorization. Profiles own static maxima; host-private matrices remain separate.
 8. Use branch IDs—not completion order—for fan-in and partial recovery.
 9. Workers and skill drivers receive no workflow-memory transport.
-10. Route structurally valid domain gaps with `EvaluationResultV2` plus registered state-aware
+10. Route structurally valid domain gaps with `EvaluationResult` plus registered state-aware
     routes. The evaluation carries no target/exhaustion fields; event evidence is digest-only.
-11. Keep structural malformed-result correction on the bounded P1.2 path.
+11. Keep structural malformed-result correction on the separate P1.2 path.
 12. Route every new positive terminal through the one engine-owned admission helper.
 13. Evaluate the closed `CompletionGate` v2 from append-only visits, the exact latest
     product, host-registered receipt predicates, and the unresolved policy. Research's predicate
@@ -60,14 +57,15 @@ admission, recovery, and observability. Skill directories contain no executable 
 - Chain steps may add explicit multi-source IDs; schema-v3 checkpoints bind each step's canonical
   contract SHA-256, and resume re-resolves it.
 - Legacy checkpoints without an immutable contract digest fail closed on resume.
+- For Define-revise and Plan, V2 invocations explicitly select `reviewed_definition` or `semantic_only` for a supplied `SpecificationV1`; V1 maps to semantic-only. Without a specification, the result is `not_applicable`. Strict admission checks the completed, trace-capable Define producer and exact owner graph **before** consumer creation; missing or unsupported proof refuses, never downgrades. Semantic-only checks canonical bytes, not producer completion or reviewed ancestry. The assurance artifact binds the consumer policy and current review/completion graph; `{previous}` stays the exact semantic core ID. The check covers immediate revision closure, not full ancestry or the ongoing availability of original external sources.
 - Generic chain failure stops with exact refs and `resumable:true`; it adds no retry/skip/diagnose
   approval questionnaire. Genuine playbook clarification still uses `await_user`.
 
 ## Active generic-child authority and storage boundary
 
-`playbooks/registry.ts` carries the active **runtime authority projection** for exactly the six
-operator-authorized ordinary workflows: `assess`, `decide`, `diagnose`, `plan`, `produce`, and
-`research`. Every one is both a depth-one parent and provider for the same all-six target set. The
+`playbooks/registry.ts` carries the active **runtime authority projection** for exactly the seven
+operator-authorized ordinary workflows: `assess`, `decide`, `define`, `diagnose`, `plan`, `produce`,
+and `research`. Every one is both a depth-one parent and provider for the same all-seven target set. The
 parent declaration fixes one call, one active child, and project concurrency one without predicting
 per-call turns, tools, output size, steps, elapsed time, aggregate capacity, or a sealing reserve. The
 provider declaration binds its native request validator/port, input and single terminal output ports,
@@ -84,7 +82,7 @@ request authority, reserves an exact child run, drives the registered child engi
 its terminal core, persists a `child-result` artifact, and atomically records the parent continuation
 with `consumed`. `WorkerExecutor` still rejects child directives itself; `OrchestrationRunner`
 delegates them only to the state owner. The path enforces fixed call/active/project admission,
-uses the child playbook's existing repair/liveness policy plus the service-wide step backstop, and
+uses the child playbook's existing repair/liveness policy plus any operator-supplied service-wide step limit, and
 forwards cancellation from the runner signal or a concurrent durable parent-cancel request. It does
 not impose a guessed child-specific turn, tool, output-byte, step, time, aggregate, or reserve budget.
 
@@ -95,24 +93,28 @@ signals refuse, activity does not manufacture convergence, and expiry aborts the
 records remain replayable but are not minted. Provider qualification remains separate: Gate 2 is
 `not_run` with no evidence, so execution alone neither promotes nor externally discovers a provider.
 
-Active schema-v3 directives and V2 call records intentionally contain no guessed resource
-allocation. Their digest-bound, content-free inactivity lease detects silence from host-observed
-activity; it is a liveness control, not a prediction of how much useful work a child should need.
-Historical schema-v2 directives and V1 rows retain their exact fixed allocations solely for replay.
-
 `ChildWorkflowStateOwner` remains the storage/custody boundary. It accepts one concrete,
 project-bound `ArtifactStore`; the checkpointer rechecks that store against its project binding and
 verifies the canonical child request plus every bound input by exact manifest ref, length, digest,
 and object bytes before mutation. Exact retry adopts; changed operands or missing/mismatched linkage
-fail closed. The current active path does **not** project child user gates, reconcile arbitrary
-post-crash child terminals, retain whole artifact/receipt/session
-cohorts, promote providers, or establish live qualification.
+fail closed. Child user gates now use a versioned parent-owned projection and exact mediated reply;
+waiting and captured-terminal recovery preserve frozen registration/operand bindings. Parent
+cancellation fences consumption even between preparation and commit. Linked control/receipt/session
+cohorts stay together through retention, including consumed-but-quarantined host effects; immutable
+artifact bytes are preserved rather than garbage-collected.
+
+Imagegen reuse is a separate opt-in `imagegen_child` registration policy plus concrete host asset
+and runtime owners, not an eighth ordinary peer or a larger ordinary call allowance. It permits
+only explicitly scoped serial asset calls and rechecks current G1/rights and native dual-review
+lineage at import. See the [engine protocol](../orchestration/overview.md) for exact projected-response,
+activation and recovery boundaries. Neither this support nor provider-free tests promote a provider,
+activate videogen, qualify a deployment, or finish the proposed host request/intent/wrapper protocol.
 
 ## Deterministic host continuation
 
 Host-only states begin only after accepted worker bytes and execution receipts are durable. They use
 existing selected artifact refs plus append-only checkpoint events, never payload fields or a new
-state table. Research `sealing_core` creates immutable core revisions; `rendering` persists stable
+state table. Each new seal product or diagnostic is addressed by its exact draft, epoch and policy in a separate version-1 operation; artifact version is not a run-global attempt counter. Persist/read/adopt at that address before checkpointing, and fail closed on conflict. A successful seal opens the next same-run product epoch; seal-correction allowances derive from actual operator policy, not skill-wide finite defaults. Seal correction, engine semantic review repair, and routing-only malformed-result repair are independent. Research `sealing_core` creates immutable core products; `rendering` persists stable
 intent/time, render artifacts, latest-core receipts/envelope, and atomic/fsync compatibility files.
 A crash leaves either an adoptable immutable artifact, matching final file, or the prior checkpoint;
 explicit recovery converges before terminal admission.
@@ -124,12 +126,13 @@ pending state can change. `active` recovery reissues the exact pending directive
 compatible revision. Post-v2 positive terminals replay only after their exact envelope,
 terminal digest, visit refs, product, and evidence refs verify. Pre-v2 positives without an
 envelope remain exact legacy replays and are never backfilled. Compaction reads caller-supplied
-run IDs from the TypeScript v2 database; it never scans sessions or semantic memory.
+run IDs from the catalog-bound unversioned orchestration database (schema-v2 `RunContext` rows);
+it never scans sessions or semantic memory.
 
 ## Safety
 
 - Reissued states must be idempotent or split prepare/apply.
-- Repair routes and exhaustion successors are registered, bounded, and engine-executed; playbooks cannot select them.
+- Repair routes and exhaustion successors are registered and engine-executed under actual operator policy; playbooks cannot select them.
 - Verifiers require captured evidence where the contract declares it.
 - Model diversity is supplementary review, not independent proof.
 - Worker context/tool boundaries, including an `artifact_read`-only phase subset, are not
@@ -137,16 +140,11 @@ run IDs from the TypeScript v2 database; it never scans sessions or semantic mem
 
 ## Verification
 
-- [ ] Playbook is registered and its contract validates.
-- [ ] Wrong-run, wrong-state, stale, and malformed refs fail closed.
-- [ ] Owner capture and receipt verification precede routing.
-- [ ] Single, parallel, chain, resume, clarification, and crash recovery are covered.
-- [ ] Compaction reconstructs TypeScript run/artifact refs by exact ID.
-- [ ] Payload bytes and durable memory never enter checkpoint control state.
-- [ ] Direct paths and subset-absent ordinary phases prove exact YAML equality.
-      Registration-bound synthetic strict subsets, exact Pi handoff, invalid pre-session refusal,
-      and separate host-private tools remain covered.
-- [ ] Flow descriptor and `resources/flow.html` agree exactly.
+Apply [Testing](testing.md#required-coverage) for shared-runtime and skill-specific evidence.
+The [engine feature-status table](../orchestration/overview.md#child-workflow-feature-status)
+separates implemented custody, gates/recovery/retention and active dispatch from qualification.
+Keep exact refs through composition, compaction, and recovery; flow drift, wrong-identity refusal,
+and worker tool boundaries need their own applicable evidence.
 
 ## Files
 

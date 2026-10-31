@@ -16,7 +16,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { Checkpointer } from "../src/checkpointer.js";
+import type { Checkpointer } from "../dist/checkpointer.js";
 import {
   jcsCanonicalize,
   parsePromotionReceipt,
@@ -24,8 +24,8 @@ import {
   receiptJcs,
   signPromotionReceipt,
   strictParseJson,
-} from "../src/kb/approval-receipts.js";
-import { CapabilityStore, mintEnvelope } from "../src/kb/capabilities.js";
+} from "../dist/kb/approval-receipts.js";
+import { CapabilityStore, mintEnvelope } from "../dist/kb/capabilities.js";
 import {
   PromotionApplyJournalSchema,
   PromotionApprovalStoreEnvelopeV1Schema,
@@ -36,26 +36,26 @@ import {
   PromotionGateStoreRecordV1Schema,
   validateKbContract,
   sha256Hex,
-} from "../src/kb/contracts.js";
-import { readManifest, readPolicy, writePageRevision } from "../src/kb/filesystem.js";
+} from "../dist/kb/contracts.js";
+import { readManifest, readPolicy, writePageRevision } from "../dist/kb/filesystem.js";
 import {
   buildCatalog,
   buildGenerationIndex,
   newGenerationId,
   publishGeneration,
   readSelectedGeneration,
-} from "../src/kb/generations.js";
-import { verifyPromotionCandidate } from "../src/kb/promote.js";
+} from "../dist/kb/generations.js";
+import { verifyPromotionCandidate } from "../dist/kb/promote.js";
 import {
   PromotionApprovalStore,
   PromotionSimulatedCrash,
   approvalRootFor,
   type PromotionControlApprovalBinding,
-} from "../src/kb/promotion.js";
-import { RunArtifactStore } from "../src/kb/run-artifacts.js";
+} from "../dist/kb/promotion.js";
+import { RunArtifactStore } from "../dist/kb/run-artifacts.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
-import { initKb } from "../src/kb/workflows.js";
+import { initKb } from "../dist/kb/workflows.js";
 
 const PROFILE = "kbp_promotion";
 const SESSION = "sess_promotion";

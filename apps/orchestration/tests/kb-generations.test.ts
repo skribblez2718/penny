@@ -23,16 +23,17 @@ import {
   sha256Hex,
   type KbManifest,
   type KbPolicy,
-} from "../src/kb/contracts.js";
-import { writeManifest, writePolicy, generationIndexPath } from "../src/kb/filesystem.js";
+} from "../dist/kb/contracts.js";
+import { writeManifest, writePolicy, generationIndexPath } from "../dist/kb/filesystem.js";
 import {
   buildCatalog,
   buildGenerationIndex,
   newGenerationId,
+  openStandalonePublicationCheckpointer,
   publishGeneration,
   readSelectedGeneration,
   GenerationError,
-} from "../src/kb/generations.js";
+} from "../dist/kb/generations.js";
 
 const dirs: string[] = [];
 function tmpRoot(): string {
@@ -75,6 +76,26 @@ function seedKb(root: string): { manifest: KbManifest; policy: KbPolicy } {
 }
 
 describe("KB §5.10 generation publication", () => {
+  it("does not invent a cycle allowance for standalone publication custody", () => {
+    const input = {
+      root: tmpRoot(),
+      runId: "standalone-policy",
+      profileId: "test-profile",
+      action: "init" as const,
+    };
+    {
+      using checkpointer = openStandalonePublicationCheckpointer(input);
+      const context = checkpointer.loadRunById(input.runId);
+      if (context === undefined) throw new Error("Missing standalone publication context");
+      expect(context.maxSteps).toBeNull();
+      expect(context.maxIterations).toBeNull();
+    }
+    using reopened = openStandalonePublicationCheckpointer(input);
+    const retained = reopened.loadRunById(input.runId);
+    if (retained === undefined) throw new Error("Missing retained publication context");
+    expect(retained.maxSteps).toBeNull();
+    expect(retained.maxIterations).toBeNull();
+  });
   it("publishes a generation and reads it back through the selector", () => {
     const root = tmpRoot();
     const { manifest, policy } = seedKb(root);

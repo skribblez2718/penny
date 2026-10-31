@@ -420,6 +420,7 @@ function withContentReviewHost<T>(args: Args, operation: (host: ContentReviewSer
     const engine = new OrchestrationEngine(checkpointer, {
       projectRoot: config.projectRoot,
       maxSteps: config.maxSteps,
+      maxIterations: config.maxIterations,
       receiptAuthority: ReceiptAuthority.loadExisting(config.receiptKeyPath),
       playbookName: "knowledge-base",
     });
@@ -542,6 +543,7 @@ function withPromotionHost<T>(
     const engine = new OrchestrationEngine(checkpointer, {
       projectRoot: config.projectRoot,
       maxSteps: config.maxSteps,
+      maxIterations: config.maxIterations,
       receiptAuthority: ReceiptAuthority.loadExisting(config.receiptKeyPath),
       playbookName: "knowledge-base",
     });

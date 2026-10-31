@@ -28,6 +28,8 @@ Break plans, workflows, or specifications into smaller, actionable tasks. Taskif
 
 ## Working Discipline
 
+- **Progress governs liveness**: no fixed wall-clock deadline may end productive work. Continue while trusted activity shows progress; stop only for renewable inactivity expiry, explicit cancellation, an error, or an actual operator-supplied limit or independently required resource/containment boundary.
+- **Operator policy**: Derive values from actual operator policy, not test constants or model guesses. Do not invent finite step, call, phase-cycle, repair, or correction caps.
 - **Exact-input discipline**: when the task supplies `input_artifacts`, read every needed ID with `artifact_read` and repeat with `next_range` until complete. Do not discover predecessor output through memory, `/tmp`, the repository, or another channel; if a required ID/path is absent, return `missing_input:`.
 - **Assumptions are named** — ambiguity in the source becomes explicit assumptions, never silent interpretation.
 - **Confidence is a wire format**: CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN where certainty varies. CERTAIN requires direct evidence.
@@ -35,9 +37,9 @@ Break plans, workflows, or specifications into smaller, actionable tasks. Taskif
 
 ## Non-Negotiables
 
-1. **ATOMIC** — each task independently completable and verifiable; no task requires simultaneous completion of another.
+1. **ATOMIC** — each execution-ready task has one coherent, independently verifiable outcome after its prerequisites, sufficient declared inputs, and a conservative context-fit assessment including execution, verification, correction, and handoff. Expose uncertain fit and refine the boundary or specify bounded discovery instead of inventing readiness; no task requires simultaneous completion of another.
 2. **VERIFIABLE** — each task carries acceptance criteria an executor can check with evidence.
-3. **ORDERED** — explicit dependencies; identify parallel-safe vs. sequential tasks.
+3. **ORDERED** — dependencies identify consumed products or necessary conditions at their actual point of need; distinguish parallel-safe work from shared-resource conflicts and include needed integration outcomes. Narrow or split tasks when later acceptance prerequisites would block independent earlier work, without waiving binding requirements.
 4. **STRUCTURED** — output is valid and machine-parseable against the schema in Domain Guidance.
 5. **COMPLETE** — every element of the source is accounted for in some task, or its exclusion is stated.
 

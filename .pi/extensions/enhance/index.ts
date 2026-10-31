@@ -17,7 +17,7 @@
  * transcript.ts) so mid-session referential prompts ("fix that bug", "same for
  * the other file") resolve instead of being enhanced into invented specifics.
  *
- * Failure honesty: every failure path (model missing, auth missing, timeout,
+ * Failure honesty: every failure path (model missing, auth missing, provider error,
  * empty or runaway rewrite) degrades to the *flag-stripped* raw prompt so the
  * user's request still runs — just un-enhanced. Enhancement is one LLM call on
  * PENNY_ENHANCE_MODEL (default: the session model at low reasoning effort),
@@ -37,7 +37,6 @@ import { type SessionLike, type TranscriptResult, transcriptFromSession } from "
 const __dir = dirname(fileURLToPath(import.meta.url));
 const logger = createLogger("enhance");
 
-const DEFAULT_TIMEOUT_MS = 25_000;
 export const MAX_ENHANCED_CHARS = 16_000; // reject empty or runaway rewrites
 
 /** Trailing ` -i` flag: requires a whitespace boundary before `-i` at end. */
@@ -50,11 +49,6 @@ export function stripFlag(text: string): { flagged: boolean; prompt: string } {
     return { flagged: false, prompt: text };
   }
   return { flagged: true, prompt: trimmedEnd.replace(FLAG_RE, "").trim() };
-}
-
-function timeoutMs(): number {
-  const raw = Number(process.env.PENNY_ENHANCE_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 }
 
 let methodologyCache: string | null = null;
@@ -271,9 +265,8 @@ async function enhanceText(
     logger.warn(`pi-ai compat unavailable: ${String(err)}`);
     return null;
   }
-  // ctx.signal is undefined during the input hook — bring our own timeout.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs());
+  // The input hook exposes no caller signal. Do not invent an elapsed-time ceiling: the
+  // provider owns transport failure, while productive enhancement may take as long as needed.
   try {
     const response = await completeFn(
       model,
@@ -291,10 +284,9 @@ async function enhanceText(
         headers: auth.headers,
         env: auth.env,
         reasoningEffort: "low",
-        signal: controller.signal,
       }
     );
-    // complete() resolves (not rejects) on timeout/provider error, handing back
+    // complete() resolves (not rejects) on provider error, handing back
     // a TRUNCATED message — never accept that as an enhanced prompt.
     if (response.stopReason === "aborted" || response.stopReason === "error") {
       logger.warn(`enhancement incomplete (stopReason=${response.stopReason}); using raw prompt`);
@@ -313,8 +305,6 @@ async function enhanceText(
   } catch (err) {
     logger.warn(`enhancement failed, using raw prompt: ${String(err)}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

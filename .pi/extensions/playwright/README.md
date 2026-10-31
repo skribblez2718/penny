@@ -59,14 +59,14 @@ substring, and no private-network or loopback exception is implicit.
 
 Per-invocation narrowing is implemented only for catalog-agent phases executed
 by Penny's TypeScript orchestration host. A phase may carry an optional
-`browser_network_allowlist` in its immutable `PlaybookRegistrationV1`. The list
+`browser_network_allowlist` in its immutable `PlaybookRegistration`. The list
 must already be frozen, canonical, sorted, and duplicate-free; an explicitly
 empty registered list means deny all. Ordinary shipped registrations omit the
 field and retain their existing browser behavior.
 
 The canonical registration digest includes the exact list when registered and
 preserves the prior digest shape when absent. One pure versioned contract,
-`apps/orchestration/src/browser-policy-contract-v1.ts`, owns pattern parsing,
+`apps/orchestration/src/browser-policy-contract.ts`, owns pattern parsing,
 canonicalization, list bounds, carrier shape, and the 128-character identity
 bound for both host and consumer. `WorkerExecutor` projects the same immutable
 list into worker invocation metadata and, immediately around

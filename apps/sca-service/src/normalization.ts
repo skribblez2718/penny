@@ -1,10 +1,10 @@
-import { validateContract, type ArtifactRef } from "../../orchestration/src/contracts.js";
-import { canonicalJson, sha256 } from "../../orchestration/src/canonical-json.js";
+import { validateContract, type ArtifactRef } from "../../orchestration/dist/contracts.js";
+import { canonicalJson, sha256 } from "../../orchestration/dist/canonical-json.js";
 import {
   ScaStaticAnalyzerRunInputV1Schema,
   type ScaStaticAnalyzerRunInputV1,
   type ScaStaticObservationInputV1,
-} from "../../orchestration/src/sca/static-normalization.js";
+} from "../../orchestration/dist/sca/static-normalization.js";
 import {
   ScaDependencyInventoryResultV1Schema,
   type ScaDependencyInventoryResultV1,

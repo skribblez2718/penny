@@ -4,18 +4,18 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { canonicalJson, Checkpointer } from "../src/checkpointer.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { canonicalJson, Checkpointer } from "../dist/checkpointer.js";
 import {
   artifactDispatchRecoveryV1,
   parseArtifactDispatchPause,
   type ArtifactDispatchPauseV1,
   type RunIdentity,
-} from "../src/contracts.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationEngine, parseArtifactDispatchMode } from "../src/engine.js";
-import type { ModelClient } from "../src/model-client.js";
-import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
+} from "../dist/contracts.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationEngine, parseArtifactDispatchMode } from "../dist/engine.js";
+import type { ModelClient } from "../dist/model-client.js";
+import { OrchestrationRunner, WorkerExecutor } from "../dist/worker.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const directories: string[] = [];

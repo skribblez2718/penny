@@ -1,11 +1,11 @@
 import { Type, type Static } from "typebox";
 
-import { canonicalJson, sha256 } from "../../../orchestration/src/canonical-json.js";
-import { validateContract } from "../../../orchestration/src/contracts.js";
+import { canonicalJson, sha256 } from "../../../orchestration/dist/canonical-json.js";
+import { validateContract } from "../../../orchestration/dist/contracts.js";
 import {
   Rfc3339UtcSchema,
   Sha256Schema,
-} from "../../../orchestration/src/skill-contracts/common.js";
+} from "../../../orchestration/dist/skill-contracts/common.js";
 
 const MAX_COORDINATES = 128;
 const MAX_ADVISORIES = 4_096;
@@ -362,8 +362,13 @@ export function createFixedOsvTransport(): ScaOsvTransport {
         );
       }
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), request.timeout_ms);
-      timeout.unref();
+      let inactivityTimer: NodeJS.Timeout | undefined;
+      const renewInactivity = (): void => {
+        if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(() => controller.abort(), request.timeout_ms);
+        inactivityTimer.unref();
+      };
+      renewInactivity();
       try {
         const response = await fetch(request.url, {
           method: request.method,
@@ -378,13 +383,28 @@ export function createFixedOsvTransport(): ScaOsvTransport {
           redirect: "error",
           signal: controller.signal,
         });
-        const bodyBuffer = Buffer.from(await response.arrayBuffer());
-        if (bodyBuffer.byteLength > request.max_response_bytes) {
-          throw new OsvTransportFailure(
-            "response_too_large",
-            "OSV response exceeded its byte limit"
-          );
+        renewInactivity();
+        const chunks: Buffer[] = [];
+        let bodyBytes = 0;
+        if (response.body !== null) {
+          const reader = response.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value.byteLength === 0) continue;
+            bodyBytes += value.byteLength;
+            if (bodyBytes > request.max_response_bytes) {
+              await reader.cancel();
+              throw new OsvTransportFailure(
+                "response_too_large",
+                "OSV response exceeded its byte limit"
+              );
+            }
+            chunks.push(Buffer.from(value));
+            renewInactivity();
+          }
         }
+        const bodyBuffer = Buffer.concat(chunks, bodyBytes);
         return {
           status_code: response.status,
           final_url: response.url,
@@ -394,11 +414,11 @@ export function createFixedOsvTransport(): ScaOsvTransport {
       } catch (error) {
         if (error instanceof OsvTransportFailure) throw error;
         if (controller.signal.aborted) {
-          throw new OsvTransportFailure("timeout", "OSV request timed out");
+          throw new OsvTransportFailure("timeout", "OSV request became inactive");
         }
         throw new OsvTransportFailure("transport_failed", "OSV transport failed");
       } finally {
-        clearTimeout(timeout);
+        if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
       }
     },
   });

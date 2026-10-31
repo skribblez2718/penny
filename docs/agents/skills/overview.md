@@ -4,14 +4,15 @@
 
 A skill is an established workflow whose durable state, gates, retries, fan-out,
 or recovery behavior earns orchestration overhead. Each workflow is a registered
-TypeScript `PlaybookCoreV1` implementation in `apps/orchestration/`;
+TypeScript `PlaybookCore` implementation in `apps/orchestration/`;
 `.pi/skills/<name>/` contains the discoverable manifest, Domain Guidance, and resources.
 
 ## Rules
 
 1. `.pi/skills/*/SKILL.md` is the only package source. Discovery parses all packages once; the
    sole executable registry is `PLAYBOOK_REGISTRY`.
-2. The registered playbook owns states, contracts, routing, and terminal truth.
+2. The playbook proposes terminal candidates; the registration declares completion policy;
+   the engine admits positive terminals and records honest refusals.
 3. Skill directories contain no executable runtime or delegate.
 4. Every cognitive stage receives exact cross-run `input_artifacts` IDs/refs and an
    `output_artifact` contract. Workers read needed IDs with `artifact_read` and
@@ -22,35 +23,38 @@ TypeScript `PlaybookCoreV1` implementation in `apps/orchestration/`;
    memory tools, but memory is never active handoff, run state, or persistence proof.
 7. Recovery reissues pending work from checkpointed refs. Large artifact reads
    repeat with non-expiring `next_range`.
-8. Model visibility is controlled only by `disable-model-invocation`. A model-visible package
-   omits the flag; only a hidden package declares it, exactly as `true`. Redundant `false` is not
-   permitted. `.pi/skills/.ignore` exactly mirrors explicitly model-disabled packages and is
-   comment-only when none exist. A model-disabled package may remain unregistered during
-   development, but generic execution then refuses safely.
-9. Penny skill manifests do not declare the upstream optional `license` field. The repository-level
-   license governs tracked packages.
+8. Manifest YAML, visibility, and license rules belong to
+   [SKILL.md Format](skill-md-format.md). Discovery does not grant execution authority.
+
+## Explicit nonbinding context
+
+The seven ordinary skills accept each other's current accepted terminal products through
+`context_artifacts`. In a chain, set `previous_artifact_designation: "context"` on the consumer
+to treat the automatic predecessor that way. Native `input_artifacts` and default chain behavior
+keep their existing typed requirements and assurance. A contextual specification is not a
+revision subject or reviewed-definition binding; a contextual research core is not automatically
+admitted evidence. The shared engine owns exact validation, designation custody and worker
+delivery. A future compatible registration opts in with
+`contextual_inputs: "accepted_terminal_products_v1"`; no per-producer routing scheduler is
+required. Dedicated/private registrations do not opt in implicitly. Deterministic transport tests
+do not establish substantive content use or live reliability.
 
 ## Child-workflow authority status
 
 The active registry carries a static runtime parent/provider authority projection for exactly the
-six explicitly authorized ordinary workflows: `assess`, `decide`, `diagnose`, `plan`, `produce`, and
-`research`. Every one has the same all-six, one-call, depth-one parent policy and its own native
+seven explicitly authorized ordinary workflows: `assess`, `decide`, `define`, `diagnose`, `plan`,
+`produce`, and `research`. Every one has the same all-seven, one-call, depth-one parent policy and its own native
 request/output plus fixed phase-authority provider declaration. The projection participates in the
 runtime registration digest. Absence and unknown or dedicated workflows deny; `knowledge-base`
 remains excluded. This authority is registry-owned and must not be added to `SKILL.md` or inferred
 from model visibility.
 
-`apps/orchestration/src/child-workflows/` provides bounded exact-byte contracts plus the active
-storage/custody/runtime owner. Ordinary services construct that owner by default; hosts may disable
-it explicitly. `WorkerExecutor` still refuses child directives directly, while the runner delegates
-them to the owner. New calls deliberately omit predicted turn/tool/external/output/step/time
-allocations, aggregate capacity, and parent reserve. The child uses its registered repair/liveness
-policy and the service-wide step backstop plus a content-free child-execution inactivity lease; the
-owner drives the registered child engine/runner, validates a terminal core, and atomically consumes
-it into the parent. Fixed project/call admission, lease expiry, and cancellation forwarding are
-enforced. Child gates, arbitrary post-capture restart
-reconciliation, cohort retention, promotion, and live qualification remain unimplemented. Gate 2 is
-explicitly `not_run`.
+The [engine feature-status table](../orchestration/overview.md#child-workflow-feature-status)
+is the status owner: storage/custody, active dispatch, projected gates, captured-terminal recovery,
+and linked control/session retention are implemented; provider promotion/live qualification are
+separate. Gate 2 remains `not_run` with no evidence. Storage tests or successful dispatch do not
+establish qualification. The owner uses registered repair/liveness and a content-free inactivity
+lease, not predicted child resource allocations; legacy V1 calls remain replay-only.
 
 ## Skill vs. agent vs. direct
 
@@ -62,13 +66,9 @@ explicitly `not_run`.
 
 ## Verification
 
-- [ ] Manifest sets `metadata.penny.engine: orchestration`, omits `license`, and declares
-      `disable-model-invocation` only as `true` for a hidden package.
-- [ ] Playbook is registered and tested.
-- [ ] Skill directory contains no executable delegate.
-- [ ] Stage directives use exact artifact contracts.
-- [ ] Worker memory tools, when declared, remain read-only and never carry workflow output.
-- [ ] Terminal result exposes the selected exact product ref and honest warnings.
+Use the [Skill Standard](skill-standard.md) for requirements and
+[Testing](testing.md#required-coverage) for the evidence matrix. An overview or checklist is not
+proof that a registration, recovery path, or terminal product has been verified.
 
 ## Files
 

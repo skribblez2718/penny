@@ -1,39 +1,37 @@
 # State Machine Architecture
 
-Penny separates three responsibilities:
+Penny's state-machine architecture has three responsibility categories, each with two
+ownership layers.
 
-1. **Playbook:** domain states, happy routing, valid-gap classification, domain bookkeeping, gates, terminal candidates.
-2. **Registration:** required guidance, state/agent/result contracts, state-aware repair routes, completion criteria.
-3. **Engine/checkpointer:** closed requests, repair budgets/transitions, durable control state, receipts, admission, recovery.
-4. **Artifact plane:** exact input-ID verification and mandatory output persistence/re-read.
-5. **Child-workflow state owner:** concrete project-bound artifact verification plus one atomic
-   parent-visit, parent-suspension, ordinary-child-run, initial-event, canonical call-record
-   reservation, and terminal-consumption boundary. Exact retries adopt; changed operands conflict;
-   missing linkage is never synthesized.
-6. **Child runtime owner:** the normal depth-one service path that drives a reserved child through
-   the standard engine and runner, validates its terminal core, and atomically resumes the parent
-   without granting parent success.
-
-Ordinary services construct the child owner by default, while a host can explicitly disable it. The
-path is digest-bound to the six ordinary workflows (knowledge-base is excluded), has fixed
-project/call admission, and applies a content-free inactivity lease. It uses each child's registered
-repair/liveness policy and the service-wide step backstop instead of a predicted per-call resource
-allocation. It forwards runner-signal and concurrent durable-parent cancellation; lease expiry
-also stops a silent child. Child gates, arbitrary post-capture restart reconciliation, artifact/
-receipt/session cohort retention, promotion, and live qualification remain separate. Gate 2 is
-explicitly unrun, so active execution is not itself qualification evidence.
+| Category                  | Ownership layer         | Responsibility                                                                                                                                                   |
+| ------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workflow definition       | **Playbook**            | Domain states, happy-path routing, valid-gap classification, domain bookkeeping, gates, and terminal candidates.                                                 |
+| Workflow definition       | **Registration**        | Required guidance, state/agent/result contracts, state-aware repair routes, and completion criteria.                                                             |
+| Execution and persistence | **Engine/checkpointer** | Closed requests, repair budgets and transitions, durable control state, receipts, admission, and checkpoint operations.                                          |
+| Execution and persistence | **Artifact plane**      | Exact input-ID verification plus immutable output persistence and re-read.                                                                                       |
+| Child composition         | **Child state owner**   | Project-bound artifact custody and the atomic boundary for parent suspension, child reservation, call linkage, and terminal consumption.                         |
+| Child composition         | **Child runtime owner** | Running a reserved child through the ordinary engine and runner, validating its terminal result, and returning it to the parent without granting parent success. |
+| Host operations           | **Host state owner**    | Project-bound artifact custody, canonical operation journal transitions, and atomic parent/result consumption.                                                   |
+| Host operations           | **Host runtime owner**  | Registration-bound asynchronous adapter execution, bounded persistence, cancellation, and recovery under a catalog-global fenced backend lease.                  |
 
 A cognitive directive carries current task facts, exact `input_artifacts`, and an output
 contract. Inputs may cross runs. The worker reads needed IDs with `artifact_read` and
-`next_range`, returns complete content, and ends with a routing-only SUMMARY. The owner
-persists/re-reads bytes before parsing that SUMMARY. Agent YAML is the maximum catalog
-authority. Orchestration phases without `allowed_tools` keep requested, active, and YAML tools
-exactly equal; an eligible phase may use only one fixed non-empty duplicate-free strict YAML
-subset held by the active registration, bound into its canonical digest and worker metadata.
-Task, trust, input, runtime, model/liveness, and optional-service state cannot select it.
-Structurally valid gap evaluations cannot choose their own transition or exhaustion result.
+`next_range`, returns complete content, and ends with a routing-only `SUMMARY`. The owner
+persists and re-reads the bytes before parsing that `SUMMARY`.
 
-`RunContext` stores compact values and refs, never payloads. Retry, clarification, crash
-recovery, parallel fan-in, and compaction reuse exact IDs. Large compaction ref sets become
-one handoff-index artifact; semantic memory and global artifact scans are not continuity
-mechanisms.
+The seven ordinary generic-child peers use exact agent YAML tools; this is not universal across
+registrations. SCA cognitive phases use the registered `["artifact_read"]` strict subset. Other
+registration-bound exceptions follow the [binding runtime rule](../../agents/agents/discovery-and-tools.md#binding-runtime-rule).
+The runtime checks exact equality with the accepted surface before the model prompt.
+This limits model-visible tools; it is not filesystem, process, operating-system, or
+extension-code sandboxing. Untrusted execution requires an external container or virtual
+machine boundary.
+
+`RunContext` stores compact values and refs, never payload bodies. Retry,
+clarification, parallel fan-in, and compaction reuse exact IDs. Large compaction ref sets
+become one handoff-index artifact; semantic memory and global artifact scans are not
+continuity mechanisms.
+
+For the canonical data-plane and recovery model, see [Skill State Management](state-management.md#three-data-planes)
+and [Recovery](state-management.md#recovery). For current child-workflow availability,
+limits, exclusions, and qualification status, see [Current child-workflow status](state-management.md#current-child-workflow-status).

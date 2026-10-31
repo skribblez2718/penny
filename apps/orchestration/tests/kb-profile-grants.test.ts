@@ -13,9 +13,9 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { hostGrantAuthorityDir, kbProfileRegistryPath } from "../src/kb/host-state.js";
-import { KbSessionProfileGrantStore } from "../src/kb/profile-grants.js";
-import { resolveGrantedProfile } from "../src/kb/profile-registry.js";
+import { hostGrantAuthorityDir, kbProfileRegistryPath } from "../dist/kb/host-state.js";
+import { KbSessionProfileGrantStore } from "../dist/kb/profile-grants.js";
+import { resolveGrantedProfile } from "../dist/kb/profile-registry.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 import { crashAuthorityTransaction, runAuthorityRace } from "./fixtures/authority-race-harness.js";

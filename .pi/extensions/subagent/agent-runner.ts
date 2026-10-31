@@ -13,6 +13,8 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { isCompactionProgress } from "../../lib/compaction-policy.mjs";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -20,15 +22,18 @@ import * as path from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import {
   buildCatalogPrompt,
+  canonicalJson,
   finalizeSystemBoundary,
   requiredPromptFile,
+  resolveWorkerLeaseProfile,
+  sha256,
   taskProjectGuidance,
   transformCatalogFrame,
   ensureOwnerDirectory,
   PennyStateResolutionError,
   resolvePennyRuntimeState,
   type PennyStateResolutionDetails,
-} from "@penny/orchestration/source";
+} from "@penny/orchestration";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 import {
   createChildLifecycleScope,
@@ -519,6 +524,8 @@ export interface SingleResult {
   processExitObserved?: boolean;
   processCloseObserved?: boolean;
   wasAborted?: boolean;
+  /** Owner lease expiry caused actual process termination, not caller cancellation. */
+  inactivityExpired?: boolean;
   terminationForceRequested?: boolean;
   agentEndObserved?: boolean;
   /** Immutable process/model truth, sealed before delivery work. */
@@ -622,14 +629,6 @@ export function createStatePreflightFailureResult(input: {
   };
 }
 
-export interface SubagentCatalogDriftError {
-  code: "SUBAGENT_RELOAD_REQUIRED";
-  kind: "catalog_drift";
-  retryable: true;
-  registeredCatalogDigest: string;
-  executionCatalogDigest: string;
-}
-
 export interface SubagentDetails {
   mode: "single" | "parallel" | "chain";
   agentScope: AgentScope;
@@ -643,7 +642,6 @@ export interface SubagentDetails {
   outputArtifactRefs?: ArtifactRef[];
   /** Exact final output ref; authoritative over any preview. */
   finalOutputArtifactRef?: ArtifactRef;
-  error?: SubagentCatalogDriftError;
 }
 
 // ============================================================
@@ -662,6 +660,112 @@ export class ProgressEmitter extends EventEmitter {
   markProgress(event: ProgressEvent): void {
     this.emit("progress", event);
   }
+}
+
+export interface DirectSubagentActivityV1 {
+  readonly activityClass:
+    | "assistant_text_delta"
+    | "assistant_thinking_delta"
+    | "tool_execution_started"
+    | "tool_execution_updated"
+    | "tool_execution_completed"
+    | "provider_turn_ended"
+    | "worker_completed";
+  readonly observedUnits: number;
+}
+
+export interface DirectSubagentProgressStateV1 {
+  readonly toolUpdateSha256: Map<string, string>;
+}
+
+function directObservedUnits(value: string): number | undefined {
+  const units = Buffer.byteLength(value, "utf8");
+  return units === 0 ? undefined : Math.min(units, 16_777_216);
+}
+
+/**
+ * Content-free projection of one serialized Pi event onto trusted direct-worker activity. Raw
+ * output is inspected only for non-empty/change and never leaves this adapter.
+ */
+export function directSubagentActivityFromPiEvent(
+  value: unknown,
+  admittedTools: ReadonlySet<string>,
+  state: DirectSubagentProgressStateV1
+): DirectSubagentActivityV1 | undefined {
+  if (!isRecord(value) || typeof value.type !== "string") return undefined;
+  if (value.type === "penny_compaction_progress") {
+    const { type: _type, ...progress } = value;
+    return isCompactionProgress(progress)
+      ? { activityClass: progress.activity_class, observedUnits: progress.observed_units }
+      : undefined;
+  }
+  if (value.type === "message_update") {
+    const update = value.assistantMessageEvent;
+    if (!isRecord(update) || typeof update.delta !== "string") return undefined;
+    const observedUnits = directObservedUnits(update.delta);
+    if (observedUnits === undefined) return undefined;
+    if (update.type === "text_delta") {
+      return { activityClass: "assistant_text_delta", observedUnits };
+    }
+    if (update.type === "thinking_delta") {
+      return { activityClass: "assistant_thinking_delta", observedUnits };
+    }
+    return undefined;
+  }
+  if (value.type === "tool_execution_start") {
+    return typeof value.toolName === "string" && admittedTools.has(value.toolName)
+      ? { activityClass: "tool_execution_started", observedUnits: 1 }
+      : undefined;
+  }
+  if (value.type === "tool_execution_update") {
+    if (
+      typeof value.toolName !== "string" ||
+      !admittedTools.has(value.toolName) ||
+      typeof value.toolCallId !== "string"
+    ) {
+      return undefined;
+    }
+    let digest: string;
+    let units: number;
+    try {
+      const encoded = canonicalJson(value.partialResult);
+      digest = sha256(encoded);
+      units = Math.min(Buffer.byteLength(encoded, "utf8"), 16_777_216);
+    } catch {
+      return undefined;
+    }
+    if (units === 0 || state.toolUpdateSha256.get(value.toolCallId) === digest) return undefined;
+    state.toolUpdateSha256.set(value.toolCallId, digest);
+    return { activityClass: "tool_execution_updated", observedUnits: units };
+  }
+  if (value.type === "tool_execution_end") {
+    if (
+      typeof value.toolName !== "string" ||
+      !admittedTools.has(value.toolName) ||
+      typeof value.toolCallId !== "string"
+    ) {
+      return undefined;
+    }
+    state.toolUpdateSha256.delete(value.toolCallId);
+    return { activityClass: "tool_execution_completed", observedUnits: 1 };
+  }
+  if (value.type === "turn_end" || value.type === "message_end") {
+    const message = isRecord(value.message) ? value.message : undefined;
+    return message?.role === "assistant"
+      ? { activityClass: "provider_turn_ended", observedUnits: 1 }
+      : undefined;
+  }
+  if (value.type === "tool_result_end" || value.type === "message") {
+    const message = isRecord(value.message) ? value.message : undefined;
+    return message?.role === "toolResult" &&
+      typeof message.toolName === "string" &&
+      admittedTools.has(message.toolName)
+      ? { activityClass: "tool_execution_completed", observedUnits: 1 }
+      : undefined;
+  }
+  return value.type === "agent_end"
+    ? { activityClass: "worker_completed", observedUnits: 1 }
+    : undefined;
 }
 
 // ============================================================
@@ -726,34 +830,17 @@ export interface PiInvocation {
 }
 
 /**
- * Canonical filename of pi's CLI entry point.
- * Used to verify that process.argv[1] actually points to pi, not some
- * other Node script that happened to import this module.
+ * Launch the SDK-owned child, never upstream main() (which cannot accept an
+ * enforced manager), and never argv[1] (which may be the caller/test runner).
+ * Node 24 and Bun can run this erasable TypeScript entry directly.
  */
-const PI_CLI_BASENAME = "cli.js";
-
 export function getPiInvocation(args: string[]): PiInvocation {
-  const currentScript = process.argv[1];
-
-  // Only re-use execPath + argv[1] when argv[1] is pi's actual entry point.
-  // If argv[1] points to any other script (e.g. a test file, a standalone
-  // tool), spawning `node <that-script>` would re-execute it recursively,
-  // creating a fork bomb.
-  if (
-    currentScript &&
-    fs.existsSync(currentScript) &&
-    path.basename(currentScript) === PI_CLI_BASENAME
-  ) {
-    return { command: process.execPath, args: [currentScript, ...args] };
-  }
-
-  const execName = path.basename(process.execPath).toLowerCase();
-  const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-  if (!isGenericRuntime) {
-    return { command: process.execPath, args };
-  }
-
-  return { command: "pi", args };
+  const executable = path.basename(process.execPath).toLowerCase();
+  const command = /^(node|bun)(\.exe)?$/u.test(executable) ? process.execPath : "node";
+  return {
+    command,
+    args: [fileURLToPath(new URL("./direct-agent-runtime.ts", import.meta.url)), ...args],
+  };
 }
 
 // ============================================================
@@ -1203,9 +1290,9 @@ export async function runSingleAgent(
     // Pi's print mode exits when the event loop drains. Extensions must not
     // leave referenced sockets, subprocesses, or timers behind.
     //
-    // There is no general worker timeout. Cancellation alone has a bounded
-    // graceful/forced termination lifecycle and waits for actual exit plus
-    // stream closure before settling.
+    // Productive workers have no elapsed-time ceiling. A renewable inactivity lease
+    // observes trusted Pi activity; cancellation has a bounded graceful/forced
+    // termination lifecycle and waits for actual exit plus stream closure.
     let proc: AgentChildProcess;
     try {
       proc = spawn(invocation.command, invocation.args, {
@@ -1227,6 +1314,32 @@ export async function runSingleAgent(
       return currentResult;
     }
 
+    const inactivityIntervalMs = resolveWorkerLeaseProfile({
+      providerId: provider ?? "unknown-provider",
+      modelId: model ?? "unknown-model",
+      purpose: "phase",
+    }).inactivity_interval_ms;
+    const executionController = new AbortController();
+    let inactivityTimer: NodeJS.Timeout | undefined;
+    let inactivityExpired = false;
+    const forwardCancellation = (): void => executionController.abort(signal?.reason);
+    if (signal?.aborted) forwardCancellation();
+    else signal?.addEventListener("abort", forwardCancellation, { once: true });
+    const renewInactivityLease = (): void => {
+      if (executionController.signal.aborted) return;
+      if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        // Retain the first abort cause while the existing termination lifecycle settles.
+        if (executionController.signal.aborted) return;
+        inactivityExpired = true;
+        executionController.abort(new Error("direct subagent inactivity lease expired"));
+      }, inactivityIntervalMs);
+    };
+    const directProgressState: DirectSubagentProgressStateV1 = {
+      toolUpdateSha256: new Map(),
+    };
+    const admittedTools = new Set(agent.tools);
+
     const processLine = (line: string) => {
       if (!line.trim()) return;
       let parsed: unknown;
@@ -1241,6 +1354,12 @@ export async function runSingleAgent(
 
       eventCount++;
       lastEventType = typeof event.type === "string" && event.type ? event.type : "unknown";
+      const trustedActivity = directSubagentActivityFromPiEvent(
+        event,
+        admittedTools,
+        directProgressState
+      );
+      if (trustedActivity !== undefined) renewInactivityLease();
 
       // Progress is observational. A listener failure cannot interrupt event
       // parsing or replace the eventual terminal envelope.
@@ -1289,8 +1408,10 @@ export async function runSingleAgent(
           if (!currentResult.model && eventMessage.model) {
             currentResult.model = eventMessage.model;
           }
-          if (eventMessage.stopReason) currentResult.stopReason = eventMessage.stopReason;
-          if (eventMessage.errorMessage) currentResult.errorMessage = eventMessage.errorMessage;
+          // Each finalized assistant replaces the prior attempt's terminal state, including
+          // absent fields. Keep all original messages for exact final/failed partial capture.
+          currentResult.stopReason = eventMessage.stopReason;
+          currentResult.errorMessage = eventMessage.errorMessage;
         }
         emitUpdate();
       }
@@ -1332,11 +1453,12 @@ export async function runSingleAgent(
     };
 
     const childScope = lifecycleScope ?? createChildLifecycleScope({ maxActiveChildren: 1 });
-    const begun = childScope.beginChild(proc, signal);
+    const begun = childScope.beginChild(proc, executionController.signal);
     let lifecycle: ChildLifecycleResult;
     if (!begun.accepted) {
       lifecycle = await begun.finalizer.settled;
     } else {
+      renewInactivityLease();
       let stdoutAttached = false;
       let stderrAttached = false;
       let closeAttached = false;
@@ -1375,6 +1497,8 @@ export async function runSingleAgent(
         }
       }
     }
+    if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+    signal?.removeEventListener("abort", forwardCancellation);
     if (!outputQueueClosed) {
       outputQueueClosed = true;
       flushOutputQueue();
@@ -1384,6 +1508,7 @@ export async function runSingleAgent(
     currentResult.processExitObserved = lifecycle.exitObserved;
     currentResult.processCloseObserved = lifecycle.closeObserved;
     currentResult.wasAborted = lifecycle.terminationRequested;
+    currentResult.inactivityExpired = inactivityExpired && lifecycle.terminationRequested;
     currentResult.terminationForceRequested = lifecycle.forceRequested;
     currentResult.exitCode = lifecycle.exitCode ?? 1;
 
@@ -1403,6 +1528,9 @@ export async function runSingleAgent(
     } else if (lifecycle.state !== "closed") {
       currentResult.errorMessage = lifecycle.errorMessage ?? `Agent process ${lifecycle.state}`;
       currentResult.stopReason = "error";
+    } else if (currentResult.inactivityExpired) {
+      currentResult.stopReason = "error";
+      currentResult.errorMessage = "Agent inactivity lease expired without trusted progress";
     } else if (lifecycle.terminationRequested) {
       currentResult.stopReason = "aborted";
       currentResult.errorMessage = currentResult.errorMessage ?? "Agent was aborted";

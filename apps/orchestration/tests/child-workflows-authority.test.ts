@@ -19,17 +19,19 @@ import {
   assertGenericChildAuthorityProjection,
   bindGenericChildYamlAuthority,
   isGenericChildWorkflowEligible,
+  genericChildStartParts,
   runtimeRegistrationSha256,
   validateGenericChildProviderRequest,
   validateRegistrationContract,
   type GenericChildWorkflowName,
-  type PlaybookRegistrationV1,
-} from "../src/playbooks/registry.js";
-import { canonicalizePlanRequest } from "../src/skill-contracts/plan.js";
-import { canonicalizeResearchRequest } from "../src/skill-contracts/research.js";
-import type { ChildWorkflowRequestV1 } from "../src/child-workflows/contracts.js";
-import type { JsonValue, LeaseBoundInvokeChildWorkflowDirectiveV1 } from "../src/contracts.js";
-import { assertWorkerExecutableDirective } from "../src/worker.js";
+  type PlaybookRegistration,
+} from "../dist/playbooks/registry.js";
+import { canonicalizeDefinitionRequest } from "../dist/skill-contracts/define.js";
+import { canonicalizePlanRequest } from "../dist/skill-contracts/plan.js";
+import { canonicalizeResearchRequest } from "../dist/skill-contracts/research.js";
+import type { ChildWorkflowRequestV1 } from "../dist/child-workflows/contracts.js";
+import type { JsonValue, LeaseBoundInvokeChildWorkflowDirectiveV1 } from "../dist/contracts.js";
+import { assertWorkerExecutableDirective } from "../dist/worker.js";
 import { decisionRequest } from "./fixtures/decision-fixtures.js";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
@@ -38,6 +40,7 @@ const PROJECT_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const EXPECTED_GENERIC_CHILD_WORKFLOW_NAMES = [
   "assess",
   "decide",
+  "define",
   "diagnose",
   "plan",
   "produce",
@@ -50,7 +53,7 @@ const ACTIVE_PLAYBOOK_REGISTRY = new Map(
   )
 );
 
-function registration(name: string): PlaybookRegistrationV1 {
+function registration(name: string): PlaybookRegistration {
   const value = ACTIVE_PLAYBOOK_REGISTRY.get(name);
   if (value === undefined) throw new Error(`missing registration '${name}'`);
   return value;
@@ -83,6 +86,25 @@ const NATIVE_REQUESTS: Readonly<Record<GenericChildWorkflowName, JsonValue>> = {
     known_uncertainties: [],
   },
   decide: decisionRequest(),
+  define: canonicalizeDefinitionRequest({
+    goal: "Define a bounded fixture.",
+    constraints: {
+      schema_version: 1,
+      mode: "create",
+      requested_profile_id: "generic",
+      desired_outcomes: ["A bounded specification exists."],
+      audiences: [],
+      in_scope: [],
+      out_of_scope: [],
+      hard_constraints: [],
+      non_goals: [],
+      known_assumptions: [],
+      known_uncertainties: [],
+      prior_decisions: [],
+      standard_hints: [],
+    },
+    exactInputArtifactIds: [],
+  }),
   diagnose: {
     schema_version: 1,
     problem_statement: "Why does the fixture report an unexpected value?",
@@ -203,7 +225,59 @@ function invokeDirective(
 }
 
 describe("active generic-child runtime authority projection", () => {
-  it("projects exact all-six parent/provider authority and default-denies everything else", () => {
+  it("preserves explicit phase projection declarations and refuses missing or substituted child carriers", () => {
+    const produce = registration("produce");
+    if (produce.worker.kind !== "catalog-agent" || produce.generic_child === undefined)
+      throw new Error("Produce carrier absent");
+    for (const [state, phase] of produce.worker.phases) {
+      const carrier = produce.generic_child.provider.phases.find((p) => p.state_id === state);
+      if (carrier === undefined) throw new Error("phase carrier absent");
+      if (state === "critiquing_artifact" || state === "verifying_artifact") {
+        expect(phase.result_projection?.declaration).toEqual({
+          schema_id: "penny.produce-review-semantic-projection.v1",
+          schema_version: 1,
+          registration_name: "produce",
+          state_id: state,
+          agent: phase.agent,
+          result_schema_id: phase.result_schema_id,
+          result_schema_version: 1,
+        });
+        expect(carrier.result_projection).toEqual(phase.result_projection?.declaration);
+      } else {
+        expect(Object.hasOwn(carrier, "result_projection")).toBe(false);
+      }
+    }
+    const authority = produce.generic_child;
+    for (const mode of ["missing", "wrong_phase"] as const) {
+      const phases = authority.provider.phases.map((phase) => {
+        if (phase.state_id !== "verifying_artifact") return phase;
+        const { result_projection, ...unopted } = phase;
+        if (result_projection === undefined) throw new Error("projection carrier absent");
+        return mode === "missing"
+          ? unopted
+          : {
+              ...phase,
+              result_projection: { ...result_projection, state_id: "critiquing_artifact" },
+            };
+      });
+      const changed: PlaybookRegistration = {
+        ...produce,
+        generic_child: { ...authority, provider: { ...authority.provider, phases } },
+      };
+      expect(runtimeRegistrationSha256(changed)).not.toBe(runtimeRegistrationSha256(produce));
+      expect(() => validateRegistrationContract(changed, PROJECT_ROOT)).toThrow(/projection/u);
+    }
+    for (const name of GENERIC_CHILD_WORKFLOW_NAMES.filter((name) => name !== "produce")) {
+      const other = registration(name);
+      expect(
+        other.generic_child?.provider.phases.every(
+          (phase) => !Object.hasOwn(phase, "result_projection")
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("projects exact all-seven parent/provider authority and default-denies everything else", () => {
     expect(GENERIC_CHILD_WORKFLOW_NAMES).toEqual(EXPECTED_GENERIC_CHILD_WORKFLOW_NAMES);
     expect(() =>
       assertGenericChildAuthorityProjection(ACTIVE_PLAYBOOK_REGISTRY, PROJECT_ROOT)
@@ -334,6 +408,61 @@ describe("active generic-child runtime authority projection", () => {
     }
   });
 
+  it("carries an explicit versioned Define/Plan policy without inferring one from a provider or slot", () => {
+    for (const name of ["define", "plan"] as const) {
+      const request = childRequest("assess", name);
+      expect(registration(name).generic_child?.provider.native_request.validator_id).toContain(
+        "invocation-v2"
+      );
+      const legacy = genericChildStartParts(
+        "assess",
+        request,
+        ACTIVE_PLAYBOOK_REGISTRY,
+        PROJECT_ROOT
+      );
+      expect(legacy.constraints).toMatchObject({ schema_version: 1 });
+      expect(legacy.constraints).not.toHaveProperty("specification_assurance");
+      for (const assurance of ["reviewed_definition", "semantic_only"] as const) {
+        const next = genericChildStartParts(
+          "assess",
+          {
+            ...request,
+            invocation_policy: { schema_version: 2, specification_assurance: assurance },
+          },
+          ACTIVE_PLAYBOOK_REGISTRY,
+          PROJECT_ROOT
+        );
+        expect(next.constraints).toEqual({
+          schema_version: 2,
+          request: legacy.constraints,
+          specification_assurance: assurance,
+        });
+      }
+      expect(() =>
+        genericChildStartParts(
+          "assess",
+          {
+            ...request,
+            invocation_policy: { schema_version: 2 },
+          },
+          ACTIVE_PLAYBOOK_REGISTRY,
+          PROJECT_ROOT
+        )
+      ).toThrow();
+    }
+    expect(() =>
+      genericChildStartParts(
+        "assess",
+        {
+          ...childRequest("assess", "decide"),
+          invocation_policy: { schema_version: 2, specification_assurance: "reviewed_definition" },
+        },
+        ACTIVE_PLAYBOOK_REGISTRY,
+        PROJECT_ROOT
+      )
+    ).toThrow(/only by Define\/Plan/u);
+  });
+
   it("validates each provider payload with the provider's native request validator", () => {
     for (const childName of GENERIC_CHILD_WORKFLOW_NAMES) {
       const request = childRequest("assess", childName);
@@ -436,7 +565,7 @@ describe("active generic-child runtime authority projection", () => {
     }
     const changedMaximum = yamlMaximum.tool_authority.allowed_tools.slice(1);
     if (changedMaximum.length === 0) throw new Error("test needs a non-singleton YAML maximum");
-    const yamlAuthorityVariant: PlaybookRegistrationV1 = {
+    const yamlAuthorityVariant: PlaybookRegistration = {
       ...decide,
       generic_child: {
         ...decideAuthority,
@@ -474,7 +603,7 @@ describe("active generic-child runtime authority projection", () => {
     const firstPhase = authority.provider.phases[0];
     if (firstPhase === undefined) throw new Error("missing assess phase");
 
-    const variants: readonly PlaybookRegistrationV1[] = [
+    const variants: readonly PlaybookRegistration[] = [
       {
         ...current,
         generic_child: {

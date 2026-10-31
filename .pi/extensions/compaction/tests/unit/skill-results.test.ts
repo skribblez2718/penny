@@ -1,28 +1,13 @@
-import { artifactDispatchRecoveryV1, parseArtifactDispatchMode } from "@penny/orchestration/source";
+import { artifactDispatchRecoveryV1, parseArtifactDispatchMode } from "@penny/orchestration";
 import { describe, expect, it } from "vitest";
 
 import { detectDominantSkill, deriveWorkContext, extractResultData } from "../../index.js";
-import { parseSkillResultDetails } from "../../skill-results.js";
+import { collectValidatedSkillResultNodes, parseSkillResultDetails } from "../../skill-results.js";
 import type { SessionMessage } from "../../pi-messages.js";
+import type { SkillResult } from "@penny/orchestration";
 
-/**
- * Verbatim data fixture from the `SkillResult` example in
- * 12e8c32922bae2db0da7cc706322d10b2eccb81d:.pi/extensions/skill/tests/unit/modes.test.ts.
- */
-const AUTHENTIC_ARCHIVED_SKILL_RESULT: Record<string, unknown> = {
-  success: true,
-  session_id: "test-123",
-  skill_name: "plan",
-  state: "complete",
-  requires_approval: false,
-  steps_total: 3,
-  agents_invoked: ["echo", "piper"],
-  errors: [],
-  plan: { plan_summary: "Three authentication patterns found." },
-};
-
-/** Current engine-era history fixture matching the present `SkillResult` source. */
-const AUTHENTIC_CURRENT_SKILL_RESULT: Record<string, unknown> = {
+/** Mirrors the current producer's terminal projection; type comes from the shared schema. */
+const CURRENT_SKILL_RESULT: SkillResult = {
   success: true,
   session_id: "code-current-1",
   skill_name: "code",
@@ -35,11 +20,7 @@ const AUTHENTIC_CURRENT_SKILL_RESULT: Record<string, unknown> = {
 };
 
 function currentDetails(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return { ...AUTHENTIC_CURRENT_SKILL_RESULT, ...overrides };
-}
-
-function withoutField(value: Record<string, unknown>, field: string): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== field));
+  return { ...CURRENT_SKILL_RESULT, ...overrides };
 }
 
 function resultMessage(details: unknown, overrides: Partial<SessionMessage> = {}): SessionMessage {
@@ -67,101 +48,172 @@ function skillCall(id = "skill-call-1"): SessionMessage {
   };
 }
 
-describe("structured skill-result parsing", () => {
-  it("parses the current result boundary before prose", () => {
-    const parsed = extractResultData(
-      resultMessage(currentDetails(), {
-        content: '{"success":false,"session_id":"prose-lie"}',
-      })
-    );
-    expect(parsed).toMatchObject({
+function pause() {
+  const identity = {
+    schema_version: 2 as const,
+    run_id: "run-current-pause",
+    session_id: "code-current-1",
+    playbook: "code",
+    engine_owner: "typescript" as const,
+  };
+  const dispatch = parseArtifactDispatchMode("paused");
+  return {
+    schema_version: 2 as const,
+    pause_schema_version: 1 as const,
+    action: "paused" as const,
+    identity,
+    status: "running" as const,
+    state_id: "executing",
+    code: "DISPATCH_PAUSED" as const,
+    reason: dispatch.reason,
+    retryable: true,
+    dispatch,
+    recovery: artifactDispatchRecoveryV1({
+      identity,
+      stateId: "executing",
+      reason: dispatch.reason,
+      kind: "recoverable_checkpoint",
+      checkpointExists: true,
+    }),
+  };
+}
+
+function clarification(native = false): Record<string, unknown> {
+  return currentDetails({
+    success: false,
+    state: "clarifying",
+    result: undefined,
+    continuation: {
+      kind: "clarification",
+      identity: {
+        schema_version: 2,
+        engine_owner: "typescript",
+        run_id: "exact-clarification-run",
+        session_id: "code-current-1",
+        playbook: "code",
+      },
+      gate_id: "gate-1",
+      challenge: "challenge-1",
+    },
+    escalation: {
+      questions: [
+        {
+          id: "scope",
+          label: "Clarification 1",
+          prompt: "Which scope?",
+          options: [],
+          allowOther: true,
+        },
+      ],
+      ...(native ? { trustedTransportCapability: "fixture-native-capability" } : {}),
+    },
+  });
+}
+
+describe("structured current skill-result parsing", () => {
+  it("uses the shared current contract before prose", () => {
+    expect(
+      extractResultData(
+        resultMessage(currentDetails(), { content: '{"success":false,"session_id":"prose-lie"}' })
+      )
+    ).toMatchObject({
       status: "success",
       success: true,
       session_id: "code-current-1",
-    });
-    expect(parsed.parsed?.format).toBe("current");
-  });
-
-  it("parses the authentic archived pre-engine SkillResult fixture", () => {
-    const parsed = parseSkillResultDetails(AUTHENTIC_ARCHIVED_SKILL_RESULT);
-    expect(parsed).toMatchObject({
-      format: "legacy",
-      status: "success",
-      sessionId: "test-123",
-      skillName: "plan",
+      parsed: { format: "current" },
     });
   });
 
-  it("rejects the archived fixture when mandatory requires_approval is missing", () => {
-    const malformed = withoutField(AUTHENTIC_ARCHIVED_SKILL_RESULT, "requires_approval");
-    expect(Object.prototype.hasOwnProperty.call(malformed, "requires_approval")).toBe(false);
-    expect(parseSkillResultDetails(malformed)).toBeNull();
-    expect(extractResultData(resultMessage(malformed))).toEqual({
-      status: "unknown",
-      success: false,
-    });
-  });
-
-  it("fails closed on Vera's malformed current-like non-string error counterexample", () => {
-    const malformed = currentDetails({ result: undefined, errors: [42] });
-    expect(Object.prototype.hasOwnProperty.call(malformed, "result")).toBe(true);
-    expect(parseSkillResultDetails(malformed)).toBeNull();
-    expect(extractResultData(resultMessage(malformed))).toEqual({
-      status: "unknown",
-      success: false,
-    });
+  it("needs no marker guessing for current wrapper errors and resumed chain previews", () => {
+    expect(
+      parseSkillResultDetails(
+        currentDetails({
+          result: undefined,
+          success: false,
+          state: "refused",
+          errors: ["SPECIFICATION_ASSURANCE_REQUIRED"],
+        })
+      )
+    ).toMatchObject({ format: "current", status: "failure" });
+    expect(
+      parseSkillResultDetails(
+        currentDetails({ result: undefined, plan: { plan_summary: "Verified prior step" } })
+      )
+    ).toMatchObject({ format: "current", status: "success", summary: "Verified prior step" });
   });
 
   it.each([
+    ["requires_approval missing", { requires_approval: undefined }],
     ["requires_approval type", { requires_approval: "false" }],
     ["plan type", { plan: [] }],
-    ["plan_steps element type", { plan_steps: [{ step: 1 }, "not-a-record"] }],
+    ["plan_steps element", { plan_steps: [{ step: 1 }, "not-a-record"] }],
     ["mode enum", { mode: "resume" }],
-    ["agents_invoked element type", { agents_invoked: ["echo", 7] }],
-    ["errors element type", { errors: [{ code: "NOT_AN_AUTHENTIC_LEGACY_ERROR" }] }],
-    [
-      "nested legacy result",
-      {
-        chain_results: [withoutField(AUTHENTIC_ARCHIVED_SKILL_RESULT, "requires_approval")],
-      },
-    ],
-    [
-      "unknown escalation question field",
-      {
-        escalation: {
-          questions: [
-            {
-              id: "approval",
-              label: "Approve",
-              prompt: "Continue?",
-              invented_question_field: "not-authentic-history",
+    ["agents_invoked element", { agents_invoked: ["echo", 7] }],
+    ["errors element", { errors: [42] }],
+    ["unknown outer field", { invented_field: true }],
+    ["unknown outer version", { schema_version: 99 }],
+    ["unknown result version", { result: { schema_version: 99, met: true } }],
+    ["unknown child field", { chain_results: [currentDetails({ unexpected: true })] }],
+    ["unknown child version", { parallel_results: [currentDetails({ schema_version: 99 })] }],
+  ])("rejects malformed current %s without prose fallback", (_label, overrides) => {
+    const details = currentDetails(overrides);
+    expect(parseSkillResultDetails(details)).toBeNull();
+    expect(
+      extractResultData(resultMessage(details, { content: JSON.stringify(CURRENT_SKILL_RESULT) }))
+    ).toEqual({ status: "unknown", success: false });
+  });
+
+  it("retires pre-engine workflow-state and extension pause-adapter execution semantics", () => {
+    // Structurally overlapping historical data may satisfy today's schema, but
+    // historical workflow-state success inference and pause normalization are gone.
+    expect(
+      parseSkillResultDetails(currentDetails({ state: "report", result: undefined }))
+    ).toMatchObject({ format: "current", status: "unknown" });
+    expect(
+      parseSkillResultDetails(
+        currentDetails({
+          success: false,
+          result: undefined,
+          state: "executing",
+          dispatch_pause: {
+            schema_version: 1,
+            action: "paused",
+            code: "ARTIFACT_DISPATCH_PAUSED",
+            reason: "dispatch is paused",
+            retryable: true,
+            dispatch_mode: "paused",
+            run_status: "running",
+            state_id: "executing",
+            session_id: "code-current-1",
+            run_id: "retired-run",
+            recovery: {
+              action: "recover",
+              run_id: "retired-run",
+              requires_dispatch_mode: "active",
+              checkpoint_preserved: true,
             },
-          ],
-        },
-      },
-    ],
-    ["unknown top-level field", { invented_legacy_field: true }],
-  ])("rejects malformed archived legacy %s without yielding success", (_label, override) => {
-    const malformed = { ...AUTHENTIC_ARCHIVED_SKILL_RESULT, ...override };
-    expect(parseSkillResultDetails(malformed)).toBeNull();
-    expect(extractResultData(resultMessage(malformed))).toEqual({
-      status: "unknown",
-      success: false,
-    });
+          },
+        })
+      )
+    ).toBeNull();
   });
 
-  it("keeps current-only escalation question fields on the current path", () => {
-    const parsed = parseSkillResultDetails(
-      currentDetails({
-        escalation: {
-          questions: [{ approval_run_id: "current-run-id" }],
-        },
-      })
-    );
-    expect(parsed).toMatchObject({ format: "current", status: "success" });
-  });
+  it.each([false, true])(
+    "recognizes canonical clarification without typed approval-question heuristics, native=%s",
+    (native) => {
+      expect(parseSkillResultDetails(clarification(native))).toMatchObject({
+        format: "current",
+        status: "paused",
+        details: { continuation: { identity: { run_id: "exact-clarification-run" } } },
+      });
+      expect(
+        parseSkillResultDetails({ ...clarification(native), continuation: undefined })
+      ).toBeNull();
+    }
+  );
 
-  it("represents every supported honest status", () => {
+  it("represents honest statuses and never upgrades inconsistent terminal truth", () => {
+    const dispatchPause = pause();
     const cases: Array<[string, Record<string, unknown>]> = [
       ["success", currentDetails()],
       [
@@ -169,8 +221,8 @@ describe("structured skill-result parsing", () => {
         currentDetails({
           success: false,
           state: "error",
-          errors: ["execution failed"],
           result: { met: false },
+          errors: ["execution failed"],
         }),
       ],
       [
@@ -187,109 +239,56 @@ describe("structured skill-result parsing", () => {
           success: false,
           state: "executing",
           result: undefined,
-          dispatch_pause: {
-            schema_version: 1,
-            action: "paused",
-            code: "ARTIFACT_DISPATCH_PAUSED",
-            reason: "dispatch is paused",
-            retryable: true,
-            dispatch_mode: "paused",
-            run_status: "running",
-            state_id: "executing",
-            session_id: "code-current-1",
-            run_id: "run-current-1",
-            recovery: {
-              action: "recover",
-              run_id: "run-current-1",
-              requires_dispatch_mode: "active",
-              checkpoint_preserved: true,
-            },
-          },
+          dispatch_pause: dispatchPause,
+          recovery: dispatchPause.recovery,
+          retriable: true,
         }),
       ],
       ["cancelled", currentDetails({ success: false, state: "cancelled", result: { met: false } })],
       ["unknown", currentDetails({ success: false, state: "executing", result: undefined })],
+      ["unknown", currentDetails({ success: true, state: "complete", result: { met: false } })],
+      ["unknown", currentDetails({ success: true, state: "incomplete", result: { met: true } })],
     ];
-
-    for (const [expected, details] of cases) {
+    for (const [expected, details] of cases)
       expect(extractResultData(resultMessage(details)).status).toBe(expected);
-    }
-  });
-
-  it("parses current engine-owned pause facts through the shared validator", () => {
-    const identity = {
-      schema_version: 2 as const,
-      run_id: "run-current-pause",
-      session_id: "session-current-pause",
-      playbook: "code",
-      engine_owner: "typescript" as const,
-    };
-    const dispatch = parseArtifactDispatchMode("paused");
-    const dispatchPause = {
-      schema_version: 2 as const,
-      pause_schema_version: 1 as const,
-      action: "paused" as const,
-      identity,
-      status: "running" as const,
-      state_id: "executing",
-      code: "DISPATCH_PAUSED" as const,
-      reason: dispatch.reason,
-      retryable: true,
-      dispatch,
-      recovery: artifactDispatchRecoveryV1({
-        identity,
-        stateId: "executing",
-        reason: dispatch.reason,
-        kind: "recoverable_checkpoint",
-        checkpointExists: true,
-      }),
-    };
     expect(
-      extractResultData(
-        resultMessage(
-          currentDetails({
-            success: false,
-            state: "executing",
-            result: undefined,
-            dispatch_pause: dispatchPause,
-            recovery: dispatchPause.recovery,
-            retriable: true,
-          })
-        )
+      parseSkillResultDetails(
+        currentDetails({
+          success: false,
+          state: "executing",
+          result: undefined,
+          dispatch_pause: { ...dispatchPause, retryable: false },
+        })
       )
-    ).toMatchObject({ status: "paused", success: false });
+    ).toBeNull();
   });
 
-  it("fails closed on unknown versions", () => {
-    const topVersion = extractResultData(resultMessage(currentDetails({ schema_version: 99 })));
-    const nestedVersion = extractResultData(
-      resultMessage(currentDetails({ result: { schema_version: 99, met: true } }))
+  it("traverses every validated mixed-mode child with >128 invocation entries", () => {
+    const single = currentDetails({ agents_invoked: Array.from({ length: 257 }, () => "echo") });
+    const chain = currentDetails({
+      skill_name: "chain",
+      mode: "chain",
+      result: undefined,
+      chain_results: [single],
+    });
+    const parsed = parseSkillResultDetails(
+      currentDetails({
+        skill_name: "parallel",
+        mode: "parallel",
+        result: undefined,
+        parallel_results: [chain, single],
+      })
     );
-    expect(topVersion).toEqual({ status: "unknown", success: false });
-    expect(nestedVersion).toEqual({ status: "unknown", success: false });
+    if (parsed === null) throw new Error("Expected a valid current aggregate");
+    expect(collectValidatedSkillResultNodes(parsed).map((node) => node.skillName)).toEqual([
+      "parallel",
+      "chain",
+      "code",
+      "code",
+    ]);
   });
 
-  it("does not replace malformed modern details with prose-derived claims", () => {
-    const parsed = extractResultData(
-      resultMessage(
-        {
-          ...currentDetails(),
-          success: "true",
-        },
-        {
-          content: JSON.stringify({
-            success: true,
-            session_id: "invented-from-prose",
-            skill_name: "code",
-            state: "complete",
-          }),
-        }
-      )
-    );
-    expect(parsed).toEqual({ status: "unknown", success: false });
-  });
-
-  it("does not turn unknown or malformed status into active unfinished work", () => {
+  it("does not turn unknown status into unfinished work", () => {
     expect(
       deriveWorkContext({
         dominantSkill: {
@@ -305,28 +304,25 @@ describe("structured skill-result parsing", () => {
     ).toEqual({});
   });
 
-  it("keeps an explicit tool transport error as failure without parsing prose", () => {
+  it("keeps an explicit transport error as failure and refuses transport success contradictions", () => {
     expect(
-      extractResultData(
-        resultMessage(undefined, {
-          isError: true,
-          content: '{"success":true,"session_id":"prose-lie"}',
-        })
-      )
+      extractResultData(resultMessage(undefined, { isError: true, content: '{"success":true}' }))
     ).toEqual({ status: "failure", success: false });
+    expect(extractResultData(resultMessage(currentDetails(), { isError: true }))).toMatchObject({
+      status: "unknown",
+      success: false,
+    });
   });
 });
 
 describe("exact skill call/result correlation", () => {
   it("uses one exact call/result ID pair", () => {
-    const dominant = detectDominantSkill([skillCall(), resultMessage(currentDetails())]);
-    expect(dominant).toMatchObject({
+    expect(detectDominantSkill([skillCall(), resultMessage(currentDetails())])).toMatchObject({
       session_id: "code-current-1",
       result_status: "success",
       completed: true,
     });
   });
-
   it("does not borrow a result with a different ID", () => {
     const dominant = detectDominantSkill([
       skillCall("wanted"),
@@ -335,7 +331,6 @@ describe("exact skill call/result correlation", () => {
     expect(dominant).toMatchObject({ result_status: "unknown", completed: false });
     expect(dominant?.session_id).toBeUndefined();
   });
-
   it("fails closed on duplicate ambiguous result IDs", () => {
     const dominant = detectDominantSkill([
       skillCall(),

@@ -16,39 +16,39 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer } from "../src/checkpointer.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
-import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
-import { mintSourceCapability } from "../src/kb/gate.js";
-import { envelopeDigest } from "../src/kb/capabilities.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationRunner, WorkerExecutor } from "../dist/worker.js";
+import { KbWorkerClient } from "../dist/kb/kb-worker-client.js";
+import { mintSourceCapability } from "../dist/kb/gate.js";
+import { envelopeDigest } from "../dist/kb/capabilities.js";
 import {
   ContentReviewService,
   authenticateLocalContentReviewer,
-} from "../src/kb/content-review.js";
-import { initKb } from "../src/kb/workflows.js";
-import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
-import { readSelectedGeneration } from "../src/kb/generations.js";
+} from "../dist/kb/content-review.js";
+import { initKb } from "../dist/kb/workflows.js";
+import { readPolicy, writePolicy } from "../dist/kb/filesystem.js";
+import { readSelectedGeneration } from "../dist/kb/generations.js";
 import {
   SaveQueryClaimStore,
   saveClaimStoreDir,
   validateSaveRequest,
-} from "../src/kb/save-claim.js";
-import { admitOperationStart, completeOperationStart } from "../src/kb/operation-starts.js";
-import { replayableResultFromRun } from "../src/kb/operation-receipts.js";
-import { RunArtifactStore } from "../src/kb/run-artifacts.js";
-import { defaultKbIngestPlane } from "../src/kb/ingest-plane.js";
-import { validateQueryRequest } from "../src/kb/parent-delivery.js";
-import { approveIngest, createTestOnlyIngestBodyRunner, ingestKb } from "../src/kb/ingest.js";
+} from "../dist/kb/save-claim.js";
+import { admitOperationStart, completeOperationStart } from "../dist/kb/operation-starts.js";
+import { replayableResultFromRun } from "../dist/kb/operation-receipts.js";
+import { RunArtifactStore } from "../dist/kb/run-artifacts.js";
+import { defaultKbIngestPlane } from "../dist/kb/ingest-plane.js";
+import { validateQueryRequest } from "../dist/kb/parent-delivery.js";
+import { approveIngest, createTestOnlyIngestBodyRunner, ingestKb } from "../dist/kb/ingest.js";
 import {
   createTestOnlyArtifactBodyRunner,
   type KbPhaseInvocation,
-} from "../src/kb/session-tools.js";
-import type { Directive } from "../src/contracts.js";
-import { ReadPhaseBriefResultSchema, validateKbContract } from "../src/kb/contracts.js";
+} from "../dist/kb/session-tools.js";
+import type { Directive } from "../dist/contracts.js";
+import { ReadPhaseBriefResultSchema, validateKbContract } from "../dist/kb/contracts.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_save_e2e";
@@ -449,7 +449,7 @@ async function driveSaveToGate(input: {
   const workers = new WorkerExecutor(worker, new ArtifactStore(artifactRoot), {
     projectRoot: input.projectRoot,
     parallelConcurrency: 1,
-    workerTimeoutMs: 20_000,
+    fallbackInactivityLeaseMs: 20_000,
   });
   workers.setReceiptAuthority(engine.receiptAuthority);
   const runner = new OrchestrationRunner(engine, workers);

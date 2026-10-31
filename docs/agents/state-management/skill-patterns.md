@@ -2,7 +2,7 @@
 
 ## Rules
 
-- Choose the simplest topology that fits the proven workflow.
+- Choose the simplest topology justified by requirements, dependencies, or observed evidence.
 - One cognitive state maps to one agent or one bounded branch fan.
 - State transitions depend on typed results, not inferred prose.
 - Repairs return to the producer able to fix the defect.
@@ -15,11 +15,13 @@
 Use a successor table for `gather → synthesize → verify → produce`. Each state reads
 only exact selected predecessors; the terminal result exposes the selected product ref.
 
-## Bounded repair
+## Policy-led repair
 
-A verifier classifies the gap as a closed `EvaluationResultV2` feedback kind and supplies a
+Derive values from actual operator policy, not test constants or model guesses. An unspecified limit is not a finite default; productive work continues under cancellation, progress/inactivity and measured-error controls.
+
+A verifier classifies the gap as a closed `EvaluationResult` feedback kind and supplies a
 non-empty strategy delta; it cannot name a target or claim exhaustion. The engine resolves the
-unique host-registered origin-state/feedback-kind route, charges its finite budget, and performs
+unique host-registered origin-state/feedback-kind route, applies any actual operator-supplied limit, and performs
 the transition. Repeated gaps escalate or exhaust through the registered successor instead of
 spinning.
 
@@ -49,7 +51,7 @@ checkpoint and never substitutes payload text into `{previous}`.
 
 ## Child reservation and active depth-one dispatch
 
-Use the current child-call owner only when implementing the durable storage seam. Persist the
+Keep the child state/custody owner distinct from runtime dispatch. Persist the
 canonical request and inputs in one concrete project-bound artifact store first. Then reserve the
 exact parent visit/call key, parent pending directive, ordinary unstarted child run, initial events,
 and canonical call row in one control-store transaction. A repeated exact call adopts the existing
@@ -60,13 +62,15 @@ A normal service constructs the depth-one child owner; a host may explicitly dis
 runs the reserved child through the ordinary engine/runner, validates its terminal, persists a
 child-result artifact, and atomically consumes it into the parent. New calls carry no predicted
 turn/tool/external/output/step/time allocation, aggregate capacity, or parent reserve. The child uses
-its registered repair/liveness policy and the service-wide step backstop, plus a digest-bound
+its registered repair/liveness policy and any operator-supplied service-wide step limit, plus a digest-bound
 content-free inactivity lease renewed from fenced host-observed worker activity or workflow
 convergence. The owner also enforces fixed call/active/project admission, lease expiry, and
-runner-signal/concurrent durable parent-cancel propagation. It does not yet cover child gates,
-arbitrary post-capture restart
-reconciliation, cohort artifact/receipt/session retention, promotion, or live qualification. Gate 2
-remains `not_run`; active runtime execution does not fabricate qualification evidence.
+runner-signal/concurrent durable parent-cancel propagation. Version-2 projected gates/exact replies,
+waiting/captured-terminal recovery and linked control/gate/receipt/session retention are implemented
+under frozen registration/operand and cancellation/selection fences. They are distinct from the
+storage seam and from provider promotion/live qualification; Gate 2 remains `not_run`. Follow the
+[engine status owner](../orchestration/overview.md#child-workflow-feature-status) for exact boundaries,
+including opt-in imagegen reuse and preservation rather than garbage collection of artifact bytes.
 
 ## Testing
 

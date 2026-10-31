@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { orchestrationDurableStateCodec } from "../src/durable-state.js";
+import { canonicalJson } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { orchestrationDurableStateCodec } from "../dist/durable-state.js";
 
 const PROJECT_ROOT = "/workspace";
 const FIXTURE_ROOT = new URL("./fixtures/orchestration-durable-state/", import.meta.url);

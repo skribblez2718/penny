@@ -4,16 +4,16 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { canonicalJson, Checkpointer } from "../src/checkpointer.js";
-import type { RunIdentity } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
-import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { canonicalJson, Checkpointer } from "../dist/checkpointer.js";
+import type { RunIdentity } from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../dist/model-client.js";
 import {
   OrchestrationRunner,
   WorkerExecutor,
   type OrchestrationProgressEvent,
-} from "../src/worker.js";
+} from "../dist/worker.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const CANCELLATION_GRACE_MS = 5_000;
@@ -226,7 +226,7 @@ describe("renewable worker inactivity enforcement", () => {
     const workers = new WorkerExecutor(client, artifacts, {
       projectRoot: root,
       parallelConcurrency: 1,
-      hostOperationDeadlineMs: 60 * 60_000,
+      fallbackInactivityLeaseMs: 60 * 60_000,
       registration: engine.registration,
     });
     workers.setReceiptAuthority(engine.receiptAuthority);
@@ -280,7 +280,7 @@ describe("renewable worker inactivity enforcement", () => {
     const workers = new WorkerExecutor(client, artifacts, {
       projectRoot: root,
       parallelConcurrency: 1,
-      hostOperationDeadlineMs: 60 * 60_000,
+      fallbackInactivityLeaseMs: 60 * 60_000,
       registration: engine.registration,
     });
     workers.setReceiptAuthority(engine.receiptAuthority);

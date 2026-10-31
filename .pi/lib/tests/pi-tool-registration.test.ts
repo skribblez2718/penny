@@ -12,7 +12,8 @@ import {
   type ProjectToolResult,
   registerTool,
 } from "../pi-tool-registration.js";
-import { createTestExtensionApi, isRecord } from "./test-narrowers.js";
+import { createTestExtensionApi } from "./pi-test-host.js";
+import { isRecord } from "./test-narrowers.js";
 
 const ContractParamsSchema = Type.Object({
   name: Type.String(),
@@ -204,7 +205,6 @@ describe("Pi tool registration adapter contract", () => {
             if (property === "content") return target.content;
             if (property === "isError") return target.isError;
             if (property === "usage") return target.usage;
-            if (property === "addedToolNames") return target.addedToolNames;
             if (property === "terminate") return target.terminate;
             return undefined;
           },

@@ -1,7 +1,10 @@
 # Deployment and Environment Security
 
 Deployment security is about preserving the application's security properties after it
-leaves a development environment. The agent-facing requirements live in
+leaves a development environment. It applies to deployed-service, infrastructure,
+ingress, release, and operational-configuration work. Local-only settings use
+[Configuration Security](../../agents/coding/security/configuration.md) without
+requiring unrelated ingress or deployment checks. The agent-facing requirements live in
 [Deployment and Environment Security](../../agents/coding/deployment-conventions.md).
 
 ## The important boundaries

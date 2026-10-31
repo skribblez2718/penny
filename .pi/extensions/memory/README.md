@@ -17,38 +17,38 @@ A model cannot grant itself tools, enable writes, select a stream/principal, or 
 
 ## Configuration
 
-| Variable                              | Contract                                                                    |
-| ------------------------------------- | --------------------------------------------------------------------------- |
-| `PENNY_MEMORY_MODE`                   | `hub` or `disabled` only                                                    |
-| `PENNY_MEMORY_WRITE_MODE`             | `disabled` (default) or owner-enabled `enabled` after canary reconciliation |
-| `PENNY_MEMORY_AUTO_DIARY_MODE`        | `disabled` (default), `observe-only`, or `retain`                           |
-| `PENNY_MEMORY_AUTO_DIARY_TIMEOUT_MS`  | Evaluation and duplicate/write deadlines; 100–10000 ms, default 2000        |
-| `PENNY_MEMORY_LOGSTREAM_MODE`         | `disabled` (default) or `primary-advisory`                                  |
-| `PENNY_MEMORY_LOGSTREAM_STREAM`       | Required safe lowercase slash-separated stream when advisory mode is active |
-| `PENNY_MEMORY_LOGSTREAM_ROOMS`        | Required nonempty comma-separated safe room allowlist; no duplicates        |
-| `PENNY_MEMORY_TRUST_MODE`             | `isolated` or `shared-trust-domain`                                         |
-| `PENNY_MEMORY_PRINCIPAL_ID`           | Caller-registry principal identifier                                        |
-| `PENNY_MEMORY_MCP_ENDPOINT`           | Absolute `http://` or `https://` endpoint; the adapter posts only to `/mcp` |
-| `PENNY_MEMORY_PALACE_ID`              | Caller-registry palace identifier                                           |
-| `PENNY_MEMORY_DATA_ROOT_ID`           | Opaque caller-registry data-custody/root identifier                         |
-| `PENNY_MEMORY_ISOLATION_BOUNDARY_ID`  | Required isolated-palace boundary identifier                                |
-| `PENNY_MEMORY_TRUST_DOMAIN_ID`        | Required shared trust-domain identifier                                     |
-| `PENNY_MEMORY_WHOLE_PALACE_TRUST_ACK` | Must be `whole-palace` for shared-trust-domain                              |
-| `PENNY_MEMORY_OWNER_ID`               | Data/service owner identifier                                               |
-| `PENNY_MEMORY_BACKUP_POLICY_REF`      | Caller-owned backup policy reference                                        |
-| `PENNY_MEMORY_MIGRATION_POLICY_REF`   | Caller-owned migration policy reference                                     |
-| `PENNY_MEMORY_RETENTION_POLICY_REF`   | Caller-owned retention policy reference                                     |
-| `PENNY_MEMORY_UNINSTALL_DISPOSITION`  | Must be `preserve`; code uninstall never mutates data                       |
-| `PENNY_MEMORY_MCP_TOKEN_FILE`         | Owner-only, non-symlink bearer-token file                                   |
-| `PENNY_MEMORY_MCP_TOKEN_ENV`          | Name of the owner-supplied environment variable containing the bearer token |
-| `PENNY_MEMORY_REQUEST_TIMEOUT_MS`     | 100–30000 ms; default 10000                                                 |
-| `PENNY_MEMORY_MAX_READ_ATTEMPTS`      | 1–3; retries apply only to safe idempotent reads                            |
-| `PENNY_MEMORY_CURSOR_TTL_SECONDS`     | 30–900 seconds; default 300                                                 |
-| `PENNY_MEMORY_MAX_RESPONSE_BYTES`     | Lower cap up to 16 MiB for an upstream HTTP response                        |
-| `PENNY_MEMORY_SOURCE_CACHE_MAX_BYTES` | Bounded cache cap, 16–32 MiB; used only where upstream has no range API     |
-| `PENNY_TOOL_RESULT_MAX_BYTES`         | Optional lower cap; hard maximum 32768                                      |
-| `PENNY_TOOL_RESULT_MAX_CHARACTERS`    | Optional lower cap; hard maximum 32768                                      |
-| `PENNY_TOOL_RESULT_MAX_TOKENS`        | Optional lower cap; hard maximum 8192 estimated tokens                      |
+| Variable                              | Contract                                                                            |
+| ------------------------------------- | ----------------------------------------------------------------------------------- |
+| `PENNY_MEMORY_MODE`                   | `hub` or `disabled` only                                                            |
+| `PENNY_MEMORY_WRITE_MODE`             | `disabled` (default) or owner-enabled `enabled` after canary reconciliation         |
+| `PENNY_MEMORY_AUTO_DIARY_MODE`        | `disabled` (default), `observe-only`, or `retain`                                   |
+| `PENNY_MEMORY_AUTO_DIARY_TIMEOUT_MS`  | Evaluation and duplicate/write deadlines; 100–10000 ms, default 2000                |
+| `PENNY_MEMORY_LOGSTREAM_MODE`         | `disabled` (default) or `primary-advisory`                                          |
+| `PENNY_MEMORY_LOGSTREAM_STREAM`       | Required safe lowercase slash-separated stream when advisory mode is active         |
+| `PENNY_MEMORY_LOGSTREAM_ROOMS`        | Required nonempty comma-separated safe room allowlist; no duplicates                |
+| `PENNY_MEMORY_TRUST_MODE`             | `isolated` or `shared-trust-domain`                                                 |
+| `PENNY_MEMORY_PRINCIPAL_ID`           | Caller-registry principal identifier                                                |
+| `PENNY_MEMORY_MCP_ENDPOINT`           | Absolute `http://` or `https://` endpoint; the adapter posts only to `/mcp`         |
+| `PENNY_MEMORY_PALACE_ID`              | Caller-registry palace identifier                                                   |
+| `PENNY_MEMORY_DATA_ROOT_ID`           | Opaque caller-registry data-custody/root identifier                                 |
+| `PENNY_MEMORY_ISOLATION_BOUNDARY_ID`  | Required isolated-palace boundary identifier                                        |
+| `PENNY_MEMORY_TRUST_DOMAIN_ID`        | Required shared trust-domain identifier                                             |
+| `PENNY_MEMORY_WHOLE_PALACE_TRUST_ACK` | Must be `whole-palace` for shared-trust-domain                                      |
+| `PENNY_MEMORY_OWNER_ID`               | Data/service owner identifier                                                       |
+| `PENNY_MEMORY_BACKUP_POLICY_REF`      | Caller-owned backup policy reference                                                |
+| `PENNY_MEMORY_MIGRATION_POLICY_REF`   | Caller-owned migration policy reference                                             |
+| `PENNY_MEMORY_RETENTION_POLICY_REF`   | Caller-owned retention policy reference                                             |
+| `PENNY_MEMORY_UNINSTALL_DISPOSITION`  | Must be `preserve`; code uninstall never mutates data                               |
+| `PENNY_MEMORY_MCP_TOKEN_FILE`         | Owner-only, non-symlink bearer-token file                                           |
+| `PENNY_MEMORY_MCP_TOKEN_ENV`          | Name of the owner-supplied environment variable containing the bearer token         |
+| `PENNY_MEMORY_REQUEST_TIMEOUT_MS`     | Compatibility name for renewable transport inactivity (100–30000 ms; default 10000) |
+| `PENNY_MEMORY_MAX_READ_ATTEMPTS`      | 1–3; retries apply only to safe idempotent reads                                    |
+| `PENNY_MEMORY_CURSOR_TTL_SECONDS`     | 30–900 seconds; default 300                                                         |
+| `PENNY_MEMORY_MAX_RESPONSE_BYTES`     | Lower cap up to 16 MiB for an upstream HTTP response                                |
+| `PENNY_MEMORY_SOURCE_CACHE_MAX_BYTES` | Bounded cache cap, 16–32 MiB; used only where upstream has no range API             |
+| `PENNY_TOOL_RESULT_MAX_BYTES`         | Optional lower cap; hard maximum 32768                                              |
+| `PENNY_TOOL_RESULT_MAX_CHARACTERS`    | Optional lower cap; hard maximum 32768                                              |
+| `PENNY_TOOL_RESULT_MAX_TOKENS`        | Optional lower cap; hard maximum 8192 estimated tokens                              |
 
 Exactly one token reference (`*_TOKEN_FILE` or `*_TOKEN_ENV`) is required in hub mode. Direct token configuration is intentionally unsupported. Cursor HMAC keys are domain-separated from the loaded bearer secret and never emitted.
 

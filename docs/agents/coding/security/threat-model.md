@@ -13,6 +13,10 @@ Adding or changing assets, identities, sensitive data, privileged actions, trust
 
 - State the assets and authority boundaries that change, including any public route, data flow, egress, file, compute, or privileged operation.
 - Identify likely misuse, abuse, failure, and recovery paths; choose mitigations and evidence proportionate to impact.
+- Distinguish required properties from proposed mechanisms under
+  [proportionality](../../architecture/project-standards.md#proportionality-outcomes-before-mechanisms).
+  Explain which credible threat/failure warrants a material added control and why a simpler
+  alternative is insufficient; inherited model choices are not threat evidence.
 - Refresh the model when scope or integration assumptions change.
 
 ## Failure modes
@@ -29,8 +33,3 @@ Adding or changing assets, identities, sensitive data, privileged actions, trust
 
 - [Security invariants](security-invariants.md) define non-negotiable outcomes.
 - [Security verification](security-verification.md) selects evidence.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

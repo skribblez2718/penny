@@ -26,11 +26,11 @@ import {
   ingestKb,
   type IngestSource,
   type PendingIngest,
-} from "../src/kb/ingest.js";
-import { initKb } from "../src/kb/workflows.js";
+} from "../dist/kb/ingest.js";
+import { initKb } from "../dist/kb/workflows.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
-import { readSelectedGeneration } from "../src/kb/generations.js";
-import { pageMarkdownPath } from "../src/kb/filesystem.js";
+import { readSelectedGeneration } from "../dist/kb/generations.js";
+import { pageMarkdownPath } from "../dist/kb/filesystem.js";
 
 const dirs: string[] = [];
 function tmpRoot(): string {

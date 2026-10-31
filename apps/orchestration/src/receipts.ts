@@ -24,6 +24,9 @@ import {
 
 export type UnsignedExecutionReceipt = Omit<ExecutionReceipt, "signature">;
 
+/** Host-injected verification only; consumers never load keys or acquire signing authority. */
+export type ExecutionReceiptVerifier = (receipt: ExecutionReceipt) => ExecutionReceipt;
+
 export interface TrustedInvocation {
   readonly identity: RunIdentity;
   readonly state_id: string;

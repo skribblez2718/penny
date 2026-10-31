@@ -8,7 +8,7 @@ import {
   validateScaPolicy,
   validateScaProfile,
   validateScaTarget,
-} from "../src/sca/config.js";
+} from "../dist/sca/config.js";
 import { requireValue } from "./helpers/narrowing.js";
 
 interface SchemaIdentity {

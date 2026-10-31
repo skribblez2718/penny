@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -75,21 +76,18 @@ def test_model_disable_flag_requires_omission_for_visible_packages(tmp_path: Pat
     )
 
 
-def test_native_ignore_accepts_comment_only_when_no_package_is_disabled(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("disabled", [None, True])
+def test_full_structure_validation_accepts_both_visibility_classes_without_extra_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    disabled: bool | None,
 ) -> None:
+    write_package(tmp_path, disabled=disabled)
+    assert {entry.name for entry in tmp_path.iterdir()} == {"fixture-skill"}
     monkeypatch.setattr(structure, "SKILLS_DIR", tmp_path)
-    (tmp_path / ".ignore").write_text(
-        "# Keep the safe native-discovery mirror present.\n", encoding="utf-8"
-    )
-    assert structure.check_native_model_ignore(set()) == []
-
-
-def test_native_ignore_matches_explicit_model_disablement(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(structure, "SKILLS_DIR", tmp_path)
-    (tmp_path / ".ignore").write_text("hidden-skill/\n", encoding="utf-8")
-    assert structure.check_native_model_ignore({"hidden-skill"}) == []
-    issues = structure.check_native_model_ignore(set())
-    assert any("explicitly model-disabled" in message for _, message in issues)
+    monkeypatch.setattr(sys, "argv", ["check_skill_structure.py"])
+    with pytest.raises(SystemExit) as exited:
+        structure.main()
+    assert exited.value.code == 0
+    assert "All 1 unified skill package(s) passed structural validation." in capsys.readouterr().out

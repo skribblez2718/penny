@@ -6,14 +6,10 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { Value } from "typebox/value";
 
 import { setGlobalLogTransport } from "../../../../lib/logger/logger.js";
-import {
-  createTestExtensionApi,
-  isRecord,
-  requireFunction,
-  requireString,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord, requireFunction, requireString } from "../../../../lib/tests/test-narrowers.js";
 
-type OrchestrationModule = typeof import("@penny/orchestration/source");
+type OrchestrationModule = typeof import("@penny/orchestration");
 type AdmitOperationStartInput = Parameters<OrchestrationModule["admitOperationStart"]>[0];
 type CompleteOperationStartInput = Parameters<OrchestrationModule["completeOperationStart"]>[0];
 type CheckpointDirectOperationInput = Parameters<
@@ -181,8 +177,8 @@ vi.mock("@earendil-works/pi-tui", () => ({
   Spacer: class {},
   Text: class {},
 }));
-vi.mock("@penny/orchestration/source", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@penny/orchestration/source")>();
+vi.mock("@penny/orchestration", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@penny/orchestration")>();
   class KbRunAccessError extends Error {}
   class StartAdmissionMismatchError extends Error {}
   class PolicyRefusal extends Error {
@@ -407,7 +403,7 @@ describe("knowledge_base registration and closed authority surface", () => {
     expect(tools.filter((tool) => tool.name === "skill")).toHaveLength(1);
     const kb = tools.find((tool) => tool.name === "knowledge_base");
     const skill = tools.find((tool) => tool.name === "skill");
-    const { KnowledgeBaseRequestSchema } = await import("@penny/orchestration/source");
+    const { KnowledgeBaseRequestSchema } = await import("@penny/orchestration");
     expect(kb?.parameters).toBe(KnowledgeBaseRequestSchema);
     expect(skill?.description).toContain("<available_skills>");
     expect(skill?.description).not.toContain("Available skills:");
@@ -496,12 +492,12 @@ describe("knowledge_base registration and closed authority surface", () => {
   });
 
   it("reports stale orchestration state instead of profile authorization failure", async () => {
-    const { PennyStateResolutionError } = await import("@penny/orchestration/source");
+    const { PennyStateResolutionError } = await import("@penny/orchestration");
     mockResolveRuntime.mockImplementation(() => {
       throw new PennyStateResolutionError("STATE_SCHEMA_INCOMPATIBLE", "stale state", undefined, {
         component: "orchestration",
         actualSchemaVersion: 10,
-        requiredSchemaVersion: 12,
+        requiredSchemaVersion: 13,
         upgradeSupported: true,
         recoveryAction: "penny-state-upgrade",
       });
@@ -519,7 +515,7 @@ describe("knowledge_base registration and closed authority surface", () => {
     const details = object(response.details);
     const warnings = details["warnings"];
     expect(warnings).toEqual([
-      "STATE_SCHEMA_INCOMPATIBLE: orchestration state unavailable (10 → 12); recovery=penny-state-upgrade",
+      "STATE_SCHEMA_INCOMPATIBLE: orchestration state unavailable (10 → 13); recovery=penny-state-upgrade",
     ]);
     expect(warnings).not.toContain("profile_not_authorized");
     expect(mockResolveProfile).not.toHaveBeenCalled();
@@ -654,7 +650,7 @@ describe("knowledge_base registration and closed authority surface", () => {
       status: "running",
       met: false,
     });
-    const { PolicyRefusal } = await import("@penny/orchestration/source");
+    const { PolicyRefusal } = await import("@penny/orchestration");
     const policyError = new PolicyRefusal("policy_changed", "policy changed");
     mockRequirePolicy.mockImplementationOnce(() => {
       throw policyError;

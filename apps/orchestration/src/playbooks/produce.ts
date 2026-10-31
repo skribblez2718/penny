@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import type { PhaseResultProjectorV1 } from "../phase-result-projection.js";
 
 import type {
   ArtifactHostStore,
@@ -11,9 +12,9 @@ import {
   type ArtifactRef,
   type Confidence,
   type Directive,
-  type EvaluationResultV2,
+  type EvaluationResult,
   type JsonValue,
-  type LivenessPolicyV3,
+  type LivenessPolicy,
   type LivenessSnapshotV1,
   type LivenessTerminalReason,
   type OutputArtifactMetadata,
@@ -21,8 +22,18 @@ import {
   type SkillContract,
 } from "../contracts.js";
 import { RunContext } from "../context.js";
+import { trustedInvocationDigest, type ExecutionReceiptVerifier } from "../receipts.js";
 import { ordinaryLivenessPolicy } from "../liveness.js";
 import {
+  validateProduceReviewAssignment,
+  type ProduceReviewAssignmentV1,
+  ProduceQualityReviewSummaryV1Schema,
+  ProduceValidityReviewSummaryV1Schema,
+  PRODUCE_MECHANICAL_CHECK_NAMES,
+  MAX_PERSISTED_PRODUCE_DRAFT_BYTES,
+  parsePersistedProduceReview,
+  produceReviewPromptContract,
+  validateProduceMechanicalChecks,
   artifactApproachDecisionPromptContract,
   artifactApproachPromptContract,
   ProduceRequestConstraintsV1Schema,
@@ -43,9 +54,9 @@ import {
   validateProduceProductIntegrityV2,
   validateProduceQualityReceiptV2,
   validateProduceRequest,
-  validateProduceSealFeedback,
   validateProduceValidityReceiptV2,
   ProduceDraftValidationError,
+  type ArtifactApproachDecisionV1,
   type ArtifactApproachV1,
   type ProduceProductEnvelopeV2,
   type ProduceProductIntegrityV2,
@@ -65,6 +76,14 @@ import {
   type EffectEvidenceGraphV1,
   type EffectEvidenceProviderV1,
 } from "../skill-contracts/effects.js";
+import { sealAttempt } from "./seal-attempt.js";
+import {
+  sealDiagnosticsProjection,
+  sealPolicySha256,
+  runSealPolicy,
+  validateSealDiagnostic,
+  type SealPolicyV1,
+} from "../skill-contracts/sealing.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
 import {
   hostContinuation,
@@ -72,15 +91,30 @@ import {
   type HostContinuationCapabilityV1,
   type HostContinuationStepV1,
   type LivenessTerminalCapabilityV1,
-  type PlaybookCoreV1,
-  type PlaybookStepOutcomeV1,
+  type PlaybookCore,
+  type PlaybookStepOutcome,
   type RepairExhaustionCapabilityV1,
+  type RepairProgressCapabilityV1,
   type RoutingRepairCapabilityV1,
   type StateAwareRepairCapabilityV1,
 } from "./playbook.js";
-import type { PlaybookRegistrationV1, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
+import type { PlaybookRegistration, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
 
 export const PRODUCE_PLAYBOOK_NAME = "produce";
+
+export const PRODUCE_SEAL_POLICY: SealPolicyV1 = {
+  schema_id: "penny.seal-policy.v1",
+  schema_version: 1,
+  skill: "produce",
+  draft_phase: "materializing_artifact",
+  seal_phase: "sealing_artifact",
+  draft_schema: "penny.produced-artifact-draft.v2",
+  draft_schema_version: 2,
+  draft_kind: "produced-artifact-draft",
+  product_kind: "semantic-core",
+  correction_limit: null,
+  diagnostic_schema: "penny.seal-diagnostic.v1",
+};
 
 export const PRODUCE_AGENT_BY_STATE = {
   exploring_artifact_approaches: "ida",
@@ -125,6 +159,7 @@ export const PRODUCE_FLOW = {
     ["verifying_artifact", "exploring_artifact_approaches"],
     ["verifying_artifact", "materializing_artifact"],
     ["verifying_artifact", "admitting_artifact"],
+    ["verifying_artifact", "incomplete"],
     ["admitting_artifact", "complete"],
   ],
 } as const;
@@ -132,12 +167,8 @@ export const PRODUCE_FLOW = {
 export const PRODUCE_LIVENESS_POLICY = ordinaryLivenessPolicy({
   scope: "orchestrated-produce-workflow",
   preset: "ordinary-progress-lease-v3",
-}) satisfies LivenessPolicyV3;
+}) satisfies LivenessPolicy;
 
-const FindingSchema = Type.String({ minLength: 1, maxLength: 4_096 });
-const FindingsSchema = Type.Array(FindingSchema, { maxItems: 32 });
-const EvidenceSchema = Type.Array(FindingSchema, { minItems: 1, maxItems: 64 });
-const StrategyDeltaSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const StageCompleteSummarySchema = Type.Object(
   { complete: Type.Literal(true) },
   { additionalProperties: false }
@@ -152,76 +183,6 @@ const ApproachDecisionSummarySchema = Type.Union([
     { additionalProperties: false }
   ),
 ]);
-const QualityFindingSchema = Type.Object(
-  {
-    severity: Type.Union([Type.Literal("minor"), Type.Literal("major"), Type.Literal("critical")]),
-    message: FindingSchema,
-  },
-  { additionalProperties: false }
-);
-const MinorQualityFindingSchema = Type.Object(
-  { severity: Type.Literal("minor"), message: FindingSchema },
-  { additionalProperties: false }
-);
-
-const QualitySummarySchema = Type.Union([
-  Type.Object(
-    {
-      verdict: Type.Literal("APPROVE"),
-      gap_kind: Type.Literal("none"),
-      repair_owner: Type.Literal("none"),
-      findings: Type.Array(MinorQualityFindingSchema, { maxItems: 32 }),
-      evidence: EvidenceSchema,
-      strategy_delta: StrategyDeltaSchema,
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      verdict: Type.Literal("FAIL"),
-      gap_kind: Type.Literal("quality_gap"),
-      repair_owner: Type.Literal("skribble"),
-      findings: Type.Array(QualityFindingSchema, { minItems: 1, maxItems: 32 }),
-      evidence: EvidenceSchema,
-      strategy_delta: StrategyDeltaSchema,
-    },
-    { additionalProperties: false }
-  ),
-]);
-
-function validityFailureSchema(
-  gapKind: "brief_gap" | "artifact_product_gap",
-  owner: "ida" | "skribble"
-) {
-  return Type.Object(
-    {
-      verdict: Type.Literal("FAIL"),
-      gap_kind: Type.Literal(gapKind),
-      repair_owner: Type.Literal(owner),
-      findings: Type.Array(FindingSchema, { minItems: 1, maxItems: 32 }),
-      evidence: EvidenceSchema,
-      strategy_delta: StrategyDeltaSchema,
-    },
-    { additionalProperties: false }
-  );
-}
-
-const ValiditySummarySchema = Type.Union([
-  Type.Object(
-    {
-      verdict: Type.Literal("PASS"),
-      gap_kind: Type.Literal("none"),
-      repair_owner: Type.Literal("none"),
-      findings: FindingsSchema,
-      evidence: EvidenceSchema,
-      strategy_delta: StrategyDeltaSchema,
-    },
-    { additionalProperties: false }
-  ),
-  validityFailureSchema("brief_gap", "ida"),
-  validityFailureSchema("artifact_product_gap", "skribble"),
-]);
-
 export const PRODUCE_REPAIR_ROUTES = [
   {
     origin_state: "critiquing_artifact",
@@ -370,11 +331,19 @@ function selectedLatest(
   predicate: (artifact: ArtifactRef) => boolean
 ): ArtifactRef | undefined {
   return [...context.selectedArtifacts]
-    .filter(predicate)
-    .sort(
-      (left, right) =>
-        right.version - left.version || right.artifact_id.localeCompare(left.artifact_id)
-    )[0];
+    .reverse()
+    .find((artifact) => artifact.run_id === context.identity.run_id && predicate(artifact));
+}
+function selectedBefore(
+  context: RunContext,
+  ref: ArtifactRef,
+  predicate: (artifact: ArtifactRef) => boolean
+): ArtifactRef | undefined {
+  const position = context.selectedArtifacts.findIndex(
+    (item) => item.artifact_id === ref.artifact_id
+  );
+  if (position < 0) return undefined;
+  return [...context.selectedArtifacts.slice(0, position)].reverse().find(predicate);
 }
 
 function addSelectedArtifact(context: RunContext, artifact: ArtifactRef): boolean {
@@ -434,14 +403,16 @@ function latestDraftArtifact(context: RunContext): ArtifactRef | undefined {
 }
 
 function latestProductArtifact(context: RunContext): ArtifactRef | undefined {
-  return selectedLatest(
-    context,
-    (artifact) =>
-      artifact.kind === "semantic-core" &&
-      artifact.phase === "sealing_artifact" &&
-      artifact.content_schema?.schema_id === "penny.produced-artifact.v2" &&
-      artifact.content_schema.schema_version === 2
-  );
+  return [...context.selectedArtifacts]
+    .reverse()
+    .find(
+      (artifact) =>
+        artifact.run_id === context.identity.run_id &&
+        artifact.kind === "semantic-core" &&
+        artifact.phase === "sealing_artifact" &&
+        artifact.content_schema?.schema_id === "penny.produced-artifact.v2" &&
+        artifact.content_schema.schema_version === 2
+    );
 }
 
 function latestReviewReport(context: RunContext, state: ReviewState): ArtifactRef | undefined {
@@ -452,10 +423,39 @@ function latestReviewReport(context: RunContext, state: ReviewState): ArtifactRe
 }
 
 function latestSealFeedbackArtifact(context: RunContext): ArtifactRef | undefined {
-  return selectedLatest(
-    context,
-    (artifact) => artifact.kind === "produce-seal-feedback" && artifact.phase === "sealing_artifact"
-  );
+  const anchor = latestProductArtifact(context);
+  const anchorIndex =
+    anchor === undefined
+      ? -1
+      : context.selectedArtifacts.map((ref) => ref.artifact_id).lastIndexOf(anchor.artifact_id);
+  // Checkpoint selection order, never global artifact version or imported products.
+  return [...context.selectedArtifacts.slice(anchorIndex + 1)]
+    .reverse()
+    .find(
+      (ref) =>
+        ref.run_id === context.identity.run_id &&
+        ref.phase === "sealing_artifact" &&
+        ref.kind === "seal-diagnostic" &&
+        ref.content_schema?.schema_id === "penny.seal-diagnostic.v1"
+    );
+}
+
+function currentSealDiagnostic(context: RunContext, store: ArtifactHostStore) {
+  const ref = latestSealFeedbackArtifact(context);
+  if (ref === undefined) return undefined;
+  const bytes = store.readById(ref.artifact_id);
+  const value: unknown = JSON.parse(bytes.toString("utf8"));
+  const diagnostic = validateSealDiagnostic(value, runSealPolicy(context, PRODUCE_SEAL_POLICY));
+  if (
+    canonicalJson(diagnostic) !== bytes.toString("utf8") ||
+    ref.content_digest !== sha256(bytes) ||
+    diagnostic.rejected_draft_ref.run_id !== context.identity.run_id ||
+    canonicalJson(diagnostic.epoch_anchor_ref) !==
+      canonicalJson(latestProductArtifact(context) ?? null) ||
+    canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref)
+  )
+    throw new Error("current seal diagnostic has invalid custody or epoch");
+  return { ref, diagnostic };
 }
 
 function latestQualityReceipt(context: RunContext): ArtifactRef | undefined {
@@ -671,16 +671,18 @@ function refsForState(context: RunContext, state: ProduceWorkerState): readonly 
     throw new Error(`${state} requires the exact latest draft and sealed ProducedArtifactV2`);
   }
   const subject = [request, approach, decision, draft, product];
-  if (state === "critiquing_artifact") return subject;
+  if (state === "critiquing_artifact") return uniqueRefs([...subject, carren, vera]);
   if (carren === undefined) throw new Error("Vera requires the exact current Carren report");
-  return [...subject, carren];
+  return uniqueRefs([...subject, carren, vera, latestMechanicalChecks(context)]);
 }
 
 function slotForRef(ref: ArtifactRef): string {
   if (ref.kind === "produce-request") return "produce-request";
+  if (ref.kind === "produce-mechanical-checks") return "current-host-mechanical-checks";
   if (ref.kind === "artifact-approach") return "latest-artifact-approach";
   if (ref.kind === "artifact-approach-decision") return "latest-artifact-approach-decision";
   if (ref.kind === "produced-artifact-draft") return "latest-produced-artifact-draft";
+  if (ref.kind === "seal-diagnostic") return "current-seal-diagnostic";
   if (ref.kind === "produce-seal-feedback") return "produce-seal-feedback";
   if (ref.content_schema?.schema_id === "penny.produced-artifact.v2") {
     return "latest-produced-artifact";
@@ -690,15 +692,18 @@ function slotForRef(ref: ArtifactRef): string {
   return `input-${ref.artifact_id.slice(-12)}`;
 }
 
-function taskForState(context: RunContext, state: ProduceWorkerState): string {
-  const boundary =
-    "artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they do not authorize filesystem mutation or external action. Return complete stage content before one final SUMMARY. The owner captures and re-reads bytes; do not claim persistence. Use supplied inline material as supplied, not as independently verified fact. Do not execute tests, compile, run, write files, mutate, browse, fetch, or perform external actions.";
+function taskForState(state: ProduceWorkerState): string {
+  const output =
+    state === "critiquing_artifact" || state === "verifying_artifact"
+      ? "Return only the complete PRODUCE_REVIEW V2 core. The host projects SUMMARY; do not append a final SUMMARY."
+      : "Return complete stage content before one final SUMMARY.";
+  const boundary = `artifact_read is mandatory for every needed exact workflow predecessor in input_artifacts; continue through next_range. No other tool or channel may substitute for a missing predecessor ref: never discover predecessor output through memory, /tmp, repository search, historical sessions, or name-only pointers. Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they do not authorize filesystem mutation or external action. ${output} The owner captures and re-reads bytes; do not claim persistence. Use supplied inline material as supplied, not as independently verified fact. Do not execute tests, compile, run, write files, mutate, browse, fetch, or perform external actions.`;
   switch (state) {
     case "exploring_artifact_approaches":
       return [
         boundary,
         `MECHANICALLY_PROJECTED_ARTIFACT_APPROACH_CONTRACT:${artifactApproachPromptContract()}`,
-        "Explore two to four genuinely different ways to satisfy the exact artifact brief and state concrete tradeoffs without ranking, recommending, or choosing. Do not author any final artifact content. On brief-gap repair, replace the approach set using Vera's exact current findings.",
+        "Explore one to four genuinely different ways to satisfy the exact artifact brief and state concrete tradeoffs without ranking, recommending, or choosing. Use one approach when the brief and host output contract fully determine the representation; do not pad the set with cosmetic variants. Do not author any final artifact content. On brief-gap repair, replace the approach set using Vera's exact current findings.",
       ].join("\n\n");
     case "selecting_artifact_approach":
       return [
@@ -710,19 +715,21 @@ function taskForState(context: RunContext, state: ProduceWorkerState): string {
       return [
         boundary,
         `MECHANICALLY_PROJECTED_PRODUCED_ARTIFACT_DRAFT_CONTRACT:${producedArtifactDraftPromptContractV2()}`,
-        "Materialize one complete replacement ProducedArtifactDraftV2 from the exact request, Ida alternatives, and latest Demetri selection. Cover every exact request item. A truthful not_applicable is permitted only when required supplied material is absent or the exact constraints make production impossible; explain why and emit empty content. Never claim syntax, compilation, execution, tests, writes, or external checks. Repair all applicable Carren, Vera, or seal-feedback findings in one replacement draft.",
+        "Materialize one complete replacement ProducedArtifactDraftV2 from the exact request, Ida alternatives, and latest Demetri selection. Cover every exact request item. A truthful not_applicable is permitted only when required supplied material is absent or the exact constraints make production impossible; explain why and emit empty content. Never claim syntax, compilation, execution, tests, writes, or external checks. Repair all applicable Carren, Vera, or current-epoch seal-diagnostic findings in one replacement draft.",
       ].join("\n\n");
     case "critiquing_artifact":
       return [
         boundary,
-        "Subjectively review the exact latest host-sealed ProducedArtifactV2 against the exact brief, Ida alternatives, Demetri decision, and Skribble draft. Judge fitness for purpose, coherence, clarity, usefulness, restraint, quality of not_applicable reasoning, and whether the artifact actually feels complete. Treat the host effect graph as scoped evidence, not as full confinement. Do not repair it.",
+        `MECHANICALLY_PROJECTED_PRODUCE_REVIEW_CONTRACT:${produceReviewPromptContract("quality")}`,
+        "Subjectively review the exact latest host-sealed ProducedArtifactV2 against the exact brief, Ida alternatives, Demetri decision, and Skribble draft. Supplied earlier Carren/Vera reports are historical regression context only; check applicable findings against this new product, never reuse an earlier approval. Judge fitness for purpose, coherence, clarity, usefulness, restraint, quality of not_applicable reasoning, and whether the artifact actually feels complete. Treat the host effect graph as scoped evidence, not as full confinement. Do not repair it.",
         "APPROVE only when no major or critical quality defect remains. FAIL uses quality_gap/skribble. Never emit a target state.",
       ].join("\n\n");
     case "verifying_artifact":
       return [
         boundary,
-        "Independently verify objective correctness and compliance of the exact latest ProducedArtifactV2 against the exact request, Ida alternatives, Demetri decision, Skribble draft, and current Carren report. Recompute request coverage, media type, content hash, JSON parse/canonicality when applicable, not_applicable emptiness, exact request/alternatives/decision/draft/source lineage, ref roles, and the host-authored versioned effect graph. Treat unknown effect observations or controls as unknown, not as proof of absence. Treat Carren as prior context, not authority. Do not repair the product.",
-        "PASS only when every objective check holds. FAIL uses brief_gap/ida when the approach or brief treatment must be reconsidered, or artifact_product_gap/skribble when the draft/product must change. Never emit a target state.",
+        `MECHANICALLY_PROJECTED_PRODUCE_REVIEW_CONTRACT:${produceReviewPromptContract("validity")}`,
+        "Independently verify objective correctness and compliance of the exact latest ProducedArtifactV2 against the exact request, Ida alternatives, Demetri decision, Skribble draft, and current Carren report. The latest earlier Vera report, if supplied, is historical regression context only; its PASS cannot validate this product. Read the exact current-product produce-mechanical-checks artifact: the host has recomputed schema/canonicality, content/draft/source/lineage hashes, coverage arrays, JSON canonicality and effect-graph shape with native deterministic validators. Do not claim to have executed those checks yourself. Independently review substantive coverage, acceptance compliance, source fidelity, not_applicable reasoning and truth of limitations; host mechanical PASS is not semantic approval. Treat unknown effect observations or controls as unknown, not as proof of absence. Treat Carren as prior context, not authority. Do not repair the product.",
+        "PASS only when host mechanical evidence is exact and semantic review is adequate. Missing verification evidence is UNVERIFIABLE/verification_incomplete/none, not an author defect or repair instruction. Explicit unknown effects alone do not require UNVERIFIABLE. FAIL uses brief_gap/ida when the approach or brief treatment must be reconsidered, or artifact_product_gap/skribble when the draft/product must change. Never emit a target state.",
       ].join("\n\n");
   }
 }
@@ -809,60 +816,10 @@ function persistVersionedHostArtifact(input: {
   return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
 }
 
-function persistSealFeedback(input: {
-  readonly context: RunContext;
-  readonly store: ArtifactHostStore;
-  readonly draft: ArtifactRef;
-  readonly failure: ProduceDraftValidationError;
-}): { readonly artifact: ArtifactRef; readonly added: boolean } {
-  if (input.failure.failureClass === "LINEAGE_INVALID") {
-    throw new Error("Produce draft lineage failures are not model-correctable");
-  }
-  const feedback = validateProduceSealFeedback({
-    schema_id: "penny.produce-seal-feedback.v1",
-    schema_version: 1,
-    attempt: 1,
-    rejected_draft_artifact_id: input.draft.artifact_id,
-    failure_class: input.failure.failureClass,
-    issues: input.failure.issues,
-  });
-  const operationId = `produce-seal-feedback:${sha256(input.context.identity.run_id).slice(0, 32)}`;
-  const metadata: OutputArtifactMetadata = {
-    schema_version: 2,
-    run_id: input.context.identity.run_id,
-    phase: "sealing_artifact",
-    branch_id: null,
-    kind: "produce-seal-feedback",
-    operation_id: operationId,
-    version: 1,
-    producer: "host:artifact-sealer",
-    media_type: "application/json",
-    content_schema: { schema_id: "penny.produce-seal-feedback.v1", schema_version: 1 },
-    parent_ref: null,
-    upstream_refs: [input.draft],
-  };
-  const content = canonicalJson(feedback);
-  const existing = input.store.refFor(
-    input.context.identity.run_id,
-    "sealing_artifact",
-    null,
-    "produce-seal-feedback",
-    operationId,
-    1
-  );
-  const artifact = existing ?? input.store.persist({ metadata, content });
-  if (
-    canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
-    input.store.readById(artifact.artifact_id).toString("utf8") !== content
-  ) {
-    throw new Error("ProduceSealFeedbackV1 deterministic persistence diverged");
-  }
-  const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("ProduceSealFeedbackV1 manifest re-read failed");
-  input.store.select(reread);
-  return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
-}
-
+/** Product adapter retains the native revision/producer contract required by review receipts.
+ * The owner selection is versioned by successful same-run product; an orphan at the
+ * next revision must bind the exact draft, inputs and canonical product or conflict.
+ */
 function persistSealedProduct(input: {
   readonly context: RunContext;
   readonly store: ArtifactHostStore;
@@ -884,107 +841,64 @@ function persistSealedProduct(input: {
       phases: PRODUCE_EFFECT_PHASES,
     }),
   });
-  const content = canonicalJson(product);
-  const upstreamRefs = [input.request, input.approach, input.decision, input.draft];
-  const operationId = `sealed-produced-artifact:${sha256(input.context.identity.run_id).slice(0, 32)}`;
-  const parent = latestProductArtifact(input.context);
-  const storedVersion = input.store.lastVersion(
-    input.context.identity.run_id,
-    "sealing_artifact",
-    null,
-    "semantic-core",
-    operationId
-  );
-  const interrupted =
-    storedVersion === 0
-      ? null
-      : input.store.refFor(
-          input.context.identity.run_id,
-          "sealing_artifact",
-          null,
-          "semantic-core",
-          operationId,
-          storedVersion
-        );
-  if (
-    interrupted !== null &&
-    input.store.readById(interrupted.artifact_id).toString("utf8") === content &&
-    canonicalJson(input.store.metadata(interrupted).upstream_refs) === canonicalJson(upstreamRefs)
-  ) {
-    input.store.select(interrupted);
-    validateCanonicalProducedArtifactV2Bytes(
-      input.store.readById(interrupted.artifact_id),
-      interrupted
-    );
-    return { artifact: interrupted, added: addSelectedArtifact(input.context, interrupted) };
-  }
-  const version = Math.max(parent?.version ?? 0, storedVersion) + 1;
-  const parentRef =
-    version === 1
-      ? null
-      : input.store.refFor(
-          input.context.identity.run_id,
-          "sealing_artifact",
-          null,
-          "semantic-core",
-          operationId,
-          version - 1
-        );
-  if (version > 1 && parentRef === null) {
-    throw new Error("ProducedArtifactV2 revision chain is missing its preceding product");
-  }
-  const metadata: OutputArtifactMetadata = {
-    schema_version: 2,
+  const attempt = sealAttempt({
+    store: input.store,
+    policy: runSealPolicy(input.context, PRODUCE_SEAL_POLICY),
+    registered_policy_sha256: sealPolicySha256(runSealPolicy(input.context, PRODUCE_SEAL_POLICY)),
     run_id: input.context.identity.run_id,
-    phase: "sealing_artifact",
     branch_id: null,
-    kind: "semantic-core",
-    operation_id: operationId,
-    version,
-    producer: "host:artifact-sealer",
-    media_type: "application/json",
-    content_schema: { schema_id: "penny.produced-artifact.v2", schema_version: 2 },
-    parent_ref: parentRef,
-    upstream_refs: upstreamRefs,
+    phase: runSealPolicy(input.context, PRODUCE_SEAL_POLICY).seal_phase,
+    draft_ref: input.draft,
+    epoch_anchor_ref: latestProductArtifact(input.context) ?? null,
+    previous_diagnostic_ref: null,
+    rejection_ordinal: 0,
+    project: () => ({
+      status: "sealed",
+      content: canonicalJson(product),
+      content_schema: { schema_id: "penny.produced-artifact.v2", schema_version: 2 },
+      upstream_refs: [input.request, input.approach, input.decision],
+      revision_parent_ref: null,
+    }),
+    validate_product_bytes: (bytes, ref) => {
+      validateCanonicalProducedArtifactV2Bytes(bytes, ref);
+    },
+  });
+  if (attempt.status !== "sealed")
+    throw new Error(
+      `produce seal host fault: ${attempt.status === "fault" ? attempt.code : "unexpected rejection"}`
+    );
+  return {
+    artifact: attempt.product_ref,
+    added: addSelectedArtifact(input.context, attempt.product_ref),
   };
-  const orphan = input.store.refFor(
-    input.context.identity.run_id,
-    "sealing_artifact",
-    null,
-    "semantic-core",
-    operationId,
-    version
-  );
-  const artifact = orphan ?? input.store.persist({ metadata, content });
-  if (
-    canonicalJson(input.store.metadata(artifact)) !== canonicalJson(metadata) ||
-    input.store.readById(artifact.artifact_id).toString("utf8") !== content
-  ) {
-    throw new Error("ProducedArtifactV2 diverged from deterministic host sealing");
-  }
-  const reread = input.store.refById(artifact.artifact_id);
-  if (reread === undefined) throw new Error("ProducedArtifactV2 failed manifest re-read");
-  input.store.select(reread);
-  validateCanonicalProducedArtifactV2Bytes(input.store.readById(reread.artifact_id), reread);
-  return { artifact: reread, added: addSelectedArtifact(input.context, reread) };
 }
 
 function eventString(value: JsonValue | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+interface ProduceExecutionGroup {
+  readonly source: PhaseResult;
+  readonly routed: PhaseResult;
+  readonly receiptIds: readonly string[];
+}
+
 function exactAcceptedExecutionGroup(input: {
   readonly context: RunContext;
   readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
   readonly artifact: ArtifactRef;
-}): { readonly routed: PhaseResult; readonly receiptIds: readonly string[] } {
+}): ProduceExecutionGroup {
   const expectedAgent = input.artifact.producer.startsWith("agent:")
     ? input.artifact.producer.slice("agent:".length)
     : undefined;
   if (expectedAgent === undefined || expectedAgent.length === 0) {
     throw new Error(`produce artifact '${input.artifact.artifact_id}' has no agent producer`);
   }
-  const matches: Array<{ routed: PhaseResult; receiptIds: readonly string[] }> = [];
+  const matches: Array<{
+    source: PhaseResult;
+    routed: PhaseResult;
+    receiptIds: readonly string[];
+  }> = [];
   for (const event of input.checkpointer.events(input.context.identity.run_id)) {
     const acceptedId =
       event.eventType === "phase_result_accepted"
@@ -1001,7 +915,7 @@ function exactAcceptedExecutionGroup(input: {
         result.worker_receipt.receipt_id === acceptedId &&
         canonicalJson(result.output_artifact) === canonicalJson(input.artifact)
       ) {
-        matches.push({ routed: result, receiptIds: [acceptedId] });
+        matches.push({ source: result, routed: result, receiptIds: [acceptedId] });
       }
     }
     const sourceId =
@@ -1029,7 +943,7 @@ function exactAcceptedExecutionGroup(input: {
         canonicalJson(source.output_artifact) === canonicalJson(input.artifact) &&
         repair.output_artifact.kind === "routing-metadata"
       ) {
-        matches.push({ routed: repair, receiptIds: [sourceId, repairId] });
+        matches.push({ source, routed: repair, receiptIds: [sourceId, repairId] });
       }
     }
   }
@@ -1041,6 +955,19 @@ function exactAcceptedExecutionGroup(input: {
   const match = matches[0];
   if (match === undefined) throw new Error("accepted produce execution group is absent");
   return match;
+}
+
+/** A repaired SUMMARY is authority only through the engine's exact accepted
+ * execution group. Source bytes and semantic validation remain unchanged. */
+function acceptedRoutingRepairSummary(input: {
+  readonly context: RunContext;
+  readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
+  readonly artifact: ArtifactRef;
+}): unknown {
+  const group = exactAcceptedExecutionGroup(input);
+  return group.receiptIds.length === 2
+    ? { confidence: group.routed.confidence, ...group.routed.details }
+    : undefined;
 }
 
 interface ProduceSubjectV1 {
@@ -1068,8 +995,476 @@ function currentSubject(context: RunContext): ProduceSubjectV1 {
   return { request, approach, decision, draft, product };
 }
 
+/** Native IDs link options, assessments and selection; they are not authored meaning. */
+function canonicalApproachBasis(
+  approach: ArtifactApproachV1,
+  decision: ArtifactApproachDecisionV1
+): JsonValue | null {
+  if (decision.disposition !== "selected" || decision.selected_approach_id === null) return null;
+  // Full canonical option content is the stable key, not its generated ID or position.
+  // Ida's alternatives are unranked; assessment order likewise carries no selection.
+  const optionKeys = new Map(
+    approach.approaches.map(({ approach_id, ...meaning }) => [approach_id, canonicalJson(meaning)])
+  );
+  const selected = optionKeys.get(decision.selected_approach_id);
+  if (selected === undefined || optionKeys.size !== approach.approaches.length) return null;
+  const assessments: string[] = [];
+  for (const { approach_id, ...meaning } of decision.approach_assessments) {
+    const option = optionKeys.get(approach_id);
+    if (option === undefined) return null;
+    assessments.push(canonicalJson({ approach: option, ...meaning }));
+  }
+  const {
+    approach_assessments: _assessments,
+    selected_approach_id: _selected,
+    ...selection
+  } = decision;
+  return {
+    approach: {
+      schema_version: approach.schema_version,
+      confidence: approach.confidence,
+      approaches: [...optionKeys.values()].sort(),
+    },
+    decision: {
+      ...selection,
+      approach_assessments: assessments.sort(),
+      selected_approach: selected,
+    },
+  };
+}
+
 function subjectRefs(subject: ProduceSubjectV1): readonly ArtifactRef[] {
   return [subject.request, subject.approach, subject.decision, subject.draft, subject.product];
+}
+
+function latestMechanicalChecks(context: RunContext): ArtifactRef | undefined {
+  return selectedLatest(context, (ref) => ref.kind === "produce-mechanical-checks");
+}
+
+function mechanicalCheckValue(input: {
+  readonly context: RunContext;
+  readonly store: ArtifactReader;
+  readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
+}) {
+  const subject = currentSubject(input.context);
+  for (const ref of subjectRefs(subject)) {
+    if (
+      ref.run_id !== input.context.identity.run_id ||
+      canonicalJson(input.store.refById(ref.artifact_id)) !== canonicalJson(ref)
+    )
+      throw new Error("mechanical subject custody mismatch");
+  }
+  const request = canonicalProduceRequest(input.store, input.context);
+  const approach = parsePersistedArtifactApproach(
+    input.store.readById(subject.approach.artifact_id),
+    {
+      routingRepairSummary: acceptedRoutingRepairSummary({ ...input, artifact: subject.approach }),
+    }
+  ).approach;
+  const decision = parsePersistedArtifactApproachDecision(
+    input.store.readById(subject.decision.artifact_id),
+    {
+      approach,
+      routingRepairSummary: acceptedRoutingRepairSummary({ ...input, artifact: subject.decision }),
+    }
+  ).decision;
+  if (decision.disposition !== "selected")
+    throw new Error("mechanical checks require selected approach");
+  const draft = parsePersistedProducedArtifactDraftV2(
+    input.store.readById(subject.draft.artifact_id),
+    {
+      request,
+      routingRepairSummary: acceptedRoutingRepairSummary({ ...input, artifact: subject.draft }),
+    }
+  ).draft;
+  const product = validateCanonicalProducedArtifactV2Bytes(
+    input.store.readById(subject.product.artifact_id),
+    subject.product
+  );
+  assertProducedArtifactLineageV2({
+    product,
+    request,
+    draft,
+    requestRef: subject.request,
+    approachRef: subject.approach,
+    decisionRef: subject.decision,
+    draftRef: subject.draft,
+    effectEvidence: product.effect_evidence,
+  });
+  return validateProduceMechanicalChecks({
+    schema_id: "penny.produce-mechanical-checks.v1",
+    schema_version: 1,
+    status: "PASS",
+    run_id: input.context.identity.run_id,
+    request_ref: subject.request,
+    approach_ref: subject.approach,
+    decision_ref: subject.decision,
+    draft_ref: subject.draft,
+    product_ref: subject.product,
+    checks: [...PRODUCE_MECHANICAL_CHECK_NAMES],
+    product_effect_evidence_sha256: effectEvidenceSha256(product.effect_evidence),
+    scope: "host_mechanical_only_not_semantic_or_effect_absence",
+  });
+}
+
+function verifyMechanicalChecks(input: {
+  readonly context: RunContext;
+  readonly store: ArtifactReader;
+  readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
+}): ArtifactRef {
+  const ref = latestMechanicalChecks(input.context);
+  if (
+    ref === undefined ||
+    ref.run_id !== input.context.identity.run_id ||
+    ref.phase !== "sealing_artifact" ||
+    ref.producer !== "host:produce-product-validator" ||
+    ref.content_schema?.schema_id !== "penny.produce-mechanical-checks.v1" ||
+    ref.content_schema.schema_version !== 1 ||
+    canonicalJson(input.store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+    canonicalJson(readCanonicalJson(input.store, ref, validateProduceMechanicalChecks)) !==
+      canonicalJson(mechanicalCheckValue(input))
+  ) {
+    throw new Error("exact current-product host mechanical evidence is absent or invalid");
+  }
+  return ref;
+}
+
+/** Metadata is required for semantic-only reviews: raw V2 bytes do not name their subject. */
+function hasReviewMetadata(
+  store: ArtifactReader
+): store is ArtifactReader & Pick<ArtifactHostStore, "metadata"> {
+  return "metadata" in store && typeof store.metadata === "function";
+}
+
+function expectedReviewUpstreams(
+  context: RunContext,
+  state: ReviewState,
+  report: ArtifactRef
+): ArtifactRef[] {
+  return uniqueRefs([
+    ...subjectRefs(currentSubject(context)),
+    selectedBefore(
+      context,
+      report,
+      (ref) => ref.kind === "agent-output" && ref.phase === "critiquing_artifact"
+    ),
+    selectedBefore(
+      context,
+      report,
+      (ref) => ref.kind === "agent-output" && ref.phase === "verifying_artifact"
+    ),
+    state === "verifying_artifact" ? latestMechanicalChecks(context) : undefined,
+  ]);
+}
+
+type ReviewAssignmentDirective = Extract<Directive, { action: "invoke_agent" }>;
+
+function reviewAssignmentValue(pending: ReviewAssignmentDirective): ProduceReviewAssignmentV1 {
+  const repair = pending.routing_repair_binding;
+  return validateProduceReviewAssignment({
+    schema_id: "penny.produce-review-assignment.v1",
+    schema_version: 1,
+    invocation: {
+      identity: pending.identity,
+      state_id: pending.state_id,
+      branch_id: null,
+      agent: pending.agent,
+      attempt: pending.attempt,
+      trust_profile: pending.trust_profile,
+      model_override: pending.model_override ?? null,
+      ...(pending.execution_purpose !== "routing_repair"
+        ? {}
+        : {
+            execution_purpose: "routing_repair",
+            routing_repair_binding_sha256: sha256(canonicalJson(repair)),
+          }),
+      task_sha256: sha256(pending.task),
+      input_artifacts: pending.input_artifacts,
+      output_artifact: pending.output_artifact,
+    },
+    ...(repair === undefined ? {} : { routing_repair_binding: repair }),
+  });
+}
+
+function reviewAssignmentMetadata(value: ProduceReviewAssignmentV1): OutputArtifactMetadata {
+  const invocation = value.invocation;
+  return {
+    schema_version: 2,
+    run_id: invocation.identity.run_id,
+    phase: invocation.state_id,
+    branch_id: null,
+    kind: "produce-review-assignment",
+    // Deliberately not addressed by task/input/metadata hashes: drift at an existing
+    // assignment coordinate must conflict, not create an apparently fresh binding.
+    operation_id: `review-assignment:${sha256(
+      canonicalJson({
+        state: invocation.state_id,
+        attempt: invocation.attempt,
+        output_operation: invocation.output_artifact.operation_id,
+        output_version: invocation.output_artifact.version,
+      })
+    )}`,
+    version: 1,
+    producer: "host:produce-review-assignment",
+    media_type: "application/json",
+    content_schema: { schema_id: "penny.produce-review-assignment.v1", schema_version: 1 },
+    parent_ref: null,
+    upstream_refs: invocation.input_artifacts.artifacts.map((binding) => binding.ref),
+  };
+}
+
+function frozenReviewAssignment(input: {
+  readonly context: RunContext;
+  readonly store: ArtifactReader;
+  readonly metadata: OutputArtifactMetadata;
+  readonly attempt: number;
+}): ProduceReviewAssignmentV1 {
+  if (!hasReviewMetadata(input.store)) throw new Error("review metadata is unavailable");
+  const matches: ProduceReviewAssignmentV1[] = [];
+  for (const ref of input.context.selectedArtifacts) {
+    if (ref.kind !== "produce-review-assignment" || ref.phase !== input.metadata.phase) continue;
+    if (canonicalJson(input.store.refById(ref.artifact_id)) !== canonicalJson(ref))
+      throw new Error("review assignment custody mismatch");
+    const value = readCanonicalJson(input.store, ref, validateProduceReviewAssignment);
+    if (
+      canonicalJson(input.store.metadata(ref)) !== canonicalJson(reviewAssignmentMetadata(value)) ||
+      canonicalJson(value.invocation.identity) !== canonicalJson(input.context.identity) ||
+      value.invocation.trust_profile !== input.context.trustProfile
+    )
+      throw new Error("review assignment owner lineage mismatch");
+    if (
+      value.invocation.attempt === input.attempt &&
+      canonicalJson(value.invocation.output_artifact) === canonicalJson(input.metadata)
+    )
+      matches.push(value);
+  }
+  if (matches.length !== 1 || matches[0] === undefined)
+    throw new Error("exact frozen review assignment is absent or ambiguous");
+  return matches[0];
+}
+
+function authenticateReviewResult(input: {
+  readonly context: RunContext;
+  readonly result: PhaseResult;
+  readonly verifyExecutionReceipt?: ExecutionReceiptVerifier;
+  readonly assignment?: ProduceReviewAssignmentV1;
+}): void {
+  if (input.verifyExecutionReceipt === undefined)
+    throw new Error("review receipt verifier is unavailable");
+  const result = input.result;
+  const receipt = input.verifyExecutionReceipt(result.worker_receipt);
+  if (
+    canonicalJson(receipt) !== canonicalJson(result.worker_receipt) ||
+    result.run_id !== input.context.identity.run_id ||
+    receipt.run_id !== result.run_id ||
+    receipt.state_id !== result.state_id ||
+    receipt.agent !== result.agent ||
+    receipt.attempt !== result.attempt ||
+    receipt.branch_id !== (result.branch_id ?? null) ||
+    receipt.exit_code !== 0 ||
+    receipt.trust_profile !== input.context.trustProfile ||
+    receipt.working_directory !== input.context.projectRoot ||
+    canonicalJson(receipt.command) !== canonicalJson(["pi-sdk", result.agent]) ||
+    receipt.output_digest !== result.output_artifact.content_digest ||
+    canonicalJson(receipt.output_artifact_ref) !== canonicalJson(result.output_artifact)
+  )
+    throw new Error("review execution receipt/source mismatch");
+  const invocation = input.assignment?.invocation;
+  if (
+    invocation !== undefined &&
+    (invocation.state_id !== result.state_id ||
+      invocation.agent !== result.agent ||
+      invocation.attempt !== result.attempt ||
+      invocation.branch_id !== (result.branch_id ?? null) ||
+      invocation.model_override !== receipt.model ||
+      trustedInvocationDigest(invocation) !== receipt.trusted_invocation_digest)
+  )
+    throw new Error("signed frozen review assignment mismatch");
+}
+
+/** Historical checks use frozen host operands, not today's prompt, schema descriptions,
+ * contextual instruction or slot generator. Roles still bind to the current exact subject. */
+function checkedSemanticReviewBinding(input: {
+  readonly context: RunContext;
+  readonly store: ArtifactReader;
+  readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
+  readonly state: ReviewState;
+  readonly report: ArtifactRef;
+  readonly bytes: Uint8Array;
+  readonly executionGroup?: ProduceExecutionGroup;
+  readonly allowPendingAssignment?: boolean;
+  readonly verifyExecutionReceipt?: ExecutionReceiptVerifier;
+}): void {
+  if (!hasReviewMetadata(input.store)) throw new Error("review source metadata is unavailable");
+  if (input.verifyExecutionReceipt === undefined)
+    throw new Error("review receipt verifier is unavailable");
+  const metadata = input.store.metadata(input.report);
+  const upstreams = expectedReviewUpstreams(input.context, input.state, input.report);
+  const pending = input.context.pendingDirective;
+  const directPending =
+    input.allowPendingAssignment &&
+    pending?.action === "invoke_agent" &&
+    pending.execution_purpose !== "routing_repair" &&
+    pending.state_id === input.state
+      ? pending
+      : undefined;
+  const pendingRepair =
+    input.allowPendingAssignment &&
+    pending?.action === "invoke_agent" &&
+    pending.execution_purpose === "routing_repair" &&
+    canonicalJson(pending.routing_repair_binding?.source_artifact_ref) ===
+      canonicalJson(input.report)
+      ? pending
+      : undefined;
+  const group =
+    directPending !== undefined || pendingRepair !== undefined
+      ? undefined
+      : (input.executionGroup ?? exactAcceptedExecutionGroup({ ...input, artifact: input.report }));
+  const source =
+    group?.source ??
+    (pendingRepair?.routing_repair_binding === undefined
+      ? undefined
+      : input.checkpointer.receiptResultById(
+          pendingRepair.routing_repair_binding.source_receipt_id
+        ));
+  const assignment = frozenReviewAssignment({
+    ...input,
+    metadata,
+    attempt: directPending?.attempt ?? source?.attempt ?? -1,
+  });
+  const invocation = assignment.invocation;
+  const contexts = (artifacts: typeof invocation.input_artifacts) =>
+    artifacts.artifacts.filter((binding) => binding.designation === "context");
+  if (
+    assignment.routing_repair_binding !== undefined ||
+    canonicalJson(metadata.upstream_refs) !== canonicalJson(upstreams) ||
+    canonicalJson(
+      invocation.input_artifacts.artifacts
+        .filter((binding) => binding.designation !== "context")
+        .map((binding) => binding.ref)
+    ) !== canonicalJson(upstreams) ||
+    canonicalJson(contexts(invocation.input_artifacts)) !==
+      canonicalJson(
+        contexts(input.context.admittedInputArtifacts ?? { schema_version: 2, artifacts: [] })
+      )
+  )
+    throw new Error("frozen review does not bind the current native/context roles");
+  produceReviewProjector(input.state).project({
+    bytes: input.bytes,
+    source: input.report,
+    inputArtifacts: invocation.input_artifacts,
+    artifacts: input.store,
+  });
+  if (directPending !== undefined) {
+    if (canonicalJson(reviewAssignmentValue(directPending)) !== canonicalJson(assignment))
+      throw new Error("pending review assignment drift");
+    return; // Engine has authenticated this still-pending source before early routing.
+  }
+  if (source === undefined) throw new Error("original review execution receipt is unavailable");
+  const captured = input.checkpointer
+    .events(input.context.identity.run_id)
+    .some(
+      (event) =>
+        (event.eventType === "phase_result_accepted" ||
+          event.eventType === "phase_result_malformed") &&
+        event.payload.receipt_id === source.worker_receipt.receipt_id &&
+        event.payload.state_id === source.state_id &&
+        event.payload.agent === source.agent &&
+        event.payload.attempt === source.attempt
+    );
+  if (!captured || canonicalJson(source.output_artifact) !== canonicalJson(input.report))
+    throw new Error("review source was not captured at the frozen assignment");
+  authenticateReviewResult({ ...input, result: source, assignment });
+  const routed = group?.routed;
+  if (pendingRepair !== undefined || (routed !== undefined && routed !== source)) {
+    const repair =
+      pendingRepair === undefined
+        ? routed === undefined
+          ? undefined
+          : frozenReviewAssignment({
+              ...input,
+              metadata: input.store.metadata(routed.output_artifact),
+              attempt: routed.attempt,
+            })
+        : frozenReviewAssignment({
+            ...input,
+            metadata: pendingRepair.output_artifact,
+            attempt: pendingRepair.attempt,
+          });
+    const binding = repair?.routing_repair_binding;
+    if (
+      repair === undefined ||
+      binding === undefined ||
+      binding.source_receipt_id !== source.worker_receipt.receipt_id ||
+      binding.source_result_sha256 !== sha256(canonicalJson(source)) ||
+      binding.source_state_id !== source.state_id ||
+      binding.source_agent !== source.agent ||
+      binding.source_attempt !== source.attempt ||
+      binding.source_branch_id !== null ||
+      canonicalJson(binding.source_artifact_ref) !== canonicalJson(input.report) ||
+      canonicalJson(
+        repair.invocation.input_artifacts.artifacts
+          .filter((item) => item.designation !== "context")
+          .map((item) => item.ref)
+      ) !== canonicalJson([input.report]) ||
+      canonicalJson(contexts(repair.invocation.input_artifacts)) !==
+        canonicalJson(contexts(invocation.input_artifacts)) ||
+      (pendingRepair !== undefined &&
+        canonicalJson(reviewAssignmentValue(pendingRepair)) !== canonicalJson(repair))
+    )
+      throw new Error("review routing repair lost its exact source binding");
+    if (pendingRepair === undefined && routed !== undefined)
+      authenticateReviewResult({ ...input, result: routed, assignment: repair });
+  }
+}
+
+function checkedReview(input: {
+  readonly context: RunContext;
+  readonly store: ArtifactReader;
+  readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
+  readonly state: ReviewState;
+  readonly report: ArtifactRef;
+  readonly details: Record<string, JsonValue>;
+  readonly confidence?: Confidence;
+  readonly executionGroup?: ProduceExecutionGroup;
+  readonly allowPendingAssignment?: boolean;
+  readonly verifyExecutionReceipt?: ExecutionReceiptVerifier;
+}) {
+  const product = currentSubject(input.context).product;
+  const hostCheck =
+    input.state === "verifying_artifact" ? verifyMechanicalChecks(input) : undefined;
+  if (
+    input.report.kind !== "agent-output" ||
+    input.report.branch_id !== null ||
+    input.report.run_id !== input.context.identity.run_id ||
+    input.report.phase !== input.state ||
+    input.report.producer !== `agent:${PRODUCE_AGENT_BY_STATE[input.state]}` ||
+    canonicalJson(input.store.refById(input.report.artifact_id)) !== canonicalJson(input.report)
+  )
+    throw new Error("review source custody mismatch");
+  const bytes = input.store.readById(input.report.artifact_id);
+  if (bytes.length !== input.report.byte_length || sha256(bytes) !== input.report.content_digest)
+    throw new Error("review source bytes disagree with custody");
+  const parsed = parsePersistedProduceReview(bytes, {
+    state: input.state,
+    productRef: product,
+    ...(hostCheck === undefined ? {} : { hostCheckRef: hostCheck }),
+  });
+  if (parsed.core.schema_version === 2) checkedSemanticReviewBinding({ ...input, bytes });
+  else if (!input.allowPendingAssignment && input.verifyExecutionReceipt !== undefined) {
+    // Strict legacy parsing above remains unchanged; never repair or backfill old V1 refs.
+    const group =
+      input.executionGroup ?? exactAcceptedExecutionGroup({ ...input, artifact: input.report });
+    authenticateReviewResult({ ...input, result: group.source });
+    if (group.routed.worker_receipt.receipt_id !== group.source.worker_receipt.receipt_id)
+      authenticateReviewResult({ ...input, result: group.routed });
+  }
+  if (
+    canonicalJson(parsed.core.review) !== canonicalJson(input.details) ||
+    (input.confidence !== undefined && parsed.core.confidence !== input.confidence)
+  )
+    throw new Error("routing metadata changed immutable review meaning");
+  return parsed;
 }
 
 function acceptedReviewEvidence(input: {
@@ -1080,6 +1475,7 @@ function acceptedReviewEvidence(input: {
   readonly verdict: "APPROVE" | "PASS";
   readonly subject: ProduceSubjectV1;
   readonly carrenReport?: ArtifactRef;
+  readonly verifyExecutionReceipt?: ExecutionReceiptVerifier;
 }):
   | {
       readonly report: ArtifactRef;
@@ -1087,10 +1483,6 @@ function acceptedReviewEvidence(input: {
       readonly receiptIds: readonly string[];
     }
   | undefined {
-  const expectedUpstreams = [
-    ...subjectRefs(input.subject),
-    ...(input.carrenReport === undefined ? [] : [input.carrenReport]),
-  ];
   for (const event of [...input.checkpointer.events(input.context.identity.run_id)].reverse()) {
     if (eventString(event.payload.state_id) !== input.state) continue;
     const sourceId =
@@ -1106,12 +1498,44 @@ function acceptedReviewEvidence(input: {
     const source =
       sourceId === undefined ? undefined : input.checkpointer.receiptResultById(sourceId);
     const routed = repairId === undefined ? source : input.checkpointer.receiptResultById(repairId);
+    const previousReport =
+      source === undefined
+        ? undefined
+        : selectedLatest(
+            input.context,
+            (artifact) =>
+              artifact.kind === "agent-output" &&
+              artifact.phase === input.state &&
+              artifact.version < source.output_artifact.version
+          );
+    // Admission occurs after current Vera: exclude its report from Carren's earlier inputs.
+    // The current Carren gate for Vera remains the exact quality-receipt report.
+    const currentVera = latestReviewReport(input.context, "verifying_artifact");
+    const earlierVera =
+      input.state === "critiquing_artifact"
+        ? currentVera === undefined
+          ? undefined
+          : selectedBefore(
+              input.context,
+              currentVera,
+              (artifact) =>
+                artifact.kind === "agent-output" && artifact.phase === "verifying_artifact"
+            )
+        : previousReport;
+    const expectedUpstreams = uniqueRefs([
+      ...subjectRefs(input.subject),
+      input.state === "critiquing_artifact" ? previousReport : input.carrenReport,
+      earlierVera,
+      input.state === "verifying_artifact" ? latestMechanicalChecks(input.context) : undefined,
+    ]);
     if (
       source === undefined ||
       routed === undefined ||
       source.run_id !== input.context.identity.run_id ||
       routed.run_id !== input.context.identity.run_id ||
       source.state_id !== input.state ||
+      canonicalJson(source.output_artifact) !==
+        canonicalJson(latestReviewReport(input.context, input.state)) ||
       source.agent !== PRODUCE_AGENT_BY_STATE[input.state] ||
       routed.details.verdict !== input.verdict ||
       canonicalJson(input.store.metadata(source.output_artifact).upstream_refs) !==
@@ -1119,14 +1543,32 @@ function acceptedReviewEvidence(input: {
     ) {
       continue;
     }
-    return {
-      report: source.output_artifact,
-      result: routed,
-      receiptIds:
-        repairId === undefined
-          ? [source.worker_receipt.receipt_id]
-          : [source.worker_receipt.receipt_id, routed.worker_receipt.receipt_id],
-    };
+    try {
+      const executionGroup = exactAcceptedExecutionGroup({
+        ...input,
+        artifact: source.output_artifact,
+      });
+      if (
+        canonicalJson(executionGroup.source) !== canonicalJson(source) ||
+        canonicalJson(executionGroup.routed) !== canonicalJson(routed)
+      )
+        throw new Error("review execution evidence changed during readback");
+      checkedReview({
+        ...input,
+        report: executionGroup.source.output_artifact,
+        details: executionGroup.routed.details,
+        confidence: executionGroup.routed.confidence,
+        executionGroup,
+      });
+      // Mint only from the exact objects just authenticated, not a separately reloaded row.
+      return {
+        report: executionGroup.source.output_artifact,
+        result: executionGroup.routed,
+        receiptIds: executionGroup.receiptIds,
+      };
+    } catch {
+      return undefined;
+    }
   }
   return undefined;
 }
@@ -1189,6 +1631,7 @@ function ensureQualityReceipt(input: {
   readonly store: ArtifactHostStore;
   readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
   readonly effectEvidenceProvider?: EffectEvidenceProviderV1;
+  readonly verifyExecutionReceipt?: ExecutionReceiptVerifier;
 }): {
   readonly artifact: ArtifactRef;
   readonly value: ProduceQualityReceiptV2;
@@ -1196,7 +1639,6 @@ function ensureQualityReceipt(input: {
 } {
   const subject = currentSubject(input.context);
   const existing = matchingQualityReceipt({ ...input, subject });
-  if (existing !== undefined) return { ...existing, added: false };
   const evidence = acceptedReviewEvidence({
     ...input,
     state: "critiquing_artifact",
@@ -1204,6 +1646,15 @@ function ensureQualityReceipt(input: {
     subject,
   });
   if (evidence === undefined) throw new Error("latest-product Carren APPROVE is absent");
+  if (existing !== undefined) {
+    if (
+      canonicalJson(existing.value.carren_report_ref) !== canonicalJson(evidence.report) ||
+      existing.value.execution_receipt_id !== evidence.result.worker_receipt.receipt_id ||
+      existing.value.execution_result_sha256 !== sha256(canonicalJson(evidence.result))
+    )
+      throw new Error("existing quality receipt contradicts current review evidence");
+    return { ...existing, added: false };
+  }
   const body: Omit<ProduceQualityReceiptV2, "receipt_id"> = {
     schema_id: "penny.produce-quality-receipt.v2",
     schema_version: 2,
@@ -1252,6 +1703,7 @@ function ensureValidityReceipt(input: {
   readonly store: ArtifactHostStore;
   readonly checkpointer: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"];
   readonly quality: { readonly artifact: ArtifactRef; readonly value: ProduceQualityReceiptV2 };
+  readonly verifyExecutionReceipt?: ExecutionReceiptVerifier;
 }): {
   readonly artifact: ArtifactRef;
   readonly value: ProduceValidityReceiptV2;
@@ -1264,17 +1716,23 @@ function ensureValidityReceipt(input: {
     subject,
     quality: input.quality.artifact,
   });
-  if (existing !== undefined) return { ...existing, added: false };
   const evidence = acceptedReviewEvidence({
-    context: input.context,
-    store: input.store,
-    checkpointer: input.checkpointer,
+    ...input,
     state: "verifying_artifact",
     verdict: "PASS",
     subject,
     carrenReport: input.quality.value.carren_report_ref,
   });
   if (evidence === undefined) throw new Error("latest-product Vera PASS is absent");
+  if (existing !== undefined) {
+    if (
+      canonicalJson(existing.value.vera_report_ref) !== canonicalJson(evidence.report) ||
+      existing.value.execution_receipt_id !== evidence.result.worker_receipt.receipt_id ||
+      existing.value.execution_result_sha256 !== sha256(canonicalJson(evidence.result))
+    )
+      throw new Error("existing validity receipt contradicts current review evidence");
+    return { ...existing, added: false };
+  }
   const body: Omit<ProduceValidityReceiptV2, "receipt_id"> = {
     schema_id: "penny.produce-validity-receipt.v2",
     schema_version: 2,
@@ -1351,14 +1809,38 @@ function ensureProductIntegrity(input: {
   const subject = currentSubject(input.context);
   const request = canonicalProduceRequest(input.store, input.context);
   const approach = parsePersistedArtifactApproach(
-    input.store.readById(subject.approach.artifact_id)
+    input.store.readById(subject.approach.artifact_id),
+    {
+      routingRepairSummary: acceptedRoutingRepairSummary({
+        context: input.context,
+        checkpointer: input.checkpointer,
+        artifact: subject.approach,
+      }),
+    }
   ).approach;
-  parsePersistedArtifactApproachDecision(input.store.readById(subject.decision.artifact_id), {
-    approach,
-  });
+  const decision = parsePersistedArtifactApproachDecision(
+    input.store.readById(subject.decision.artifact_id),
+    {
+      approach,
+      routingRepairSummary: acceptedRoutingRepairSummary({
+        context: input.context,
+        checkpointer: input.checkpointer,
+        artifact: subject.decision,
+      }),
+    }
+  ).decision;
+  if (decision.disposition !== "selected")
+    throw new Error("Produce integrity requires a selected approach");
   const draft = parsePersistedProducedArtifactDraftV2(
     input.store.readById(subject.draft.artifact_id),
-    { request }
+    {
+      request,
+      routingRepairSummary: acceptedRoutingRepairSummary({
+        context: input.context,
+        checkpointer: input.checkpointer,
+        artifact: subject.draft,
+      }),
+    }
   ).draft;
   const product = validateCanonicalProducedArtifactV2Bytes(
     input.store.readById(subject.product.artifact_id),
@@ -1501,7 +1983,7 @@ function ensureProductEnvelope(input: {
 function reviewEvaluation(
   state: ReviewState,
   details: Record<string, JsonValue>
-): EvaluationResultV2 | null {
+): EvaluationResult | null {
   if (state === "critiquing_artifact") {
     if (details.verdict === "APPROVE") {
       if (details.gap_kind !== "none" || details.repair_owner !== "none") {
@@ -1577,11 +2059,12 @@ function bestPartial(context: RunContext): ArtifactRef | undefined {
 
 export class ProducePlaybook
   implements
-    PlaybookCoreV1,
+    PlaybookCore,
     HostContinuationCapabilityV1,
     LivenessTerminalCapabilityV1,
     StateAwareRepairCapabilityV1,
     RepairExhaustionCapabilityV1,
+    RepairProgressCapabilityV1,
     RoutingRepairCapabilityV1
 {
   constructor(
@@ -1589,8 +2072,35 @@ export class ProducePlaybook
     private readonly artifactStore?: ArtifactHostStore,
     private readonly checkpointer?: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"],
     private readonly hostFault?: (point: string) => void,
-    private readonly effectEvidenceProvider?: EffectEvidenceProviderV1
+    private readonly effectEvidenceProvider?: EffectEvidenceProviderV1,
+    private readonly verifyExecutionReceipt?: ExecutionReceiptVerifier
   ) {}
+
+  /** Engine calls only after RunContext has appended all contextual operands. The
+   * companion is selected for recovery, never appended to model input/output upstreams. */
+  bindDispatch(context: RunContext, directive: Directive): void {
+    if (
+      directive.action !== "invoke_agent" ||
+      (directive.state_id !== "critiquing_artifact" && directive.state_id !== "verifying_artifact")
+    )
+      return;
+    const store = this.artifactStore;
+    if (store === undefined) throw new Error("review assignment store is unavailable");
+    const value = reviewAssignmentValue(directive);
+    const ref = store.persist({
+      metadata: reviewAssignmentMetadata(value),
+      content: canonicalJson(value),
+    });
+    if (
+      canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+      canonicalJson(readCanonicalJson(store, ref, validateProduceReviewAssignment)) !==
+        canonicalJson(value)
+    )
+      throw new Error("frozen review assignment failed exact readback");
+    // These are separate immutable assignment coordinates, not successive revisions
+    // of the manifest's phase/kind selection slot. RunContext retains every exact ref.
+    addSelectedArtifact(context, ref);
+  }
 
   initialize(context: RunContext): Directive {
     if (context.identity.playbook !== PRODUCE_PLAYBOOK_NAME) {
@@ -1605,6 +2115,10 @@ export class ProducePlaybook
       throw new Error(`cannot dispatch produce state '${context.stateId}'`);
     }
     const state = context.stateId;
+    if (state === "materializing_artifact" && latestSealFeedbackArtifact(context) !== undefined) {
+      if (this.artifactStore === undefined) throw new Error("seal diagnostic store is absent");
+      currentSealDiagnostic(context, this.artifactStore);
+    }
     const refs = refsForState(context, state);
     const next = validateDirective({
       schema_version: 2,
@@ -1614,7 +2128,7 @@ export class ProducePlaybook
       agent: PRODUCE_AGENT_BY_STATE[state],
       attempt: context.stepCount,
       trust_profile: context.trustProfile,
-      task: taskForState(context, state),
+      task: taskForState(state),
       input_artifacts: {
         schema_version: 2,
         artifacts: refs.map((ref) => ({ slot: slotForRef(ref), ref })),
@@ -1627,19 +2141,139 @@ export class ProducePlaybook
   }
 
   evaluateRepair(
-    _context: RunContext,
+    context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResultV2 | null {
-    return state === "critiquing_artifact" || state === "verifying_artifact"
-      ? reviewEvaluation(state, details)
-      : null;
+  ): EvaluationResult | null {
+    if (state !== "critiquing_artifact" && state !== "verifying_artifact") return null;
+    if (!this.validCurrentReview(context, state, details)) return null;
+    if (details.verdict === "UNVERIFIABLE") return null;
+    return reviewEvaluation(state, details);
+  }
+
+  repairProgressFingerprint(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>
+  ): string | null {
+    if (
+      (state !== "critiquing_artifact" && state !== "verifying_artifact") ||
+      details.verdict !== "FAIL" ||
+      !PRODUCE_REPAIR_ROUTES.some(
+        (route) => route.origin_state === state && route.report_gap_kind === details.gap_kind
+      )
+    )
+      return null;
+    const store = this.artifactStore;
+    const checkpointer = this.checkpointer;
+    if (store === undefined || checkpointer === undefined)
+      throw new Error("produce repair measurement dependencies are unavailable");
+    if (!this.validCurrentReview(context, state, details))
+      throw new Error("produce repair measurement requires the exact bound review");
+    // Recompute native operand/draft/product validation for BOTH reviewers. A valid
+    // review core alone cannot authenticate the semantic candidate being measured.
+    verifyMechanicalChecks({ context, store, checkpointer });
+    const subject = currentSubject(context);
+    const { approach } = parsePersistedArtifactApproach(
+      store.readById(subject.approach.artifact_id),
+      {
+        routingRepairSummary: acceptedRoutingRepairSummary({
+          context,
+          checkpointer,
+          artifact: subject.approach,
+        }),
+      }
+    );
+    const { decision } = parsePersistedArtifactApproachDecision(
+      store.readById(subject.decision.artifact_id),
+      {
+        approach,
+        routingRepairSummary: acceptedRoutingRepairSummary({
+          context,
+          checkpointer,
+          artifact: subject.decision,
+        }),
+      }
+    );
+    const approachBasis = canonicalApproachBasis(approach, decision);
+    // Unmeasurable native mappings cannot establish a stall. Invalid bytes or
+    // custody still throw above; null is not a bypass for review/admission checks.
+    if (approachBasis === null) return null;
+    const { draft } = parsePersistedProducedArtifactDraftV2(
+      store.readById(subject.draft.artifact_id),
+      {
+        request: canonicalProduceRequest(store, context),
+        routingRepairSummary: acceptedRoutingRepairSummary({
+          context,
+          checkpointer,
+          artifact: subject.draft,
+        }),
+      }
+    );
+    // Both reviewers judge the approach and selection as well as the draft.
+    // Exclude transport/lineage identities, but retain exact authored meaning;
+    // only structured native ID links and unranked collection order normalize.
+    const { strategy_delta: _strategyDelta, ...failure } = details;
+    return sha256(canonicalJson({ candidate: draft, approach_basis: approachBasis, failure }));
+  }
+
+  terminalizeRepairStall(
+    context: RunContext,
+    state: string,
+    evaluation: EvaluationResult
+  ): Directive {
+    return this.terminal(
+      context,
+      "incomplete",
+      false,
+      [`repair stalled at ${state}:${evaluation.kind}`],
+      undefined,
+      {
+        incomplete_reason: "repair_stalled",
+        stalled: true,
+        stall_reason: "exact_candidate_and_failure_repeated",
+      }
+    );
+  }
+
+  private validCurrentReview(
+    context: RunContext,
+    state: ReviewState,
+    details: Record<string, JsonValue>,
+    confidence?: Confidence
+  ): boolean {
+    if (this.artifactStore === undefined || this.checkpointer === undefined) return false;
+    const pending = context.pendingDirective;
+    const routingRepair =
+      pending?.action === "invoke_agent" && pending.execution_purpose === "routing_repair";
+    const report = routingRepair
+      ? pending.routing_repair_binding?.source_artifact_ref
+      : latestReviewReport(context, state);
+    if (report === undefined) return false;
+    try {
+      checkedReview({
+        context,
+        state,
+        store: this.artifactStore,
+        checkpointer: this.checkpointer,
+        report,
+        details,
+        ...(confidence === undefined ? {} : { confidence }),
+        allowPendingAssignment: true,
+        ...(this.verifyExecutionReceipt === undefined
+          ? {}
+          : { verifyExecutionReceipt: this.verifyExecutionReceipt }),
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   terminalizeRepairExhaustion(
     context: RunContext,
     state: string,
-    evaluation: EvaluationResultV2
+    evaluation: EvaluationResult
   ): Directive {
     return this.terminal(
       context,
@@ -1658,8 +2292,45 @@ export class ProducePlaybook
   acceptSummary(
     context: RunContext,
     details: Record<string, JsonValue>,
-    _confidence: Confidence
-  ): PlaybookStepOutcomeV1 {
+    confidence: Confidence
+  ): PlaybookStepOutcome {
+    // Validate complete captured approach/decision bytes before dispatching a
+    // consumer, including before accepting an unresolved negative. Routing-only
+    // correction may replace routing metadata, never a malformed semantic core.
+    if (
+      context.stateId === "exploring_artifact_approaches" ||
+      context.stateId === "selecting_artifact_approach"
+    ) {
+      const invalid = this.validateApproachStage(context, details, confidence);
+      if (invalid !== undefined) return invalid;
+    }
+    if (context.stateId === "critiquing_artifact" || context.stateId === "verifying_artifact") {
+      if (!this.validCurrentReview(context, context.stateId, details, confidence))
+        return this.terminal(
+          context,
+          "incomplete",
+          false,
+          ["review evidence is absent, malformed or contradictory"],
+          undefined,
+          {
+            incomplete_reason: "review_evidence_invalid",
+            review_report_ref: latestReviewReport(context, context.stateId) ?? null,
+          }
+        );
+      if (details.verdict === "UNVERIFIABLE")
+        return this.terminal(
+          context,
+          "incomplete",
+          false,
+          ["verification is incomplete; no author defect is established"],
+          undefined,
+          {
+            incomplete_reason: "verification_incomplete",
+            review_report_ref: latestReviewReport(context, context.stateId) ?? null,
+            verification_findings: details.findings ?? [],
+          }
+        );
+    }
     switch (context.stateId) {
       case "exploring_artifact_approaches":
         if (details.complete !== true) throw new Error("artifact approach summary is incomplete");
@@ -1705,6 +2376,70 @@ export class ProducePlaybook
     }
   }
 
+  private validateApproachStage(
+    context: RunContext,
+    details: Record<string, JsonValue>,
+    confidence: Confidence
+  ): Directive | undefined {
+    const store = this.artifactStore;
+    const checkpointer = this.checkpointer;
+    if (store === undefined || checkpointer === undefined) {
+      throw new Error("produce approach validation dependencies are unavailable");
+    }
+    const approach = latestApproachArtifact(context);
+    const artifact =
+      context.stateId === "exploring_artifact_approaches"
+        ? approach
+        : latestApproachDecisionArtifact(context);
+    if (approach === undefined || artifact === undefined) {
+      throw new Error("captured Produce approach/decision artifact is absent");
+    }
+    const pending = context.pendingDirective;
+    const routedSummary = { confidence, ...details };
+    const routingRepairSummary =
+      pending?.action === "invoke_agent" &&
+      pending.execution_purpose === "routing_repair" &&
+      canonicalJson(pending.routing_repair_binding?.source_artifact_ref) === canonicalJson(artifact)
+        ? routedSummary
+        : undefined;
+    try {
+      const parsedApproach = parsePersistedArtifactApproach(store.readById(approach.artifact_id), {
+        routingRepairSummary:
+          artifact.artifact_id === approach.artifact_id
+            ? routingRepairSummary
+            : acceptedRoutingRepairSummary({ context, checkpointer, artifact: approach }),
+      });
+      const summary =
+        artifact.artifact_id === approach.artifact_id
+          ? parsedApproach.summary
+          : parsePersistedArtifactApproachDecision(store.readById(artifact.artifact_id), {
+              approach: parsedApproach.approach,
+              routingRepairSummary,
+            }).summary;
+      if (canonicalJson(summary) !== canonicalJson(routedSummary)) {
+        throw new ProduceDraftValidationError("SEMANTIC_INVALID", [
+          "captured core and accepted routing SUMMARY disagree",
+        ]);
+      }
+      return undefined;
+    } catch (error) {
+      if (!(error instanceof ProduceDraftValidationError)) throw error;
+      return this.terminal(
+        context,
+        "incomplete",
+        false,
+        ["exact Ida approach or Demetri decision is malformed"],
+        undefined,
+        {
+          incomplete_reason: "malformed_exact_material",
+          invalid_material_ref: artifact,
+          failure_class: error.failureClass,
+          failure_sha256: sha256(error.message),
+        }
+      );
+    }
+  }
+
   routingRepair(context: RunContext, malformed: PhaseResult): Directive {
     const assignment = context.pendingDirective;
     if (
@@ -1716,7 +2451,7 @@ export class ProducePlaybook
     ) {
       throw new Error("routing_repair_binding_invalid");
     }
-    if (context.stepCount >= context.maxSteps) {
+    if (context.maxSteps !== null && context.stepCount >= context.maxSteps) {
       throw new Error(`run exceeded max_steps=${context.maxSteps}`);
     }
     const binding = {
@@ -1779,6 +2514,20 @@ export class ProducePlaybook
   rebindPendingDirective(context: RunContext): Directive | null {
     const pending = context.pendingDirective;
     if (pending?.action !== "invoke_agent") return pending;
+    if (pending.state_id === "critiquing_artifact" || pending.state_id === "verifying_artifact") {
+      if (this.artifactStore === undefined)
+        throw new Error("review assignment store is unavailable");
+      // Check saved task/inputs/metadata before the explicit ledger-driven output rebind.
+      // Never use recovery to bless task or operand drift at an already frozen coordinate.
+      const frozen = frozenReviewAssignment({
+        context,
+        store: this.artifactStore,
+        metadata: pending.output_artifact,
+        attempt: pending.attempt,
+      });
+      if (canonicalJson(frozen) !== canonicalJson(reviewAssignmentValue(pending)))
+        throw new Error("saved review assignment drift");
+    }
     if (pending.execution_purpose === "routing_repair") return pending;
     if (!isProduceWorkerState(pending.state_id)) return pending;
     return validateDirective({
@@ -1849,10 +2598,46 @@ export class ProducePlaybook
     }
     if (context.stateId === "sealing_artifact") return this.continueSealing(context, store);
     const subject = currentSubject(context);
-    const quality = ensureQualityReceipt({
+    const reviewHost = {
       context,
       store,
       checkpointer,
+      ...(this.verifyExecutionReceipt === undefined
+        ? {}
+        : { verifyExecutionReceipt: this.verifyExecutionReceipt }),
+    };
+    const qualityReview = acceptedReviewEvidence({
+      ...reviewHost,
+      subject,
+      state: "critiquing_artifact",
+      verdict: "APPROVE",
+    });
+    const validityReview =
+      qualityReview === undefined
+        ? undefined
+        : acceptedReviewEvidence({
+            ...reviewHost,
+            subject,
+            state: "verifying_artifact",
+            verdict: "PASS",
+            carrenReport: qualityReview.report,
+          });
+    if (qualityReview === undefined || validityReview === undefined) {
+      return {
+        event_type: "produce_review_evidence_refused",
+        payload: { run_id: context.identity.run_id },
+        directive: this.terminal(
+          context,
+          "incomplete",
+          false,
+          ["current independent review evidence is invalid"],
+          undefined,
+          { incomplete_reason: "review_evidence_invalid" }
+        ),
+      };
+    }
+    const quality = ensureQualityReceipt({
+      ...reviewHost,
       ...(this.effectEvidenceProvider === undefined
         ? {}
         : { effectEvidenceProvider: this.effectEvidenceProvider }),
@@ -1888,9 +2673,7 @@ export class ProducePlaybook
       };
     }
     const validity = ensureValidityReceipt({
-      context,
-      store,
-      checkpointer,
+      ...reviewHost,
       quality: { artifact: quality.artifact, value: quality.value },
     });
     if (validity.added) {
@@ -1982,10 +2765,24 @@ export class ProducePlaybook
     }
     let approachValue: ArtifactApproachV1;
     try {
-      approachValue = parsePersistedArtifactApproach(store.readById(approach.artifact_id)).approach;
+      if (this.checkpointer === undefined) throw new Error("produce checkpointer is absent");
+      approachValue = parsePersistedArtifactApproach(store.readById(approach.artifact_id), {
+        routingRepairSummary: acceptedRoutingRepairSummary({
+          context,
+          checkpointer: this.checkpointer,
+          artifact: approach,
+        }),
+      }).approach;
       const parsedDecision = parsePersistedArtifactApproachDecision(
         store.readById(decision.artifact_id),
-        { approach: approachValue }
+        {
+          approach: approachValue,
+          routingRepairSummary: acceptedRoutingRepairSummary({
+            context,
+            checkpointer: this.checkpointer,
+            artifact: decision,
+          }),
+        }
       );
       if (parsedDecision.decision.disposition !== "selected") {
         throw new Error("the exact Demetri decision did not select an approach");
@@ -2011,36 +2808,90 @@ export class ProducePlaybook
         ),
       };
     }
+    // Approach and selection were checked above; they are host operands, not draft feedback.
+    const requestValue = canonicalProduceRequest(store, context);
+    const anchor = latestProductArtifact(context) ?? null;
+    const previous = currentSealDiagnostic(context, store);
     let draftValue: ProducedArtifactDraftV2;
     try {
+      if (this.checkpointer === undefined) throw new Error("produce checkpointer is absent");
       draftValue = parsePersistedProducedArtifactDraftV2(store.readById(draft.artifact_id), {
-        request: canonicalProduceRequest(store, context),
+        request: requestValue,
+        routingRepairSummary: acceptedRoutingRepairSummary({
+          context,
+          checkpointer: this.checkpointer,
+          artifact: draft,
+        }),
       }).draft;
     } catch (error) {
-      if (!(error instanceof ProduceDraftValidationError)) throw error;
-      if (latestSealFeedbackArtifact(context) !== undefined) {
+      if (
+        !(error instanceof ProduceDraftValidationError) ||
+        error.failureClass === "LINEAGE_INVALID"
+      )
+        throw error;
+      const failureClass = error.failureClass;
+      const attempt = sealAttempt({
+        store,
+        policy: runSealPolicy(context, PRODUCE_SEAL_POLICY),
+        registered_policy_sha256: sealPolicySha256(runSealPolicy(context, PRODUCE_SEAL_POLICY)),
+        run_id: context.identity.run_id,
+        branch_id: null,
+        phase: "sealing_artifact",
+        draft_ref: draft,
+        epoch_anchor_ref: anchor,
+        previous_diagnostic_ref: previous?.ref ?? null,
+        rejection_ordinal: previous?.diagnostic.rejection_ordinal ?? 0,
+        project: () => ({
+          status: "rejected",
+          failure_class: failureClass,
+          issues: error.issues.map((detail, index) => ({
+            code: error.failureClass.toLowerCase(),
+            path: `/issues/${index}`,
+            detail:
+              Buffer.byteLength(detail, "utf8") <= 512
+                ? detail
+                : "Draft validation issue exceeds display limit",
+            source_ordinals: [],
+          })),
+        }),
+        validate_product_bytes: () => {
+          throw new Error("rejected draft cannot validate as a product");
+        },
+      });
+      if (attempt.status !== "rejected") {
+        throw new Error(
+          `produce diagnostic host fault: ${attempt.status === "fault" ? attempt.code : "unexpected product"}`
+        );
+      }
+      const added = addSelectedArtifact(context, attempt.diagnostic_ref);
+      if (added) this.hostFault?.("sealing_artifact:feedback-persistence");
+      if (attempt.diagnostic.disposition === "exhausted") {
         return {
           event_type: "produce_seal_repair_exhausted",
           payload: {
             run_id: context.identity.run_id,
-            failure_sha256: sha256(canonicalJson(error.issues)),
+            diagnostic_artifact_id: attempt.diagnostic_ref.artifact_id,
           },
           directive: this.terminal(
             context,
             "incomplete",
             false,
-            [`seal repair exhausted: ${error.failureClass}`],
+            [`seal repair exhausted: ${attempt.diagnostic.failure_class}`],
             undefined,
             {
               incomplete_reason: "seal_repair_exhausted",
               exhausted: true,
               exhaustion_reason: "seal_defect",
+              output_kind: "rejected_draft",
+              seal_diagnostics: sealDiagnosticsProjection(
+                attempt.diagnostic,
+                attempt.diagnostic_ref,
+                runSealPolicy(context, PRODUCE_SEAL_POLICY)
+              ),
             }
           ),
         };
       }
-      const feedback = persistSealFeedback({ context, store, draft, failure: error });
-      if (feedback.added) this.hostFault?.("sealing_artifact:feedback-persistence");
       context.transition("materializing_artifact");
       const next = this.dispatch(context);
       return {
@@ -2048,7 +2899,7 @@ export class ProducePlaybook
         payload: {
           run_id: context.identity.run_id,
           rejected_draft_artifact_id: draft.artifact_id,
-          feedback_artifact_id: feedback.artifact.artifact_id,
+          feedback_artifact_id: attempt.diagnostic_ref.artifact_id,
         },
         directive: next,
       };
@@ -2063,6 +2914,21 @@ export class ProducePlaybook
       draftValue,
     });
     if (sealed.added) this.hostFault?.("sealing_artifact:artifact-persistence");
+    if (this.checkpointer === undefined)
+      throw new Error("mechanical checks checkpointer is absent");
+    const checks = mechanicalCheckValue({ context, store, checkpointer: this.checkpointer });
+    persistVersionedHostArtifact({
+      context,
+      store,
+      phase: "sealing_artifact",
+      branchId: "mechanical",
+      kind: "produce-mechanical-checks",
+      operationLabel: "mechanical-checks",
+      producer: "host:produce-product-validator",
+      contentSchema: { schema_id: "penny.produce-mechanical-checks.v1", schema_version: 1 },
+      upstreamRefs: subjectRefs(currentSubject(context)),
+      content: canonicalJson(checks),
+    });
     context.transition("critiquing_artifact");
     const next = this.dispatch(context);
     return {
@@ -2109,7 +2975,15 @@ export class ProducePlaybook
     effectEvidence?: EffectEvidenceGraphV1
   ): Directive {
     const origin = context.stateId;
-    const output = met ? latestProductArtifact(context) : bestPartial(context);
+    const currentDiagnostic =
+      !met && this.artifactStore !== undefined
+        ? currentSealDiagnostic(context, this.artifactStore)
+        : undefined;
+    const output = met
+      ? latestProductArtifact(context)
+      : extraResult.incomplete_reason === "seal_repair_exhausted"
+        ? latestDraftArtifact(context)
+        : bestPartial(context);
     const effects = this.terminalEffectEvidence(context, effectEvidence);
     if (met && output === undefined) throw new Error("positive produce terminal has no product");
     const graph = met
@@ -2132,6 +3006,25 @@ export class ProducePlaybook
         met,
         output_artifact_ref: output ?? null,
         best_partial_artifact_refs: met || output === undefined ? [] : [output],
+        ...(!met && output !== undefined
+          ? {
+              output_kind:
+                output.kind === "semantic-core"
+                  ? "accepted_product_best_partial"
+                  : output.kind.endsWith("-draft")
+                    ? "rejected_draft_best_partial"
+                    : "unreviewed_best_partial",
+            }
+          : {}),
+        ...(currentDiagnostic === undefined
+          ? {}
+          : {
+              seal_diagnostics: sealDiagnosticsProjection(
+                currentDiagnostic.diagnostic,
+                currentDiagnostic.ref,
+                runSealPolicy(context, PRODUCE_SEAL_POLICY)
+              ),
+            }),
         ...extraResult,
         effect_assurance: effects.assurance,
         effect_limitation: effects.limitations[0] ?? null,
@@ -2212,16 +3105,34 @@ export function evaluateProduceLatestReviewedArtifactDod(
       return { passed: false, evidence_refs: [] };
     }
     const request = canonicalProduceRequest(reader, input.context);
-    const approach = parsePersistedArtifactApproach(
-      reader.readById(subject.approach.artifact_id)
-    ).approach;
-    parsePersistedArtifactApproachDecision(reader.readById(subject.decision.artifact_id), {
-      approach,
-    });
+    const approach = parsePersistedArtifactApproach(reader.readById(subject.approach.artifact_id), {
+      routingRepairSummary: acceptedRoutingRepairSummary({
+        context: input.context,
+        checkpointer: input.checkpointer,
+        artifact: subject.approach,
+      }),
+    }).approach;
+    const decision = parsePersistedArtifactApproachDecision(
+      reader.readById(subject.decision.artifact_id),
+      {
+        approach,
+        routingRepairSummary: acceptedRoutingRepairSummary({
+          context: input.context,
+          checkpointer: input.checkpointer,
+          artifact: subject.decision,
+        }),
+      }
+    ).decision;
+    if (decision.disposition !== "selected") return { passed: false, evidence_refs: [] };
     const draft = parsePersistedProducedArtifactDraftV2(
       reader.readById(subject.draft.artifact_id),
       {
         request,
+        routingRepairSummary: acceptedRoutingRepairSummary({
+          context: input.context,
+          checkpointer: input.checkpointer,
+          artifact: subject.draft,
+        }),
       }
     ).draft;
     const product = validateCanonicalProducedArtifactV2Bytes(
@@ -2254,6 +3165,38 @@ export function evaluateProduceLatestReviewedArtifactDod(
     const validity = readCanonicalJson(reader, validityRef, validateProduceValidityReceiptV2);
     const integrity = readCanonicalJson(reader, integrityRef, validateProduceProductIntegrityV2);
     const envelope = readCanonicalJson(reader, envelopeRef, validateProduceProductEnvelopeV2);
+    verifyMechanicalChecks({
+      context: input.context,
+      store: reader,
+      checkpointer: input.checkpointer,
+    });
+    for (const [state, report, receipt] of [
+      ["critiquing_artifact", quality.carren_report_ref, quality],
+      ["verifying_artifact", validity.vera_report_ref, validity],
+    ] as const) {
+      if (canonicalJson(report) !== canonicalJson(latestReviewReport(input.context, state)))
+        return { passed: false, evidence_refs: [] };
+      const group = exactAcceptedExecutionGroup({
+        context: input.context,
+        checkpointer: input.checkpointer,
+        artifact: report,
+      });
+      if (group.routed.worker_receipt.receipt_id !== receipt.execution_receipt_id)
+        return { passed: false, evidence_refs: [] };
+      checkedReview({
+        context: input.context,
+        store: reader,
+        checkpointer: input.checkpointer,
+        ...(input.verifyExecutionReceipt === undefined
+          ? {}
+          : { verifyExecutionReceipt: input.verifyExecutionReceipt }),
+        state,
+        report,
+        details: group.routed.details,
+        confidence: group.routed.confidence,
+        executionGroup: group,
+      });
+    }
     const expectedExecutionReceiptIds = exactExecutionReceiptIds({
       context: input.context,
       checkpointer: input.checkpointer,
@@ -2363,6 +3306,7 @@ export function evaluateProduceLatestReviewedArtifactDod(
     const evidence_refs = integrity.execution_receipt_ids.map((receiptId) => {
       const result = input.checkpointer.receiptResultById(receiptId);
       if (result === undefined) throw new Error(`execution receipt '${receiptId}' is absent`);
+      input.verifyExecutionReceipt?.(result.worker_receipt);
       return {
         kind: "execution_receipt",
         reference_id: receiptId,
@@ -2382,8 +3326,156 @@ export const PRODUCE_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<
   ["produce_latest_reviewed_artifact_dod.v1", evaluateProduceLatestReviewedArtifactDod],
 ]);
 
-export const PRODUCE_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
+/** Registration-only pure view. No product/review writes and no completion authority. */
+function produceReviewProjector(state: ReviewState): PhaseResultProjectorV1 {
+  return {
+    declaration: {
+      schema_id: "penny.produce-review-semantic-projection.v1",
+      schema_version: 1,
+      registration_name: PRODUCE_PLAYBOOK_NAME,
+      state_id: state,
+      agent: PRODUCE_AGENT_BY_STATE[state],
+      result_schema_id:
+        state === "critiquing_artifact"
+          ? "penny.produce.quality-review-summary.v1"
+          : "penny.produce.validity-review-summary.v1",
+      result_schema_version: 1,
+    },
+    project: ({ bytes, source, inputArtifacts, artifacts }) => {
+      const runId = source.run_id;
+      if (
+        bytes.length === 0 ||
+        bytes.length > MAX_PERSISTED_PRODUCE_DRAFT_BYTES ||
+        source.kind !== "agent-output" ||
+        source.phase !== state ||
+        source.branch_id !== null ||
+        source.producer !== `agent:${PRODUCE_AGENT_BY_STATE[state]}` ||
+        source.byte_length !== bytes.length ||
+        source.content_digest !== sha256(bytes) ||
+        canonicalJson(artifacts.refById(source.artifact_id)) !== canonicalJson(source)
+      ) {
+        throw new Error("Produce review projection source custody mismatch");
+      }
+      const refs = inputArtifacts.artifacts
+        .filter((binding) => binding.designation !== "context")
+        .map((binding) => binding.ref);
+      const one = (predicate: (ref: ArtifactRef) => boolean): ArtifactRef => {
+        const matches = refs.filter(predicate);
+        const ref = matches[0];
+        if (
+          matches.length !== 1 ||
+          ref === undefined ||
+          ref.run_id !== runId ||
+          ref.branch_id !== (ref.kind === "produce-mechanical-checks" ? "mechanical" : null) ||
+          canonicalJson(artifacts.refById(ref.artifact_id)) !== canonicalJson(ref)
+        ) {
+          throw new Error("Produce review projection operand custody mismatch");
+        }
+        const bytes = artifacts.readById(ref.artifact_id);
+        if (bytes.length !== ref.byte_length || sha256(bytes) !== ref.content_digest)
+          throw new Error("Produce review operand byte custody mismatch");
+        return ref;
+      };
+      const productRef = one(
+        (ref) =>
+          ref.kind === "semantic-core" &&
+          ref.phase === "sealing_artifact" &&
+          ref.producer === "host:artifact-sealer" &&
+          ref.content_schema?.schema_id === "penny.produced-artifact.v2" &&
+          ref.content_schema.schema_version === 2
+      );
+      const product = validateCanonicalProducedArtifactV2Bytes(
+        artifacts.readById(productRef.artifact_id),
+        productRef
+      );
+      if (product.effect_evidence.run_id !== runId) throw new Error("Produce product run mismatch");
+      const requestRef = one(
+        (ref) =>
+          ref.kind === "produce-request" &&
+          ref.phase === "intake" &&
+          ref.producer === "host:request-admission" &&
+          ref.content_schema?.schema_id === "penny.produce-request.v1" &&
+          ref.content_schema.schema_version === 1
+      );
+      const approachRef = one(
+        (ref) =>
+          ref.kind === "artifact-approach" &&
+          ref.phase === "exploring_artifact_approaches" &&
+          ref.producer === "agent:ida" &&
+          ref.content_schema?.schema_id === "penny.artifact-approach.v1" &&
+          ref.content_schema.schema_version === 1
+      );
+      const decisionRef = one(
+        (ref) =>
+          ref.kind === "artifact-approach-decision" &&
+          ref.phase === "selecting_artifact_approach" &&
+          ref.producer === "agent:demetri" &&
+          ref.content_schema?.schema_id === "penny.artifact-approach-decision.v1" &&
+          ref.content_schema.schema_version === 1
+      );
+      const draftRef = one(
+        (ref) =>
+          ref.kind === "produced-artifact-draft" &&
+          ref.phase === "materializing_artifact" &&
+          ref.producer === "agent:skribble" &&
+          ref.content_schema?.schema_id === "penny.produced-artifact-draft.v2" &&
+          ref.content_schema.schema_version === 2
+      );
+      if (
+        product.source_lineage.request_artifact_id !== requestRef.artifact_id ||
+        product.source_lineage.request_artifact_sha256 !== requestRef.content_digest ||
+        product.source_lineage.approach_artifact_id !== approachRef.artifact_id ||
+        product.source_lineage.approach_artifact_sha256 !== approachRef.content_digest ||
+        product.source_lineage.decision_artifact_id !== decisionRef.artifact_id ||
+        product.source_lineage.decision_artifact_sha256 !== decisionRef.content_digest ||
+        product.source_lineage.draft_artifact_id !== draftRef.artifact_id ||
+        product.source_lineage.draft_artifact_sha256 !== draftRef.content_digest
+      )
+        throw new Error("Produce review product/source lineage mismatch");
+      let hostCheckRef: ArtifactRef | undefined;
+      if (state === "verifying_artifact") {
+        hostCheckRef = one((ref) => ref.kind === "produce-mechanical-checks");
+        if (
+          hostCheckRef.phase !== "sealing_artifact" ||
+          hostCheckRef.branch_id !== "mechanical" ||
+          hostCheckRef.producer !== "host:produce-product-validator" ||
+          hostCheckRef.content_schema?.schema_id !== "penny.produce-mechanical-checks.v1" ||
+          hostCheckRef.content_schema.schema_version !== 1
+        )
+          throw new Error("Produce host check role mismatch");
+        const checks = readCanonicalJson(artifacts, hostCheckRef, validateProduceMechanicalChecks);
+        const expected = validateProduceMechanicalChecks({
+          schema_id: "penny.produce-mechanical-checks.v1",
+          schema_version: 1,
+          status: "PASS",
+          run_id: runId,
+          request_ref: requestRef,
+          approach_ref: approachRef,
+          decision_ref: decisionRef,
+          draft_ref: draftRef,
+          product_ref: productRef,
+          checks: [...PRODUCE_MECHANICAL_CHECK_NAMES],
+          product_effect_evidence_sha256: effectEvidenceSha256(product.effect_evidence),
+          scope: "host_mechanical_only_not_semantic_or_effect_absence",
+        });
+        if (canonicalJson(checks) !== canonicalJson(expected)) {
+          throw new Error("Produce projection host/product bindings disagree");
+        }
+      }
+      const { core } = parsePersistedProduceReview(bytes, {
+        state,
+        productRef,
+        ...(hostCheckRef === undefined ? {} : { hostCheckRef }),
+      });
+      return { confidence: core.confidence, details: core.review };
+    },
+  };
+}
+
+export const PRODUCE_PLAYBOOK_REGISTRATION: PlaybookRegistration = {
   name: PRODUCE_PLAYBOOK_NAME,
+  repair_progress_policy: "exact_fingerprint_v1",
+  seal_policy: PRODUCE_SEAL_POLICY,
   contract: PRODUCE_SKILL_CONTRACT,
   ingress: "skill",
   start_admission: PRODUCE_START_ADMISSION,
@@ -2451,18 +3543,20 @@ export const PRODUCE_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
         "critiquing_artifact",
         {
           agent: "carren",
-          result_schema_id: "penny.produce.quality-summary.v1",
+          result_schema_id: "penny.produce.quality-review-summary.v1",
           result_schema_version: 1,
-          schema: QualitySummarySchema,
+          schema: ProduceQualityReviewSummaryV1Schema,
+          result_projection: produceReviewProjector("critiquing_artifact"),
         },
       ],
       [
         "verifying_artifact",
         {
           agent: "vera",
-          result_schema_id: "penny.produce.validity-summary.v1",
+          result_schema_id: "penny.produce.validity-review-summary.v1",
           result_schema_version: 1,
-          schema: ValiditySummarySchema,
+          schema: ProduceValidityReviewSummaryV1Schema,
+          result_projection: produceReviewProjector("verifying_artifact"),
         },
       ],
     ]),
@@ -2474,6 +3568,7 @@ export const PRODUCE_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
       options.artifactStore,
       options.checkpointer,
       undefined,
-      options.effectEvidenceProvider
+      options.effectEvidenceProvider,
+      options.verifyExecutionReceipt
     ),
 };

@@ -23,4 +23,4 @@ Produce a causal decomposition, not a diagnosis. Map every supplied symptom, obs
 
 Emit a concise, complete causal-decomposition report followed by exactly one compact final SUMMARY line:
 
-`SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","complete":true}`
+SUMMARY:{"confidence":"PROBABLE","complete":true}

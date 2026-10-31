@@ -12,7 +12,7 @@ import { performance } from "node:perf_hooks";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { SaveClaimError, SaveQueryClaimStore, saveClaimStoreDir } from "../src/kb/save-claim.js";
+import { SaveClaimError, SaveQueryClaimStore, saveClaimStoreDir } from "../dist/kb/save-claim.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 import { crashAuthorityTransaction, runAuthorityRace } from "./fixtures/authority-race-harness.js";
 

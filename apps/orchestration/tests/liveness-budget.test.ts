@@ -4,19 +4,25 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
-import type { RunIdentity } from "../src/contracts.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import {
+  LivenessPolicySchema,
+  LivenessPolicyV1Schema,
+  LivenessPolicyV2Schema,
+  validateContract,
+  type RunIdentity,
+} from "../dist/contracts.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { decodeCurrentLivenessPolicy, RetiredLivenessPolicyError } from "../dist/durable-state.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import {
   LivenessController,
   LivenessExhaustedError,
-  activeWorkLivenessPolicy,
-  legacyResearchLivenessPolicy,
   malformedErrorDigest,
   researchLivenessPolicy,
   researchThinkingLevelForLivenessPreset,
-} from "../src/liveness.js";
+} from "../dist/liveness.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const directories: string[] = [];
@@ -84,7 +90,45 @@ describe("research liveness inference effort", () => {
   });
 });
 
-describe("durable liveness budgets", () => {
+describe("current durable liveness contract", () => {
+  it("accepts only the closed current execution codec without changing its input", () => {
+    const policy = researchLivenessPolicy("standard");
+    const original = structuredClone(policy);
+    expect(decodeCurrentLivenessPolicy(policy)).toEqual(original);
+    for (const value of [
+      null,
+      { ...policy, schema_version: 4 },
+      { ...policy, worker_wall_clock_ms: 1 },
+      { ...policy, unknown_provider_phase_inactivity_ms: 0 },
+    ]) {
+      expect(() => decodeCurrentLivenessPolicy(value)).toThrow();
+    }
+    expect(policy).toEqual(original);
+  });
+
+  it("keeps a worker's resolved model binding exact and refuses rebinding without mutation", () => {
+    const root = temporaryDirectory();
+    const { checkpointer, liveness, engine } = runtime(root, () => 0);
+    const runId = "exact-model-lease";
+    start(engine, root, runId);
+    liveness.startWorker({
+      runId,
+      workerId: "worker",
+      stateId: "planning",
+      branchId: null,
+      purpose: "phase",
+    });
+    const input = { runId, workerId: "worker", providerId: "openai-codex", modelId: "gpt-5.6-sol" };
+    const binding = liveness.bindWorkerProgressLease(input);
+    const before = checkpointer.events(runId);
+    expect(liveness.bindWorkerProgressLease(input)).toEqual(binding);
+    expect(() => liveness.bindWorkerProgressLease({ ...input, modelId: "another-model" })).toThrow(
+      "already bound to another model"
+    );
+    expect(checkpointer.events(runId)).toEqual(before);
+    checkpointer.close();
+  });
+
   it("projects the Quick inactivity lease and accepts past former worker external-call counts", () => {
     const root = temporaryDirectory();
     let now = 750;
@@ -278,7 +322,7 @@ describe("durable liveness budgets", () => {
     checkpointer.close();
   });
 
-  it("expires a stalled V3 worker at the exact inactivity boundary", () => {
+  it("expires a stalled worker at the exact inactivity boundary", () => {
     const root = temporaryDirectory();
     let now = 0;
     const { checkpointer, liveness, engine } = runtime(root, () => now);
@@ -412,7 +456,7 @@ describe("durable liveness budgets", () => {
     checkpointer.close();
   });
 
-  it("retains wall-time telemetry but does not charge process downtime to a V3 lease", () => {
+  it("retains wall-time telemetry but does not charge process downtime to a current lease", () => {
     const root = temporaryDirectory();
     let now = 0;
     const { checkpointer, liveness, engine } = runtime(root, () => now);
@@ -497,80 +541,133 @@ describe("durable liveness budgets", () => {
     checkpointer.close();
   });
 
-  it("replays an exact V2 active-work policy without reinterpreting it as a lease", () => {
-    const root = temporaryDirectory();
-    const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
-    const run = RunContext.create({
-      identity: identity("v2-continuation-run"),
-      goal: "V2 continuation",
-      constraints: { mode: "quick" },
-      projectRoot: root,
-      trustProfile: "trusted-interactive",
-      maxSteps: 96,
-    });
-    checkpointer.createRun(run, "run_started", { fixture: true });
-    const original = new LivenessController(checkpointer, () => 0);
-    original.setPolicyResolver(() =>
-      activeWorkLivenessPolicy({
+  it.each([1, 2] as const)(
+    "refuses pending V%s policy records without changing retained state",
+    (version) => {
+      const root = temporaryDirectory();
+      const source = runtime(root, () => 0);
+      const runId = "retired-v" + version + "-run";
+      start(source.engine, root, runId);
+      const run = source.checkpointer.loadRunById(runId);
+      if (run === undefined || run.pendingDirective === null)
+        throw new Error("pending fixture is absent");
+      source.checkpointer.close();
+
+      const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+      const bytes = Buffer.from("Retained historical output: never delete or rewrite.");
+      const ref = artifacts.persist({
+        metadata: {
+          schema_version: 2,
+          run_id: runId,
+          phase: "planning",
+          branch_id: null,
+          kind: "agent-output",
+          operation_id: "retained-history",
+          version: 1,
+          producer: "piper",
+          media_type: "text/plain",
+          parent_ref: null,
+          upstream_refs: [],
+        },
+        content: bytes,
+      });
+      run.selectedArtifacts.push(ref);
+      const filename = path.join(root, "retained.db");
+      const stored = new Checkpointer(filename);
+      stored.createRun(run, "retained_fixture", { fixture: true });
+      const protections = {
         scope: "research",
         preset: "quick",
-        worker_active_work_budget_ms: 5 * 60_000,
-        run_active_work_budget_ms: 15 * 60_000,
-      })
-    );
-    expect(original.bindPolicy(run).schema_version).toBe(2);
-    const recovered = new LivenessController(checkpointer, () => 20 * 60_000);
-    recovered.setPolicyResolver(() => researchLivenessPolicy("quick"));
-    const bound = recovered.bindPolicy(run);
-    expect(bound.schema_version).toBe(2);
-    expect(bound).toHaveProperty("worker_active_work_budget_ms", 5 * 60_000);
-    checkpointer.close();
-  });
+        malformed_results_per_state_branch: 2,
+        identical_malformed_digest_limit: 2,
+        protocol_errors_per_worker: 4,
+        identical_protocol_digest_limit: 2,
+        routing_repair: {
+          max_invocations_per_state_branch: 1,
+          model_turns_per_worker: 4,
+          tool_calls_per_worker: 2,
+          external_calls_per_worker: 0,
+          worker_wall_clock_ms: 120_000,
+        },
+      };
+      const policy =
+        version === 1
+          ? validateContract(
+              LivenessPolicyV1Schema,
+              {
+                ...protections,
+                schema_version: 1,
+                total_phase_repair_invocations: 6,
+                model_turns_per_worker: 16,
+                model_turns_per_run: 48,
+                tool_calls_per_worker: 20,
+                tool_calls_per_run: 64,
+                external_calls_per_worker: 8,
+                external_calls_per_run: 12,
+                worker_wall_clock_ms: 300_000,
+                run_wall_clock_ms: 900_000,
+              },
+              "historical V1 fixture"
+            )
+          : validateContract(
+              LivenessPolicyV2Schema,
+              {
+                ...protections,
+                schema_version: 2,
+                worker_active_work_budget_ms: 300_000,
+                run_active_work_budget_ms: 900_000,
+              },
+              "historical V2 fixture"
+            );
+      expect(() => validateContract(LivenessPolicySchema, policy, "current policy")).toThrow();
+      expect(() => decodeCurrentLivenessPolicy(policy)).toThrow(RetiredLivenessPolicyError);
+      stored.appendLivenessEvent(runId, "liveness_policy_bound", {
+        schema_version: 1,
+        at_ms: 0,
+        policy,
+      });
+      stored.appendLivenessEvent(runId, "liveness_worker_started", {
+        schema_version: 1,
+        at_ms: 0,
+        worker_id: "interrupted-legacy-worker",
+        state_id: "planning",
+        branch_id: null,
+        purpose: "phase",
+      });
+      const beforeEvents = stored.events(runId);
+      const beforeSnapshot = stored.loadRun(run.identity).snapshot();
+      stored.close();
 
-  it("recovers an exact V1 bound policy rather than resolving it as V3", () => {
-    const root = temporaryDirectory();
-    const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
-    const run = RunContext.create({
-      identity: identity("v1-continuation-run"),
-      goal: "V1 continuation",
-      constraints: { mode: "quick" },
-      projectRoot: root,
-      trustProfile: "trusted-interactive",
-      maxSteps: 96,
-    });
-    checkpointer.createRun(run, "run_started", { fixture: true });
-    const original = new LivenessController(checkpointer, () => 0);
-    original.setPolicyResolver(() => legacyResearchLivenessPolicy("quick"));
-    expect(original.bindPolicy(run).schema_version).toBe(1);
-    const recovered = new LivenessController(checkpointer, () => 1);
-    recovered.setPolicyResolver(() => researchLivenessPolicy("quick"));
-    const bound = recovered.bindPolicy(run);
-    expect(bound.schema_version).toBe(1);
-    recovered.admitInvocation({
-      runId: run.identity.run_id,
-      stateId: "researching",
-      branchId: "v1",
-      attempt: 1,
-      purpose: "phase",
-    });
-    recovered.startWorker({
-      runId: run.identity.run_id,
-      workerId: "v1-worker",
-      stateId: "researching",
-      branchId: "v1",
-      purpose: "phase",
-    });
-    const sink = recovered.sessionSink({
-      runId: run.identity.run_id,
-      workerId: "v1-worker",
-      stateId: "researching",
-    });
-    for (let index = 0; index < 8; index += 1) sink({ kind: "tool_call", tool_name: "web_fetch" });
-    expect(() => sink({ kind: "tool_call", tool_name: "web_fetch" })).toThrowError(
-      new LivenessExhaustedError("external_request_budget_exhausted")
-    );
-    checkpointer.close();
-  });
+      const reopened = new Checkpointer(filename);
+      const controller = new LivenessController(reopened, () => 3_600_000);
+      const engine = new OrchestrationEngine(reopened, {
+        projectRoot: root,
+        receiptAuthority: TEST_RECEIPT_AUTHORITY,
+        livenessController: controller,
+      });
+      for (const action of ["status", "recover", "cancel"] as const) {
+        expect(() => engine.handle({ schema_version: 2, action, identity: run.identity })).toThrow(
+          "retired liveness policy format: runtime execution refused; retained checkpoint unchanged"
+        );
+        expect(reopened.events(runId)).toEqual(beforeEvents);
+        expect(reopened.loadRun(run.identity).snapshot()).toEqual(beforeSnapshot);
+        expect(artifacts.refById(ref.artifact_id)).toEqual(ref);
+        expect(artifacts.readById(ref.artifact_id)).toEqual(bytes);
+      }
+      expect(() =>
+        controller.admitInvocation({
+          runId,
+          stateId: "planning",
+          branchId: null,
+          attempt: 2,
+          purpose: "phase",
+        })
+      ).toThrow(RetiredLivenessPolicyError);
+      expect(reopened.events(runId)).toEqual(beforeEvents);
+      artifacts.close();
+      reopened.close();
+    }
+  );
 
   it("quarantines active legacy runs without guessing historical spend", () => {
     const root = temporaryDirectory();
@@ -597,9 +694,231 @@ describe("durable liveness budgets", () => {
     checkpointer.close();
   });
 
-  it("stalls on the second identical malformed digest and exhausts on a second distinct one", () => {
+  it("fences interrupted and cancelled workers while a fresh recovered lease can progress", () => {
+    const root = temporaryDirectory();
+    let now = 0;
+    const original = runtime(root, () => now);
+    const runId = "current-recovery-fences";
+    start(original.engine, root, runId);
+    original.liveness.startWorker({
+      runId,
+      workerId: "interrupted",
+      stateId: "planning",
+      branchId: null,
+      purpose: "phase",
+    });
+    const binding = original.liveness.bindWorkerProgressLease({
+      runId,
+      workerId: "interrupted",
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+    });
+    const bound = original.liveness.policy(runId);
+    const pending = original.checkpointer.loadRun(identity(runId)).pendingDirective;
+    original.checkpointer.close();
+
+    now = 24 * 60 * 60_000;
+    const recovered = runtime(root, () => now);
+    expect(recovered.liveness.workerInactivityLease(runId, "interrupted").binding).toEqual(binding);
+    expect(
+      recovered.engine.handle({ schema_version: 2, action: "recover", identity: identity(runId) })
+    ).toEqual(pending);
+    expect(recovered.liveness.policy(runId)).toEqual(bound);
+    const ended = recovered.checkpointer
+      .events(runId)
+      .filter((event) => event.eventType === "liveness_worker_ended");
+    expect(ended.map((event) => event.payload)).toContainEqual(
+      expect.objectContaining({ worker_id: "interrupted", outcome: "error" })
+    );
+    const staleSink = recovered.liveness.sessionSink({
+      runId,
+      workerId: "interrupted",
+      stateId: "planning",
+    });
+    const beforeStale = recovered.checkpointer.events(runId);
+    expect(() =>
+      staleSink({ kind: "activity", activity_class: "assistant_text_delta", observed_units: 1 })
+    ).toThrow("no open worker lease");
+    expect(recovered.checkpointer.events(runId)).toEqual(beforeStale);
+
+    recovered.liveness.startWorker({
+      runId,
+      workerId: "fresh",
+      stateId: "planning",
+      branchId: null,
+      purpose: "phase",
+    });
+    const freshSink = recovered.liveness.sessionSink({
+      runId,
+      workerId: "fresh",
+      stateId: "planning",
+    });
+    const beforeEmpty = recovered.checkpointer.events(runId);
+    expect(() =>
+      freshSink({ kind: "activity", activity_class: "assistant_text_delta", observed_units: 0 })
+    ).toThrow("bounded positive integer");
+    expect(recovered.checkpointer.events(runId)).toEqual(beforeEmpty);
+    now += 1;
+    freshSink({ kind: "activity", activity_class: "assistant_text_delta", observed_units: 1 });
+    expect(
+      recovered.liveness.workerPromptBudget(runId, "fresh").inactivity_lease
+        .accepted_progress_signals
+    ).toBe(1);
+    const cancelled = recovered.engine.handle({
+      schema_version: 2,
+      action: "cancel",
+      identity: identity(runId),
+    });
+    expect(cancelled.action).toBe("cancelled");
+    expect(recovered.liveness.snapshot(runId).open_workers).toBe(0);
+    const beforeLate = recovered.checkpointer.events(runId);
+    expect(() =>
+      freshSink({ kind: "activity", activity_class: "assistant_text_delta", observed_units: 1 })
+    ).toThrow("no open worker lease");
+    expect(recovered.checkpointer.events(runId)).toEqual(beforeLate);
+    expect(
+      recovered.engine.handle({ schema_version: 2, action: "recover", identity: identity(runId) })
+    ).toEqual(cancelled);
+    recovered.checkpointer.close();
+  });
+
+  it("preserves explicit routing-repair limits without imposing ordinary-work quotas", () => {
+    const root = temporaryDirectory();
+    const { checkpointer, liveness, engine } = runtime(root, () => 0);
+    liveness.setPolicyResolver(() => ({
+      ...researchLivenessPolicy("quick"),
+      routing_repair: {
+        max_invocations_per_state_branch: 1,
+        model_turns_per_worker: 1,
+        tool_calls_per_worker: 2,
+        external_calls_per_worker: 0,
+      },
+    }));
+    const runId = "operator-repair-limits";
+    start(engine, root, runId);
+    const attempt = {
+      runId,
+      stateId: "planning",
+      branchId: null,
+      attempt: 1,
+      purpose: "routing_repair",
+    } as const;
+    liveness.admitInvocation(attempt);
+    const beforeAdmission = checkpointer.events(runId);
+    expect(() => liveness.admitInvocation({ ...attempt, attempt: 2 })).toThrowError(
+      new LivenessExhaustedError("malformed_result_budget_exhausted")
+    );
+    expect(checkpointer.events(runId)).toEqual(beforeAdmission);
+    liveness.startWorker({ ...attempt, workerId: "repair" });
+    const repair = liveness.sessionSink({ runId, workerId: "repair", stateId: "planning" });
+    repair({ kind: "model_turn", source: "turn_start" });
+    expect(() => repair({ kind: "model_turn", source: "turn_start" })).toThrowError(
+      new LivenessExhaustedError("model_turn_budget_exhausted")
+    );
+    expect(() => repair({ kind: "tool_call", tool_name: "web_fetch" })).toThrowError(
+      new LivenessExhaustedError("external_request_budget_exhausted")
+    );
+    repair({ kind: "tool_call", tool_name: "artifact_read" });
+    repair({ kind: "tool_call", tool_name: "artifact_read" });
+    const beforeTool = checkpointer.events(runId);
+    expect(() => repair({ kind: "tool_call", tool_name: "artifact_read" })).toThrowError(
+      new LivenessExhaustedError("tool_call_budget_exhausted")
+    );
+    expect(checkpointer.events(runId)).toEqual(beforeTool);
+    expect(liveness.workerPromptBudget(runId, "repair")).toHaveProperty("inactivity_lease");
+    liveness.endWorker(runId, "repair", "complete");
+    liveness.startWorker({ ...attempt, purpose: "phase", workerId: "ordinary" });
+    const ordinary = liveness.sessionSink({ runId, workerId: "ordinary", stateId: "planning" });
+    for (let index = 0; index < 8; index += 1) {
+      ordinary({ kind: "model_turn", source: "turn_start" });
+      ordinary({ kind: "tool_call", tool_name: "web_fetch" });
+      expect(
+        liveness.chargeMalformed({
+          runId,
+          stateId: "planning",
+          branchId: null,
+          digest: "a".repeat(64),
+        })
+      ).toBeNull();
+    }
+    expect(liveness.snapshot(runId)).toMatchObject({
+      model_turns: 9,
+      tool_calls: 10,
+      external_calls: 8,
+      malformed_results: 8,
+    });
+    checkpointer.close();
+  });
+
+  it("retains explicit protocol-error and repeated-error limits under the current policy", () => {
+    const root = temporaryDirectory();
+    const { checkpointer, liveness, engine } = runtime(root, () => 0);
+    for (const identical of [false, true]) {
+      const runId = identical ? "identical-protocol-limit" : "protocol-count-limit";
+      liveness.setPolicyResolver(() => ({
+        ...researchLivenessPolicy("quick"),
+        protocol_errors_per_worker: identical ? null : 2,
+        identical_protocol_digest_limit: identical ? 2 : null,
+      }));
+      start(engine, root, runId);
+      liveness.startWorker({
+        runId,
+        workerId: runId,
+        stateId: "planning",
+        branchId: null,
+        purpose: "phase",
+      });
+      const sink = liveness.sessionSink({ runId, workerId: runId, stateId: "planning" });
+      const event = {
+        kind: "protocol_error",
+        tool_name: "read_phase_brief",
+        error_code: "schema_invalid",
+      } as const;
+      sink(event);
+      expect(() => sink(event)).toThrowError(
+        new LivenessExhaustedError(
+          identical ? "identical_error_stall" : "protocol_error_budget_exhausted"
+        )
+      );
+      expect(new LivenessController(checkpointer, () => 0).snapshot(runId).protocol_errors).toBe(2);
+    }
+    checkpointer.close();
+  });
+
+  it("enforces an explicit malformed policy and retains it across restart", () => {
     const root = temporaryDirectory();
     const { checkpointer, liveness, engine } = runtime(root, () => 10_000);
+    liveness.setPolicyResolver(() => ({
+      ...researchLivenessPolicy("quick"),
+      malformed_results_per_state_branch: 5,
+    }));
+    start(engine, root, "operator-v3-limit");
+    const recovered = new LivenessController(checkpointer, () => 10_000);
+    for (let index = 0; index < 5; index += 1) {
+      expect(
+        recovered.chargeMalformed({
+          runId: "operator-v3-limit",
+          stateId: "researching",
+          branchId: null,
+          digest: "a".repeat(64),
+        })
+      ).toBe(index === 4 ? "malformed_result_budget_exhausted" : null);
+    }
+    expect(recovered.policy("operator-v3-limit")).toMatchObject({
+      schema_version: 3,
+      malformed_results_per_state_branch: 5,
+    });
+    checkpointer.close();
+  });
+
+  it("enforces explicit current malformed and identical-error controls", () => {
+    const root = temporaryDirectory();
+    const { checkpointer, liveness, engine } = runtime(root, () => 10_000);
+    liveness.setPolicyResolver(() => ({
+      ...researchLivenessPolicy("quick"),
+      malformed_results_per_state_branch: 2,
+      identical_malformed_digest_limit: 2,
+    }));
     start(engine, root, "malformed-run");
     const digest = malformedErrorDigest({
       kind: "malformed_result",

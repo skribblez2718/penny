@@ -1428,7 +1428,8 @@ export function parsePersistedAssessmentDraftV2(
     lines.length !== 2 ||
     !lines[0]?.startsWith(DRAFT_PREFIX) ||
     !lines[1]?.startsWith(SUMMARY_PREFIX) ||
-    lines.some((line) => line.trim() !== line || line.includes("`"))
+    // Prefixes and JSON validation reject outer fences; backticks in strings are content.
+    lines.some((line) => line.trim() !== line)
   ) {
     throw new AssessmentDraftValidationError("FRAMING_INVALID", [
       "AssessmentDraftV2 requires exactly one unwrapped draft line and one compact SUMMARY line",

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
+import { Checkpointer } from "../dist/checkpointer.js";
 import {
   STATE_MIGRATION_FINALIZED_MARKER,
   applyStateMigration,
@@ -24,10 +24,11 @@ import {
   type StateMigrationFaultEvent,
   type StateMigrationFaultInjector,
   type StateMigrationFaultPoint,
-} from "../src/state/index.js";
+} from "../dist/state/index.js";
 
 const sqlite = process.getBuiltinModule("node:sqlite");
 const roots: string[] = [];
+let legacyDatabaseBytes: Buffer | undefined;
 
 interface FaultCase {
   readonly point: StateMigrationFaultPoint;
@@ -59,27 +60,36 @@ function fixture(label: string, options: { readonly reconciled?: boolean } = {})
   const projectRoot = path.join(root, "project");
   mkdirSync(projectRoot, { mode: 0o700 });
   const database = path.join(root, "orchestration-source.db");
-  {
-    using _checkpointer = new Checkpointer(database);
+  // Reuse only the closed legacy seed bytes, not a database or connection. Repeating
+  // current-schema provisioning at every fault boundary dominates fixture I/O; each
+  // sandbox still gets its own independent source file and unchanged-byte oracle.
+  if (legacyDatabaseBytes === undefined) {
+    {
+      using _checkpointer = new Checkpointer(database);
+    }
+    const sourceDatabase = new (requireSqlite(
+      sqlite,
+      "apps/orchestration/tests/state-migration-faults.test.ts:66"
+    ).DatabaseSync)(database);
+    sourceDatabase.exec(`
+      DROP TABLE host_operation_calls;
+      DROP TABLE child_workflow_calls;
+      DROP TABLE store_metadata;
+      PRAGMA user_version=9;
+      INSERT INTO runs(
+        run_id,session_id,playbook,engine_owner,schema_version,status,
+        state_id,context_json,created_at,updated_at
+      ) VALUES(
+        'run-fault', 'session-fault', 'research', 'typescript', 2, 'running',
+        'dispatch', '{}', '2026-08-23T00:00:00.000Z', '2026-08-23T00:00:00.000Z'
+      );
+    `);
+    sourceDatabase.close();
+    chmodSync(database, 0o600);
+    legacyDatabaseBytes = readFileSync(database);
+  } else {
+    writeFileSync(database, legacyDatabaseBytes, { mode: 0o600, flush: true });
   }
-  const sourceDatabase = new (requireSqlite(
-    sqlite,
-    "apps/orchestration/tests/state-migration-faults.test.ts:66"
-  ).DatabaseSync)(database);
-  sourceDatabase.exec(`
-    DROP TABLE child_workflow_calls;
-    DROP TABLE store_metadata;
-    PRAGMA user_version=9;
-    INSERT INTO runs(
-      run_id,session_id,playbook,engine_owner,schema_version,status,
-      state_id,context_json,created_at,updated_at
-    ) VALUES(
-      'run-fault', 'session-fault', 'research', 'typescript', 2, 'running',
-      'dispatch', '{}', '2026-08-23T00:00:00.000Z', '2026-08-23T00:00:00.000Z'
-    );
-  `);
-  sourceDatabase.close();
-  chmodSync(database, 0o600);
 
   const key = path.join(root, "receipt-key");
   writeFileSync(key, Buffer.alloc(32, 0x61), { mode: 0o600 });

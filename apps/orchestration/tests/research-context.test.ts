@@ -4,13 +4,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { canonicalJson, sha256 } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import type { ArtifactRef, Directive, JsonValue } from "../src/contracts.js";
-import type { AgentInvocation, ModelClient } from "../src/model-client.js";
-import { resolvePlaybook } from "../src/playbooks/registry.js";
-import { ResearchPlaybook } from "../src/playbooks/research.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { canonicalJson, sha256 } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import type { ArtifactRef, Directive, JsonValue } from "../dist/contracts.js";
+import type { AgentInvocation, ModelClient } from "../dist/model-client.js";
+import { resolvePlaybook } from "../dist/playbooks/registry.js";
+import { ResearchPlaybook } from "../dist/playbooks/research.js";
 import {
   ResearchContextOwnerV1,
   ResearchContextOwnerV2,
@@ -20,7 +20,7 @@ import {
   type ResolvedApprovedKbResultV2,
   type ResolvedVersionedDocumentV1,
   type ResolvedVersionedDocumentV2,
-} from "../src/research-context.js";
+} from "../dist/research-context.js";
 import {
   CONTEXT_CONSUMER_STATES,
   assertResolvedContextContent,
@@ -28,9 +28,9 @@ import {
   researchRuntimeConstraints,
   validateContextSourceRefV2,
   type ResearchRequestV1,
-} from "../src/skill-contracts/research.js";
+} from "../dist/skill-contracts/research.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import { WorkerExecutor } from "../src/worker.js";
+import { WorkerExecutor } from "../dist/worker.js";
 
 const roots: string[] = [];
 const DOCUMENT = "Exact normative document guidance.";
@@ -156,7 +156,7 @@ function providers(
 }
 
 function useBoundary(signal = new AbortController().signal, timeoutMs = 60_000) {
-  return { signal, deadline_ms: Date.now() + timeoutMs };
+  return { signal, inactivity_interval_ms: timeoutMs };
 }
 
 function request(
@@ -377,14 +377,14 @@ function contextWorkers(
   owner: ResearchContextOwnerV2,
   runAgent: ModelClient["runAgent"],
   parallelConcurrency = 1,
-  workerTimeoutMs = 60_000
+  fallbackInactivityLeaseMs = 60_000
 ): WorkerExecutor {
   const registration = resolvePlaybook("research");
   if (registration === undefined) throw new Error("research registration unavailable");
   const workers = new WorkerExecutor({ runAgent }, artifacts, {
     projectRoot: root(),
     parallelConcurrency,
-    workerTimeoutMs,
+    fallbackInactivityLeaseMs,
     registration,
     researchContext: owner,
   });
@@ -1163,7 +1163,7 @@ describe("F12 use-time research context eligibility", () => {
     expect(runAgent).not.toHaveBeenCalled();
   });
 
-  it("rechecks the deadline after a trusted synchronous adapter turn", async () => {
+  it("accepts trusted resolver completion beyond the former total-time deadline", async () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-09-09T11:00:00Z");
     vi.setSystemTime(startedAt);
@@ -1190,12 +1190,12 @@ describe("F12 use-time research context eligibility", () => {
     const execution = contextWorkers(artifacts, owner, runAgent, 1, 1_000).execute(
       contextDirective({ ref, runId: "deadline-recheck-use" })
     );
-    const timedOut = expect(execution).rejects.toThrow(/worker_wall_clock_exhausted/u);
+    const completed = expect(execution).resolves.toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(0);
-    await timedOut;
+    await completed;
     expect(resolver).toHaveBeenCalledTimes(1);
-    expect(runAgent).not.toHaveBeenCalled();
+    expect(runAgent).toHaveBeenCalledTimes(1);
   });
 
   it("times out and aborts a never-resolving provider before the model seam", async () => {
@@ -1205,7 +1205,7 @@ describe("F12 use-time research context eligibility", () => {
     using artifacts = new ArtifactStore(path.join(directory, "artifacts"));
     const admitted = timedDocument("2026-09-09T13:00:00Z");
     let providerSignal: AbortSignal | undefined;
-    let providerDeadlineMs: number | undefined;
+    let providerInactivityMs: number | undefined;
     const resolver = vi.fn(
       async (
         _request: Parameters<
@@ -1214,7 +1214,7 @@ describe("F12 use-time research context eligibility", () => {
         control: Parameters<NonNullable<ResearchContextProviderHandlersV2["versionedDocument"]>>[1]
       ): Promise<ResolvedVersionedDocumentV2> => {
         providerSignal = control.signal;
-        providerDeadlineMs = control.deadline_ms;
+        providerInactivityMs = control.inactivity_interval_ms;
         return new Promise(() => undefined);
       }
     );
@@ -1234,11 +1234,11 @@ describe("F12 use-time research context eligibility", () => {
     const execution = contextWorkers(artifacts, owner, runAgent, 1, 1_000).execute(
       contextDirective({ ref, runId: "never-resolving-use" })
     );
-    const timedOut = expect(execution).rejects.toThrow(/worker_wall_clock_exhausted/u);
+    const timedOut = expect(execution).rejects.toThrow(/worker_inactivity_lease_expired/u);
 
     await vi.advanceTimersByTimeAsync(0);
     expect(resolver).toHaveBeenCalledTimes(1);
-    expect(providerDeadlineMs).toBe(Date.parse("2026-09-09T11:00:01Z"));
+    expect(providerInactivityMs).toBe(1_000);
     await vi.advanceTimersByTimeAsync(1_000);
     await timedOut;
     expect(providerSignal?.aborted).toBe(true);

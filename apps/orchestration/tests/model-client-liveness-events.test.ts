@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   contentFreeSessionLivenessEvent,
   createContentFreeSessionLivenessProjectionState,
-} from "../src/model-client.js";
+} from "../dist/model-client.js";
 
 type SessionEvent = Parameters<typeof contentFreeSessionLivenessEvent>[0];
 

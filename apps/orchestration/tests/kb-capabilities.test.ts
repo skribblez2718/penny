@@ -26,15 +26,18 @@ import {
   mintEnvelope,
   validateEnvelopeCrossField,
   type CapabilityEnvelope,
-} from "../src/kb/capabilities.js";
-import { validateHostCapabilityLease, validateSourceAdmissionRecord } from "../src/kb/contracts.js";
+} from "../dist/kb/capabilities.js";
+import {
+  validateHostCapabilityLease,
+  validateSourceAdmissionRecord,
+} from "../dist/kb/contracts.js";
 import {
   claimCapabilities,
   discardSourceAdmissions,
   mintSourceCapability,
   SimulatedSourceAdmissionCrash,
   sourcesFromAdmissions,
-} from "../src/kb/gate.js";
+} from "../dist/kb/gate.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const dirs: string[] = [];

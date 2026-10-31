@@ -290,7 +290,7 @@ def test_preflight_checks_supported_versions_without_installing(tmp_path: Path) 
         component = item["component"]
         assert isinstance(component, str)
         components.append(component)
-    assert components == ["node", "bun", "pi", "python", "uv"]
+    assert components == ["node", "sqlite", "bun", "pi", "python", "uv"]
 
 
 def test_preflight_rejects_pi_sdk_version_skew(tmp_path: Path) -> None:

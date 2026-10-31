@@ -13,16 +13,15 @@ import {
   resolvePennyRuntimeState,
   RunContext,
   type RunIdentity,
-} from "@penny/orchestration/source";
+} from "@penny/orchestration";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import skillExtension from "../../index.js";
 import type { SkillResult, SkillToolDetails } from "../../skill-utils.js";
-import {
-  createTestExtensionApi,
-  isRecord,
-  requireFunction,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord, requireFunction } from "../../../../lib/tests/test-narrowers.js";
+
+const GOAL = "Exercise the real TypeScript dispatch boundary.";
 
 const REPOSITORY_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -127,7 +126,7 @@ function createAdmissionRow(runId: string): void {
   const checkpointer = openCheckpointer();
   const admitted = RunContext.create({
     identity: identity(runId),
-    goal: "Existing admitted row",
+    goal: GOAL,
     constraints: { mode: "quick" },
     projectRoot,
     trustProfile: "trusted-interactive",
@@ -141,7 +140,7 @@ function createLegacySavedRun(runId: string): string {
   const checkpointer = openCheckpointer();
   const legacy = RunContext.create({
     identity: identity(runId),
-    goal: "Legacy saved run",
+    goal: GOAL,
     constraints: { mode: "quick" },
     projectRoot,
     trustProfile: "trusted-interactive",
@@ -175,7 +174,7 @@ function createCurrentSavedRun(runId: string): string {
     schema_version: 2,
     action: "start",
     identity: identity(runId),
-    goal: "Current saved run",
+    goal: GOAL,
     constraints: { mode: "quick" },
     project_root: projectRoot,
     trust_profile: "trusted-interactive",
@@ -207,7 +206,7 @@ function createTerminalRun(runId: string): void {
     schema_version: 2,
     action: "start",
     identity: identity(runId),
-    goal: "Terminal replay without dispatch",
+    goal: GOAL,
     constraints: { mode: "quick" },
     project_root: projectRoot,
     trust_profile: "trusted-interactive",
@@ -230,7 +229,7 @@ async function invokeSingle(runId: string): Promise<{
     `call-${runId}`,
     {
       skill_name: "research",
-      goal: "Exercise the real TypeScript dispatch boundary.",
+      goal: GOAL,
       session_id: runId,
       constraints: { mode: "quick" },
     },
@@ -330,20 +329,18 @@ describe("real engine to skill adapter dispatch recovery", () => {
     }
   );
 
-  it("reports a persisted admission row without claiming it is resumable", async () => {
+  it("refuses a synthetic admission row missing its immutable native request without mutation", async () => {
     const runId = "integration-admitted-row";
     createAdmissionRow(runId);
-    const result = await invokeSingle(runId);
-
-    expect(result.details.dispatch_pause?.recovery).toMatchObject({
-      kind: "start_retry",
-      checkpoint_exists: true,
-      checkpoint_preserved: true,
-      resumable: false,
+    const checkpointer = openCheckpointer();
+    const before = canonicalJson(checkpointer.loadRun(identity(runId)).snapshot());
+    checkpointer.close();
+    await expect(invokeSingle(runId)).resolves.toMatchObject({
+      details: { success: false, state: "refused", errors: ["SKILL_RECOVERY_BINDING_INVALID"] },
     });
-    const rendered = render(result);
-    expect(rendered).toContain("An admission checkpoint row exists");
-    expect(rendered).not.toContain("then recover run");
+    const reopened = openCheckpointer();
+    expect(canonicalJson(reopened.loadRun(identity(runId)).snapshot())).toBe(before);
+    reopened.close();
   });
 
   it("passes through exact recoverable saved-run facts and preserves checkpoint bytes", async () => {
@@ -373,34 +370,17 @@ describe("real engine to skill adapter dispatch recovery", () => {
     expect(rendered).toContain("from state researching");
   });
 
-  it("preserves typed LEGACY_UNMETERED refusal and never calls it resumable", async () => {
+  it("refuses legacy state without reconstructing missing request custody or mutating its checkpoint", async () => {
     const runId = "integration-legacy-saved";
     const before = createLegacySavedRun(runId);
-    const result = await invokeSingle(runId);
-
-    expect(result.details).toMatchObject({
-      success: false,
-      retriable: false,
-      dispatch_pause: {
-        code: "DISPATCH_PAUSED",
-        recovery: {
-          kind: "saved_but_ineligible",
-          action: "status_or_cancel",
-          ineligibility_code: "LEGACY_UNMETERED",
-          checkpoint_exists: true,
-          checkpoint_preserved: true,
-          resumable: false,
-        },
-      },
+    // Current admission must not invent a request from a retained context row, even
+    // when dispatch is paused. Historical recovery is not a compatibility guarantee.
+    await expect(invokeSingle(runId)).resolves.toMatchObject({
+      details: { success: false, state: "refused", errors: ["SKILL_RECOVERY_BINDING_INVALID"] },
     });
     const checkpointer = openCheckpointer();
     expect(canonicalJson(checkpointer.loadRun(identity(runId)).snapshot())).toBe(before);
     checkpointer.close();
-    const rendered = render(result);
-    expect(rendered).toContain("LEGACY_UNMETERED");
-    expect(rendered).toContain("not eligible to resume");
-    expect(rendered).toMatch(/use status or\s+cancel/u);
-    expect(rendered).not.toContain("then recover run");
   });
 
   it("keeps checkpointless chain steps resumable only through exact chain retry guidance", async () => {

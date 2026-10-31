@@ -2,13 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { createTestExtensionApi } from "../../../../lib/tests/test-narrowers.js";
-import { canonicalJson, sha256 } from "../../../../../apps/orchestration/src/canonical-json.js";
-import type { CurrentArtifactRef } from "../../../../../apps/orchestration/src/contracts.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { canonicalJson, sha256 } from "../../../../../apps/orchestration/dist/canonical-json.js";
+import type { CurrentArtifactRef } from "../../../../../apps/orchestration/dist/contracts.js";
 import scaExtension from "../../index.js";
 import { ScaClientError } from "../../src/client.js";
 import {
-  SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1,
+  SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2,
   SCA_BROKER_SCHEMA_MANIFEST_SHA256,
   SCA_EXTENSION_BROKER_MANIFEST_SHA256,
   SCA_MODEL_TOOL_ROSTER,
@@ -179,7 +179,7 @@ describe("SCA tool registration", () => {
     expect(SCA_PROVIDER_REGISTRATION_V1.tools.map((entry) => entry.tool_name)).toEqual([
       ...SCA_MODEL_TOOL_ROSTER,
     ]);
-    const executeDigest = SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1.schema_digests.find(
+    const executeDigest = SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2.schema_digests.find(
       (entry) => entry.export_name === "ScaBrokerExecuteRequestV1Schema"
     );
     if (executeDigest === undefined) throw new Error("execute schema digest missing");

@@ -31,8 +31,3 @@ User, network, file, environment, browser, integration, or persisted data crosse
 
 - [Injection prevention](injection.md), [file handling](file-handling.md), and [API security](api-security.md) own specialized sinks and interfaces.
 - [Resource limits](resource-limits.md) owns work budgets.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

@@ -24,14 +24,9 @@ Changing runtime settings, public/client configuration, CORS, trusted proxies, h
 ## Verification
 
 - Test invalid/missing configuration, production-safe defaults, client artifact contents, CORS/proxy behavior, headers, and privileged-surface reachability.
-- Inspect effective deployed configuration rather than source templates alone.
+- Inspect effective runtime configuration rather than source templates alone; for deployed services, inspect the deployed configuration. Apply browser, ingress, and privileged-surface checks where those surfaces are affected.
 
 ## Related guidance
 
 - [Secrets](secrets.md) owns credential lifecycle.
 - [Browser security](browser-security.md), [deployment conventions](../deployment-conventions.md), and [error handling](error-handling.md) cover related domains.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

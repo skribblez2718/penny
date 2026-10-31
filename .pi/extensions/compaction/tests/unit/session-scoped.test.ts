@@ -38,6 +38,7 @@ function skillResult(sessionId: string, success = true, toolCallId?: string) {
     session_id: sessionId,
     skill_name: "plan",
     state: success ? "complete" : "error",
+    requires_approval: false,
     steps_total: 1,
     agents_invoked: ["piper"],
     errors: success ? [] : ["skill failed"],

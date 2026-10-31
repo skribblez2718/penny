@@ -29,25 +29,28 @@ import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer, type CheckpointObservation } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { ReceiptAuthority } from "../src/receipts.js";
-import type { Directive } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer, type CheckpointObservation } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { ReceiptAuthority } from "../dist/receipts.js";
+import type { Directive } from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import {
   contentFreeSessionProtocolErrorRecord,
   type AgentSessionTraceRecordV1,
-} from "../src/model-client.js";
+} from "../dist/model-client.js";
 import {
   materializeRunInput,
   readRunInput,
   settleRunInput,
   verifyAndSettleTerminalStart,
-} from "../src/private-inputs.js";
-import { initializePennyState } from "../src/state/index.js";
-import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
-import { scoreAnswerQuality, type AnswerQualityCaseObservation } from "../src/kb/answer-quality.js";
+} from "../dist/private-inputs.js";
+import { initializePennyState } from "../dist/state/index.js";
+import { OrchestrationRunner, WorkerExecutor } from "../dist/worker.js";
+import {
+  scoreAnswerQuality,
+  type AnswerQualityCaseObservation,
+} from "../dist/kb/answer-quality.js";
 import {
   canonicalJson,
   QueryAnswerArtifactSchema,
@@ -58,7 +61,7 @@ import {
   type PageRevisionFrontmatter,
   type QueryAnswerArtifact,
   type QueryVerificationReport,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 import {
   generationCatalogPath,
   generationIndexPath,
@@ -68,17 +71,17 @@ import {
   readPolicy,
   writePageRevision,
   writePolicy,
-} from "../src/kb/filesystem.js";
-import { buildCatalog, buildGenerationIndex, publishGeneration } from "../src/kb/generations.js";
-import { parseRetrievalFixture } from "../src/kb/gate-decisions.js";
-import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
-import { validateQueryRequest } from "../src/kb/parent-delivery.js";
-import { KbSessionProfileGrantStore } from "../src/kb/profile-grants.js";
-import { KbQueryReader } from "../src/kb/query-reader.js";
-import { assessQueryVerification } from "../src/kb/query-verification.js";
-import { RunArtifactStore } from "../src/kb/run-artifacts.js";
-import { KB_PHASE_TOOL_MATRIX } from "../src/kb/session-tools.js";
-import { initKb } from "../src/kb/workflows.js";
+} from "../dist/kb/filesystem.js";
+import { buildCatalog, buildGenerationIndex, publishGeneration } from "../dist/kb/generations.js";
+import { parseRetrievalFixture } from "../dist/kb/gate-decisions.js";
+import { KbWorkerClient } from "../dist/kb/kb-worker-client.js";
+import { validateQueryRequest } from "../dist/kb/parent-delivery.js";
+import { KbSessionProfileGrantStore } from "../dist/kb/profile-grants.js";
+import { KbQueryReader } from "../dist/kb/query-reader.js";
+import { assessQueryVerification } from "../dist/kb/query-verification.js";
+import { RunArtifactStore } from "../dist/kb/run-artifacts.js";
+import { KB_PHASE_TOOL_MATRIX } from "../dist/kb/session-tools.js";
+import { initKb } from "../dist/kb/workflows.js";
 import {
   G8_SMOKE_MANIFEST_PATH,
   g8SmokeCohortIssueCodes,
@@ -684,7 +687,7 @@ async function executeCase(input: {
     const executor = new WorkerExecutor(worker, parentArtifacts, {
       projectRoot: input.projectRoot,
       parallelConcurrency: 1,
-      workerTimeoutMs: input.phaseTimeoutMs,
+      fallbackInactivityLeaseMs: input.phaseTimeoutMs,
     });
     const runner = new OrchestrationRunner(engine, executor);
     directive = await runner.runUntilBoundary(

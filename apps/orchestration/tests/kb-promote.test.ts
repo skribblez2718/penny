@@ -17,15 +17,15 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { validatePromoteRequest, verifyPromotionCandidate } from "../src/kb/promote.js";
-import { initKb } from "../src/kb/workflows.js";
+import { validatePromoteRequest, verifyPromotionCandidate } from "../dist/kb/promote.js";
+import { initKb } from "../dist/kb/workflows.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
-import { claimCapabilities, mintSourceCapability } from "../src/kb/gate.js";
-import { CapabilityStore, envelopeDigest, mintEnvelope } from "../src/kb/capabilities.js";
-import { sha256Hex } from "../src/kb/contracts.js";
-import { readSelectedGeneration } from "../src/kb/generations.js";
-import { approveIngest, createTestOnlyIngestBodyRunner, ingestKb } from "../src/kb/ingest.js";
+import { claimCapabilities, mintSourceCapability } from "../dist/kb/gate.js";
+import { CapabilityStore, envelopeDigest, mintEnvelope } from "../dist/kb/capabilities.js";
+import { sha256Hex } from "../dist/kb/contracts.js";
+import { readSelectedGeneration } from "../dist/kb/generations.js";
+import { approveIngest, createTestOnlyIngestBodyRunner, ingestKb } from "../dist/kb/ingest.js";
 
 const PROFILE = "kbp_promote";
 const SESSION = "sess_promote";

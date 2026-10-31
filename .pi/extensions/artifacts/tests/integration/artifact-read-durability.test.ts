@@ -9,15 +9,16 @@ import {
   Checkpointer,
   applyStateMigration,
   createStateMigrationPlan,
+  encodeCanonicalPng,
   finalizeStateMigration,
   initializePennyState,
   verifyStateMigration,
-} from "@penny/orchestration/source";
+} from "@penny/orchestration";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import artifactExtension from "../../index.js";
 import { executeArtifactRead, loadArtifactRuntimeConfig } from "../../artifact-runtime.js";
-import { createTestExtensionApi } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
 
 interface SqliteModule {
   readonly DatabaseSync: typeof import("node:sqlite").DatabaseSync;
@@ -36,7 +37,9 @@ interface RegisteredArtifactTool {
     signal: AbortSignal | undefined,
     onUpdate: undefined,
     context: ArtifactToolContext
-  ): Promise<{ content: Array<{ type: string; text: string }> }>;
+  ): Promise<{
+    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+  }>;
 }
 
 interface ArtifactReadBody {
@@ -107,7 +110,9 @@ function toolBody(
   result: Awaited<ReturnType<RegisteredArtifactTool["execute"]>>
 ): ArtifactReadBody {
   const first = result.content[0];
-  if (first?.type !== "text") throw new Error("artifact_read returned no text result");
+  if (first?.type !== "text" || first.text === undefined) {
+    throw new Error("artifact_read returned no text result");
+  }
   return parseBody(first.text);
 }
 
@@ -119,8 +124,9 @@ function runtimeBody(result: Awaited<ReturnType<typeof executeArtifactRead>>): A
 }
 
 function artifactFixture(
-  content: string,
-  operationId: string
+  content: string | Uint8Array,
+  operationId: string,
+  mediaType = "text/plain; charset=utf-8"
 ): {
   readonly projectRoot: string;
   readonly stateRoot: string;
@@ -148,7 +154,7 @@ function artifactFixture(
         operation_id: operationId,
         version: 1,
         producer: "agent:fixture",
-        media_type: "text/plain; charset=utf-8",
+        media_type: mediaType,
         parent_ref: null,
         upstream_refs: [],
       },
@@ -282,6 +288,44 @@ if (!PROCESS_CHILD_MODE) {
       ).toBe(0);
     }, 15_000);
 
+    it("delivers canonical PNG bytes by exact ID after a fresh Node process starts", () => {
+      const content = Buffer.from(
+        encodeCanonicalPng({
+          width: 1,
+          height: 1,
+          rgba: Uint8Array.from([20, 40, 60, 255]),
+        })
+      );
+      const fixture = artifactFixture(content, "process-restart-image-operation", "image/png");
+      const here = path.dirname(fileURLToPath(import.meta.url));
+      const vitest = path.resolve(here, "../../node_modules/vitest/vitest.mjs");
+      const config = path.resolve(here, "../vitest.integration.config.ts");
+      const testFile = fileURLToPath(import.meta.url);
+      const child = spawnSync(
+        process.execPath,
+        [vitest, "run", "--config", config, testFile, "--reporter=basic"],
+        {
+          cwd: path.resolve(here, "../.."),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PENNY_ARTIFACT_PROCESS_CHILD: "1",
+            PENNY_ARTIFACT_CHILD_ID: fixture.artifactId,
+            PENNY_ARTIFACT_CHILD_CONTENT_BASE64: content.toString("base64"),
+            PENNY_ARTIFACT_CHILD_MEDIA: "image/png",
+            PENNY_ARTIFACT_CHILD_PROJECT_ROOT: fixture.projectRoot,
+            PENNY_ARTIFACT_CHILD_NOW: String(Date.parse("2226-08-25T12:00:00.000Z")),
+            PENNY_STATE_ROOT: fixture.stateRoot,
+          },
+          maxBuffer: 1024 * 1024,
+        }
+      );
+      expect(
+        child.status,
+        `fresh-process PNG artifact read failed\nstdout:\n${child.stdout}\nstderr:\n${child.stderr}`
+      ).toBe(0);
+    }, 15_000);
+
     it("reads a migrated schema-v1 artifact through the normal schema-v2 runtime", async () => {
       const sandbox = mkdtempSync(path.join(tmpdir(), "penny-artifact-legacy-migration-"));
       roots.push(sandbox);
@@ -397,6 +441,7 @@ if (!PROCESS_CHILD_MODE) {
       const encodedContent = process.env.PENNY_ARTIFACT_CHILD_CONTENT_BASE64;
       const projectRoot = process.env.PENNY_ARTIFACT_CHILD_PROJECT_ROOT;
       const nowValue = process.env.PENNY_ARTIFACT_CHILD_NOW;
+      const mediaType = process.env.PENNY_ARTIFACT_CHILD_MEDIA ?? "text/plain; charset=utf-8";
       if (
         artifactId === undefined ||
         encodedContent === undefined ||
@@ -421,10 +466,31 @@ if (!PROCESS_CHILD_MODE) {
           sessionManager: { getSessionId: () => "reader-session-after-restart" },
         }
       );
-      const body = toolBody(result);
-      expect(body.content).toBe(Buffer.from(encodedContent, "base64").toString("utf8"));
-      expect(body.artifact_ref.run_id).toBe("producer-session-a");
-      expect(body.truncated).toBe(false);
+      if (mediaType === "image/png") {
+        const metadataContent = result.content[0];
+        const imageContent = result.content[1];
+        if (metadataContent?.type !== "text" || metadataContent.text === undefined) {
+          throw new Error("fresh-process PNG result omitted metadata text");
+        }
+        const metadata: unknown = JSON.parse(metadataContent.text);
+        expect(metadata).toMatchObject({
+          ok: true,
+          type: "artifact_image",
+          artifact_ref: { artifact_id: artifactId, run_id: "producer-session-a" },
+          media_type: "image/png",
+          image: { width: 1, height: 1 },
+        });
+        expect(imageContent).toEqual({
+          type: "image",
+          data: encodedContent,
+          mimeType: "image/png",
+        });
+      } else {
+        const body = toolBody(result);
+        expect(body.content).toBe(Buffer.from(encodedContent, "base64").toString("utf8"));
+        expect(body.artifact_ref.run_id).toBe("producer-session-a");
+        expect(body.truncated).toBe(false);
+      }
     });
   });
 }

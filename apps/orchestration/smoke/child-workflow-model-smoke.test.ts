@@ -20,11 +20,11 @@ import {
   type ArtifactHostStore,
   type Directive,
   type ModelClient,
-  type PlaybookRegistrationV1,
-  type PlaybookV1,
+  type PlaybookRegistration,
+  type Playbook,
   type RunContext,
-} from "../src/index.js";
-import { PiAgentClient } from "../src/model-client.js";
+} from "../dist/index.js";
+import { PiAgentClient } from "../dist/model-client.js";
 import { decisionRequest } from "../tests/fixtures/decision-fixtures.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
@@ -45,14 +45,15 @@ async function environment(): Promise<NodeJS.ProcessEnv> {
     PENNY_STATE_ROOT: stateRoot,
     PI_OBSERVABILITY_AUTO_START: "false",
     PI_OBSERVABILITY_ENABLED: "false",
-    PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS: "120000",
   };
   const initialized = initializePennyState(PROJECT_ROOT, { env });
   const sqlite = process.getBuiltinModule("node:sqlite");
   if (sqlite === undefined) throw new Error("live child smoke requires node:sqlite");
   {
     using database = new sqlite.DatabaseSync(initialized.paths.orchestration.database);
-    database.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+    database.exec(
+      "DROP TABLE host_operation_calls; DROP TABLE child_workflow_calls; PRAGMA user_version=10;"
+    );
   }
   mkdirSync(backupRoot, { mode: 0o700 });
   const upgrade = await upgradePennyState({
@@ -110,7 +111,7 @@ class PinnedOllamaClient implements ModelClient {
 }
 
 /** A disposable parent that has exactly one registered native child target and never claims success. */
-class ChildDispatchParent implements PlaybookV1 {
+class ChildDispatchParent implements Playbook {
   constructor(
     private readonly artifacts: ArtifactHostStore,
     private readonly projectId: string
@@ -232,7 +233,7 @@ class ChildDispatchParent implements PlaybookV1 {
   }
 }
 
-function parentRegistration(projectId: string): PlaybookRegistrationV1 {
+function parentRegistration(projectId: string): PlaybookRegistration {
   return {
     ...(PLAYBOOK_REGISTRY.get("assess") ?? ASSESS_PLAYBOOK_REGISTRATION),
     construct: (options) => {
@@ -256,7 +257,7 @@ describe("opt-in Ollama active child-workflow smoke", () => {
       const env = await environment();
       const config = loadRuntimeConfig(PROJECT_ROOT, env);
       const parent = parentRegistration(config.projectId);
-      const registry = new Map<string, PlaybookRegistrationV1>([
+      const registry = new Map<string, PlaybookRegistration>([
         ["assess", parent],
         ["decide", PLAYBOOK_REGISTRY.get("decide") ?? DECIDE_PLAYBOOK_REGISTRATION],
       ]);

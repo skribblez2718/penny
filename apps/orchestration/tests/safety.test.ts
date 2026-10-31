@@ -6,16 +6,16 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { canonicalJson, sha256, Checkpointer } from "../src/checkpointer.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { canonicalJson, sha256, Checkpointer } from "../dist/checkpointer.js";
 import type {
   ArtifactRef,
   JsonValue,
   OutputArtifactMetadata,
   RunIdentity,
-} from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
-import { LivenessExhaustedError } from "../src/liveness.js";
+} from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
+import { LivenessExhaustedError } from "../dist/liveness.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import {
   canonicalAssistantText,
@@ -23,8 +23,8 @@ import {
   parseSsotTools,
   type InlineExtension,
   type ModelClient,
-} from "../src/model-client.js";
-import { WorkerExecutor } from "../src/worker.js";
+} from "../dist/model-client.js";
+import { WorkerExecutor } from "../dist/worker.js";
 
 const roots: string[] = [];
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -422,13 +422,18 @@ describe("artifact and receipt safety", () => {
     const engine = new OrchestrationEngine(checkpointer, {
       receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: root,
-      maxSteps: 96,
     });
     using artifacts = new ArtifactStore(path.join(root, "artifacts"));
     const malformedText = "complete findings\nSUMMARY: not-json";
+    const malformedRepair =
+      'semantic body\nSUMMARY:{"explore_complete":true,"confidence":"CERTAIN","defect":"forbidden"}';
     const client: ModelClient = {
       async runAgent() {
-        return { text: malformedText };
+        return {
+          text: malformedText,
+          confidence: "CERTAIN",
+          details: { explore_complete: true },
+        };
       },
     };
     const workers = new WorkerExecutor(client, artifacts, {
@@ -473,9 +478,7 @@ describe("artifact and receipt safety", () => {
           expect(invocation.routingRepairGuidance).toContain('"explore_complete"');
           expect(invocation.routingRepairGuidance).toContain('"additionalProperties":false');
           expect(invocation.routingRepairGuidance).not.toContain("tiered, cited findings");
-          return {
-            text: 'semantic body\nSUMMARY:{"explore_complete":true,"confidence":"CERTAIN","defect":"forbidden"}',
-          };
+          return { text: malformedRepair };
         },
       },
       artifacts,
@@ -486,17 +489,67 @@ describe("artifact and receipt safety", () => {
       (await bodyBearingRepair.execute(retry))[0],
       "apps/orchestration/tests/safety.test.ts:routing-repair"
     );
-    const terminal = engine.handle({
+    expect(repairResult.details).toEqual({});
+    expect(artifacts.readById(repairResult.output_artifact.artifact_id).toString("utf8")).toBe(
+      malformedRepair
+    );
+    const stillPending = engine.handle({
       schema_version: 2,
       action: "step",
       identity: pending.identity,
       result: repairResult,
     });
-    expect(terminal.action).toBe("incomplete");
-    if (terminal.action === "incomplete") {
-      expect(terminal.result.terminal_reason).toBe("identical_error_stall");
-      expect(terminal.met).toBe(false);
-    }
+    // Current policy has no implicit two-error quota. Rejection must keep the
+    // exact original source, not promote this body-bearing correction to work.
+    expect(engine.liveness.policy(pending.identity.run_id)).toMatchObject({
+      identical_malformed_digest_limit: null,
+      routing_repair: { max_invocations_per_state_branch: null },
+    });
+    expect(stillPending.action).toBe("invoke_agent");
+    if (stillPending.action !== "invoke_agent") throw new Error("expected metadata retry");
+    expect(stillPending.execution_purpose).toBe("routing_repair");
+    expect(stillPending.routing_repair_binding).toEqual(retry.routing_repair_binding);
+    expect(stillPending.input_artifacts).toEqual(retry.input_artifacts);
+    expect(stillPending.output_artifact.parent_ref).toEqual(repairResult.output_artifact);
+    expect(stillPending.output_artifact.kind).toBe("routing-metadata");
+    expect(
+      engine.handle({ schema_version: 2, action: "recover", identity: pending.identity })
+    ).toEqual(stillPending);
+
+    const negativeRepair = new WorkerExecutor(
+      {
+        async runAgent() {
+          // Transport-side completion claims must not override truthful SUMMARY bytes.
+          return {
+            text: 'SUMMARY:{"explore_complete":false,"confidence":"CERTAIN"}',
+            confidence: "CERTAIN",
+            details: { explore_complete: true },
+          };
+        },
+      },
+      artifacts,
+      { projectRoot: root, parallelConcurrency: 1 }
+    );
+    negativeRepair.setReceiptAuthority(engine.receiptAuthority);
+    const negativeResult = requireValue(
+      (await negativeRepair.execute(stillPending))[0],
+      "negative routing correction"
+    );
+    expect(negativeResult.details).toEqual({ explore_complete: false });
+    const waiting = engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: pending.identity,
+      result: negativeResult,
+    });
+    expect(waiting.action).toBe("await_user");
+    const durable = checkpointer.loadRun(pending.identity);
+    expect(durable.met).toBe(false);
+    expect(durable.stateId).toBe("awaiting_clarification");
+    expect(durable.selectedArtifacts.filter((ref) => ref.kind === "agent-output")).toEqual([
+      malformedResult.output_artifact,
+    ]);
+    expect(durable.selectedArtifacts.some((ref) => ref.kind === "semantic-core")).toBe(false);
     checkpointer.close();
   });
 });
@@ -608,17 +661,65 @@ describe("dispatch and worker isolation", () => {
           errorMessage: "unknown_provider_failure",
         },
       ])
-    ).toThrow(/no non-empty final assistant text/u);
+    ).toThrow(/assistant terminal stop reason: error/u);
+  });
+
+  it.each(["error", "aborted"] as const)(
+    "rejects a %s terminal independently of its exact partial text",
+    (stopReason) => {
+      const partialText = 'partial αβ\nSUMMARY:{"confidence":"CERTAIN","explore_complete":true}';
+      let failure: unknown;
+      try {
+        canonicalAssistantText([
+          { role: "assistant", content: [{ type: "text", text: "stale success" }] },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "partial α" },
+              { type: "thinking", thinking: "not output" },
+              { type: "text", text: partialText.slice("partial α".length) },
+            ],
+            stopReason,
+            errorMessage: "PRIVATE_PROVIDER_ERROR_SENTINEL",
+          },
+        ]);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({
+        name: "AgentTerminalError",
+        code: "agent_terminal_error",
+        stopReason,
+        partialText,
+      });
+      expect(String(failure)).not.toContain("PRIVATE_PROVIDER_ERROR_SENTINEL");
+      expect(JSON.stringify(failure)).not.toContain(partialText);
+      expect(String(failure)).not.toContain(partialText);
+      expect(() =>
+        canonicalAssistantText([{ role: "assistant", content: [], stopReason }])
+      ).toThrow(/assistant terminal stop reason/u);
+    }
+  );
+
+  it("accepts only the successful final turn after an earlier provider error", () => {
     expect(
       canonicalAssistantText([
         {
           role: "assistant",
-          content: [{ type: "text", text: "ordinary provider text" }],
+          content: [{ type: "text", text: "failed partial" }],
           stopReason: "error",
-          errorMessage: "unknown_provider_failure",
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "final α" },
+            { type: "toolCall", name: "read" },
+            { type: "text", text: "β\n" },
+          ],
+          stopReason: "stop",
         },
       ])
-    ).toBe("ordinary provider text");
+    ).toBe("final αβ\n");
   });
 
   it("loads every provider extension before applying the exact YAML allowlist", async () => {

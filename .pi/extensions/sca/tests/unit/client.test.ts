@@ -5,8 +5,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../../../../../apps/orchestration/src/canonical-json.js";
-import type { CurrentArtifactRef } from "../../../../../apps/orchestration/src/contracts.js";
+import { canonicalJson, sha256 } from "../../../../../apps/orchestration/dist/canonical-json.js";
+import type { CurrentArtifactRef } from "../../../../../apps/orchestration/dist/contracts.js";
 import type { ScaClientConfig } from "../../src/config.js";
 import { SCA_SERVICE_IPC_PROTOCOL, ScaClientError, ScaServiceClient } from "../../src/client.js";
 import {
@@ -149,7 +149,7 @@ function artifactRef(kind: string, operationId: string): CurrentArtifactRef {
   };
 }
 
-function executeRequest(): ScaBrokerExecuteRequestV1 {
+function executeRequest(timeoutMs = 5_000): ScaBrokerExecuteRequestV1 {
   const submittedAt = new Date(Date.now() - 100);
   return validateScaBrokerExecuteRequestV1({
     schema_id: "penny.sca-broker-execute-request.v1",
@@ -164,7 +164,7 @@ function executeRequest(): ScaBrokerExecuteRequestV1 {
     operation: "source_query",
     submitted_at: submittedAt.toISOString(),
     deadline_at: new Date(submittedAt.getTime() + 30_000).toISOString(),
-    limits: { timeout_ms: 5_000, max_output_bytes: 16_384, max_result_items: 50 },
+    limits: { timeout_ms: timeoutMs, max_output_bytes: 16_384, max_result_items: 50 },
     source_snapshot_ref: artifactRef("source-snapshot", "snapshot-source-query"),
     config_ref: artifactRef("sca-config", "config-source-query"),
     input_refs: [],
@@ -183,7 +183,6 @@ function config(socketPath: string, overrides: Partial<ScaClientConfig> = {}): S
     token: TOKEN,
     responseTimeoutMs: 1_000,
     pollIntervalMs: 1,
-    maxPollAttempts: 10,
     maxResponseBytes: 64 * 1_024,
     ...overrides,
   };
@@ -216,7 +215,59 @@ function capabilityResult(frame: ObservedFrame): unknown {
   };
 }
 
+function jobProgress(
+  binding: ScaBrokerExecuteRequestV1 | ReturnType<typeof validateScaBrokerPollRequestV1>,
+  overrides: Partial<{
+    readonly sequence: number;
+    readonly phase: "accepted" | "executing" | "materializing_output";
+    readonly work_units: number;
+    readonly output_bytes: number;
+    readonly result_items: number;
+  }> = {}
+): unknown {
+  return {
+    schema_id: "penny.sca-broker-job-progress.v1",
+    schema_version: 1,
+    tenant_id: binding.tenant_id,
+    project_id: binding.project_id,
+    run_id: binding.run_id,
+    job_id: binding.job_id,
+    attempt: binding.attempt,
+    idempotency_key: binding.idempotency_key,
+    tool_name: binding.tool_name,
+    operation: binding.operation,
+    request_sha256:
+      "submitted_at" in binding ? scaBrokerExecuteRequestSha256(binding) : binding.request_sha256,
+    sequence: 0,
+    phase: "accepted",
+    work_units: 0,
+    output_bytes: 0,
+    result_items: 0,
+    ...overrides,
+  };
+}
+
 function acceptedResult(frame: ObservedFrame, request: ScaBrokerExecuteRequestV1): unknown {
+  const received = validateScaBrokerExecuteRequestV1(frame.request);
+  return {
+    schema_id: "penny.sca-broker-execute-accepted-result.v2",
+    schema_version: 2,
+    tenant_id: received.tenant_id,
+    project_id: received.project_id,
+    run_id: received.run_id,
+    job_id: received.job_id,
+    attempt: received.attempt,
+    idempotency_key: received.idempotency_key,
+    tool_name: received.tool_name,
+    operation: received.operation,
+    status: "accepted",
+    request_sha256: scaBrokerExecuteRequestSha256(request),
+    accepted_at: new Date().toISOString(),
+    progress: jobProgress(received),
+  };
+}
+
+function legacyAcceptedResult(frame: ObservedFrame, request: ScaBrokerExecuteRequestV1): unknown {
   const received = validateScaBrokerExecuteRequestV1(frame.request);
   return {
     schema_id: "penny.sca-broker-execute-accepted-result.v1",
@@ -235,7 +286,40 @@ function acceptedResult(frame: ObservedFrame, request: ScaBrokerExecuteRequestV1
   };
 }
 
-function runningResult(frame: ObservedFrame): unknown {
+function runningResult(
+  frame: ObservedFrame,
+  progressOverrides: Parameters<typeof jobProgress>[1] = {}
+): unknown {
+  const request = validateScaBrokerPollRequestV1(frame.request);
+  return {
+    schema_id: "penny.sca-broker-poll-result.v2",
+    schema_version: 2,
+    tenant_id: request.tenant_id,
+    project_id: request.project_id,
+    run_id: request.run_id,
+    job_id: request.job_id,
+    attempt: request.attempt,
+    idempotency_key: request.idempotency_key,
+    tool_name: request.tool_name,
+    operation: request.operation,
+    request_sha256: request.request_sha256,
+    status: "running",
+    progress: jobProgress(request, {
+      sequence: 1,
+      phase: "executing",
+      ...progressOverrides,
+    }),
+    partial: false,
+    truncated: false,
+    output_refs: [],
+    result_item_count: 0,
+    failure: null,
+    receipt: null,
+    observed_at: request.requested_at,
+  };
+}
+
+function legacyRunningResult(frame: ObservedFrame): unknown {
   const request = validateScaBrokerPollRequestV1(frame.request);
   return {
     schema_id: "penny.sca-broker-poll-result.v1",
@@ -263,7 +347,8 @@ function runningResult(frame: ObservedFrame): unknown {
 function terminalResult(
   frame: ObservedFrame,
   execute: ScaBrokerExecuteRequestV1,
-  acceptedAt: string
+  acceptedAt: string,
+  progressOverrides: Parameters<typeof jobProgress>[1] = {}
 ): unknown {
   const poll = validateScaBrokerPollRequestV1(frame.request);
   const outputRef = artifactRef("sca-source-results", "source-results-1");
@@ -295,8 +380,8 @@ function terminalResult(
     terminal_at: terminalAt,
   };
   return {
-    schema_id: "penny.sca-broker-poll-result.v1",
-    schema_version: 1,
+    schema_id: "penny.sca-broker-poll-result.v2",
+    schema_version: 2,
     tenant_id: execute.tenant_id,
     project_id: execute.project_id,
     run_id: execute.run_id,
@@ -307,6 +392,13 @@ function terminalResult(
     operation: execute.operation,
     request_sha256: poll.request_sha256,
     status: "succeeded",
+    progress: jobProgress(poll, {
+      sequence: 2,
+      phase: "materializing_output",
+      output_bytes: outputRef.byte_length,
+      result_items: 1,
+      ...progressOverrides,
+    }),
     partial: false,
     truncated: false,
     output_refs: [outputRef],
@@ -403,6 +495,232 @@ describe("SCA Unix-socket client", () => {
       "poll",
     ]);
     expect(fake.frames).toHaveLength(4);
+  });
+
+  it("keeps polling broker-owned substantive progress beyond the former elapsed limit", async () => {
+    const request = executeRequest(6);
+    let acceptedAt = "";
+    let pollCount = 0;
+    let monotonicMs = 0;
+    const fake = await startFakeServer((frame, socket) => {
+      if (frame.action === "capability") {
+        respond(socket, "capability", capabilityResult(frame));
+        return;
+      }
+      if (frame.action === "execute") {
+        const accepted = acceptedResult(frame, request);
+        if (!isRecord(accepted) || typeof accepted["accepted_at"] !== "string") {
+          throw new Error("invalid accepted fixture");
+        }
+        acceptedAt = accepted["accepted_at"];
+        respond(socket, "execute", accepted);
+        return;
+      }
+      if (frame.action === "poll") {
+        pollCount += 1;
+        monotonicMs += 4;
+        if (pollCount <= 12) {
+          respond(
+            socket,
+            "poll",
+            runningResult(frame, {
+              sequence: pollCount,
+              phase: "executing",
+              work_units: Math.max(0, pollCount - 1),
+            })
+          );
+        } else {
+          respond(
+            socket,
+            "poll",
+            terminalResult(frame, request, acceptedAt, {
+              sequence: pollCount,
+              work_units: 11,
+            })
+          );
+        }
+        return;
+      }
+      throw new Error("productive lifecycle must not cancel");
+    });
+
+    await expect(
+      new ScaServiceClient(config(fake.socketPath), {
+        monotonicNow: () => monotonicMs,
+      }).executeToTerminal(request)
+    ).resolves.toMatchObject({ receipt: { terminal_status: "succeeded" } });
+    expect(pollCount).toBe(13);
+    expect(monotonicMs).toBeGreaterThan(request.limits.timeout_ms);
+  });
+
+  it("expires unchanged current progress and best-effort cancels the accepted job", async () => {
+    const request = executeRequest(10);
+    let monotonicMs = 0;
+    let pollCount = 0;
+    const fake = await startFakeServer((frame, socket) => {
+      if (frame.action === "capability") {
+        respond(socket, "capability", capabilityResult(frame));
+        return;
+      }
+      if (frame.action === "execute") {
+        respond(socket, "execute", acceptedResult(frame, request));
+        return;
+      }
+      if (frame.action === "poll") {
+        pollCount += 1;
+        monotonicMs += 4;
+        respond(socket, "poll", runningResult(frame));
+        return;
+      }
+      respond(socket, "cancel", cancelRequestedResult(frame));
+    });
+
+    const error = await clientError(
+      new ScaServiceClient(config(fake.socketPath), {
+        monotonicNow: () => monotonicMs,
+      }).executeToTerminal(request)
+    );
+    expect(error).toMatchObject({ code: "timeout", completion: "incomplete" });
+    expect(pollCount).toBeGreaterThan(1);
+    expect(fake.frames.at(-1)?.action).toBe("cancel");
+  });
+
+  it("bounds legacy missing-progress jobs instead of renewing them from polling", async () => {
+    const request = executeRequest(10);
+    let monotonicMs = 0;
+    const fake = await startFakeServer((frame, socket) => {
+      if (frame.action === "capability") {
+        respond(socket, "capability", capabilityResult(frame));
+        return;
+      }
+      if (frame.action === "execute") {
+        respond(socket, "execute", legacyAcceptedResult(frame, request));
+        return;
+      }
+      if (frame.action === "poll") {
+        monotonicMs += 4;
+        respond(socket, "poll", legacyRunningResult(frame));
+        return;
+      }
+      respond(socket, "cancel", cancelRequestedResult(frame));
+    });
+
+    const error = await clientError(
+      new ScaServiceClient(config(fake.socketPath), {
+        monotonicNow: () => monotonicMs,
+      }).executeToTerminal(request)
+    );
+    expect(error).toMatchObject({ code: "timeout", completion: "incomplete" });
+    expect(fake.frames.at(-1)?.action).toBe("cancel");
+  });
+
+  it.each([
+    "regressed progress",
+    "misbound progress",
+    "status regression",
+    "missing current metadata",
+  ] as const)("fails closed on %s", async (failureKind) => {
+    const request = executeRequest();
+    let pollCount = 0;
+    const fake = await startFakeServer((frame, socket) => {
+      if (frame.action === "capability") {
+        respond(socket, "capability", capabilityResult(frame));
+        return;
+      }
+      if (frame.action === "execute") {
+        respond(socket, "execute", acceptedResult(frame, request));
+        return;
+      }
+      if (frame.action === "poll") {
+        pollCount += 1;
+        if (failureKind === "missing current metadata") {
+          respond(socket, "poll", legacyRunningResult(frame));
+          return;
+        }
+        if (failureKind === "misbound progress") {
+          const misbound = runningResult(frame);
+          if (!isRecord(misbound) || !isRecord(misbound["progress"])) {
+            throw new Error("invalid progress fixture");
+          }
+          respond(socket, "poll", {
+            ...misbound,
+            progress: { ...misbound["progress"], job_id: "job-other" },
+          });
+          return;
+        }
+        if (pollCount === 1) {
+          respond(socket, "poll", runningResult(frame, { sequence: 2, work_units: 1 }));
+          return;
+        }
+        if (failureKind === "regressed progress") {
+          respond(socket, "poll", runningResult(frame));
+          return;
+        }
+        const acceptedAgain = runningResult(frame);
+        if (!isRecord(acceptedAgain)) throw new Error("invalid running fixture");
+        respond(socket, "poll", {
+          ...acceptedAgain,
+          status: "accepted",
+          progress: jobProgress(validateScaBrokerPollRequestV1(frame.request)),
+        });
+        return;
+      }
+      respond(socket, "cancel", cancelRequestedResult(frame));
+    });
+
+    const error = await clientError(
+      new ScaServiceClient(config(fake.socketPath)).executeToTerminal(request)
+    );
+    expect(error).toMatchObject({
+      code: failureKind === "regressed progress" ? "invalid_request" : "failed",
+      completion: "incomplete",
+    });
+    expect(fake.frames.at(-1)?.action).toBe("cancel");
+  });
+
+  it("does not let response bytes or successful polls renew job liveness", async () => {
+    const request = executeRequest(25);
+    const fake = await startFakeServer((frame, socket) => {
+      if (frame.action === "capability") {
+        respond(socket, "capability", capabilityResult(frame));
+        return;
+      }
+      if (frame.action === "execute") {
+        respond(socket, "execute", acceptedResult(frame, request));
+        return;
+      }
+      if (frame.action === "poll") {
+        const encoded = `${JSON.stringify({
+          protocol: SCA_SERVICE_IPC_PROTOCOL,
+          ok: true,
+          action: "poll",
+          result: runningResult(frame),
+        })}\n`;
+        let offset = 0;
+        const sendNextByte = (): void => {
+          if (socket.destroyed || offset >= encoded.length) return;
+          socket.write(encoded.slice(offset, offset + 1), "utf8");
+          offset += 1;
+          setTimeout(sendNextByte, 5);
+        };
+        sendNextByte();
+        return;
+      }
+      respond(socket, "cancel", cancelRequestedResult(frame));
+    });
+
+    const error = await clientError(
+      new ScaServiceClient(config(fake.socketPath, { responseTimeoutMs: 100 })).executeToTerminal(
+        request
+      )
+    );
+    expect(error).toMatchObject({ code: "timeout", completion: "incomplete" });
+    expect(fake.frames.map((frame) => frame.action)).toEqual([
+      "capability",
+      "execute",
+      "poll",
+      "cancel",
+    ]);
   });
 
   it.each([
@@ -507,7 +825,7 @@ describe("SCA Unix-socket client", () => {
     ]);
   });
 
-  it("best-effort cancels accepted work when a poll exceeds the client deadline", async () => {
+  it("best-effort cancels accepted work when a poll transport becomes inactive", async () => {
     const request = executeRequest();
     const fake = await startFakeServer((frame, socket) => {
       if (frame.action === "capability") {
@@ -534,6 +852,33 @@ describe("SCA Unix-socket client", () => {
       "poll",
       "cancel",
     ]);
+  });
+
+  it("bounds best-effort cancellation when the service never acknowledges cleanup", async () => {
+    const request = executeRequest(20);
+    const fake = await startFakeServer((frame, socket) => {
+      if (frame.action === "capability") {
+        respond(socket, "capability", capabilityResult(frame));
+        return;
+      }
+      if (frame.action === "execute") {
+        respond(socket, "execute", acceptedResult(frame, request));
+        return;
+      }
+      if (frame.action === "poll") {
+        respond(socket, "poll", runningResult(frame));
+      }
+    });
+
+    const startedAt = Date.now();
+    const error = await clientError(
+      new ScaServiceClient(config(fake.socketPath, { responseTimeoutMs: 25 })).executeToTerminal(
+        request
+      )
+    );
+    expect(error).toMatchObject({ code: "timeout", completion: "incomplete" });
+    expect(Date.now() - startedAt).toBeLessThan(200);
+    expect(fake.frames.at(-1)?.action).toBe("cancel");
   });
 
   it("best-effort cancels accepted work on abort and never accepts a late terminal result", async () => {

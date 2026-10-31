@@ -2,12 +2,12 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ArtifactStore, initializePennyState } from "@penny/orchestration/source";
+import { ArtifactStore, initializePennyState } from "@penny/orchestration";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import artifactExtension from "../../index.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
 import {
-  createTestExtensionApi,
   parseJson,
   requireArrayElement,
   requireRecord,

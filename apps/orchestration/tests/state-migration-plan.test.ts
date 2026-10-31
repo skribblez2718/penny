@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createStateMigrationPlan, executeStateCommand } from "../src/state/index.js";
+import { createStateMigrationPlan, executeStateCommand } from "../dist/state/index.js";
 
 const sqlite = process.getBuiltinModule("node:sqlite");
 const roots: string[] = [];

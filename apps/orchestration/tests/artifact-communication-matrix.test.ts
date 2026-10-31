@@ -4,16 +4,16 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { currentArtifactRef } from "../src/artifact-store.js";
-import { canonicalJson } from "../src/checkpointer.js";
-import type { ArtifactRef } from "../src/contracts.js";
-import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
-import { OrchestrationService } from "../src/service.js";
+import { currentArtifactRef } from "../dist/artifact-store.js";
+import { canonicalJson } from "../dist/checkpointer.js";
+import type { ArtifactRef } from "../dist/contracts.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../dist/model-client.js";
+import { OrchestrationService } from "../dist/service.js";
 import {
   validateCanonicalGroundedSynthesisBytes,
   validateResearchSemanticDraft,
-} from "../src/skill-contracts/research.js";
-import { initializePennyState } from "../src/state/index.js";
+} from "../dist/skill-contracts/research.js";
+import { initializePennyState } from "../dist/state/index.js";
 
 interface ObservedInvocation {
   readonly agent: string;
@@ -170,7 +170,7 @@ describe("production skill artifact communication matrix", () => {
     const projectRoot = path.join(sandbox, "project");
     const stateRoot = path.join(sandbox, "state");
     mkdirSync(projectRoot, { mode: 0o700 });
-    const env = { PENNY_STATE_ROOT: stateRoot };
+    const env = { PENNY_STATE_ROOT: stateRoot, PI_OBSERVABILITY_ENABLED: "false" };
     initializePennyState(projectRoot, { env });
 
     const serviceHolder: { current?: OrchestrationService } = {};
@@ -244,11 +244,19 @@ describe("production skill artifact communication matrix", () => {
       expect(terminal.action).toBe("complete");
       if (terminal.action !== "complete") throw new Error("matrix skill did not complete");
       const planning = requireObserved(client, "planning");
+      const admittedRequest = planning.inputRefs.find((ref) => ref.kind === "research-request");
+      if (admittedRequest === undefined) throw new Error("planning lacks its admitted request");
+      expect(admittedRequest.phase).toBe("intake");
+      expect(admittedRequest.run_id).toBe(runId);
       expect(new Set(planning.inputRefs.map((ref) => ref.artifact_id))).toEqual(
-        new Set([first.artifact_id, second.artifact_id])
+        new Set([first.artifact_id, second.artifact_id, admittedRequest.artifact_id])
       );
       expect(new Set(planning.inputBytes.map((bytes) => bytes.toString("base64")))).toEqual(
-        new Set([firstBytes.toString("base64"), secondBytes.toString("base64")])
+        new Set([
+          firstBytes.toString("base64"),
+          secondBytes.toString("base64"),
+          service.artifacts.read(admittedRequest).toString("base64"),
+        ])
       );
 
       const research = client.observed.filter((invocation) => invocation.stateId === "researching");

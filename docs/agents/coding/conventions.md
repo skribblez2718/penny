@@ -38,12 +38,31 @@ may reach privileged CSS APIs such as `unsafeCSS()`.
 
 ## Verification
 
+For implementation, complete the applicable checks below. Review/diagnosis assesses
+available evidence and gaps; planning specifies needed evidence under [Task modes](#task-modes).
+Do not claim an unrun check passed.
+
 - [ ] The task mode and changed contract are explicit.
 - [ ] Relevant tests/checks were run, or their absence and effect are reported.
 - [ ] Lint, format, and type checks appropriate to the changed code were run.
 - [ ] Untrusted boundaries have a validated runtime contract.
 - [ ] Affected security invariants have evidence, a blocker, or an approved exception.
 - [ ] No dead code, unjustified suppression, or unexplained constants were introduced.
+
+## Subject guidance
+
+Use the [Coding index](AGENTS.md) to select every topic triggered by the actual task,
+including combined concerns, and read the selected guides completely. Do not load the
+whole library by default or substitute an optional consultation for required reading.
+Subject guides supply contextual engineering choices; they do not expand action authority,
+authorize unrelated cleanup, or waive the mandatory safety and evidence contracts above.
+
+Apply their criteria to the actual code, callers, workload and failure boundary. Select
+methods from that evidence rather than treating examples as an exhaustive catalog or a
+prescribed reasoning sequence. Prefer a simpler sufficient approach; use current primary
+documentation and measured feedback when a technology-specific assumption matters.
+Preserve the required outcome and verify it, without protecting an inherited technique
+merely because a guide or earlier model proposed it.
 
 ## Related guidance
 

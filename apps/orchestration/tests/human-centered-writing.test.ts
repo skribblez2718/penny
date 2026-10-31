@@ -10,7 +10,9 @@ const read = (relative: string): string => readFileSync(path.join(PROJECT_ROOT, 
 const STANDARD = "docs/agents/writing/standard.md";
 const REVIEW = "docs/agents/writing/review.md";
 const GENRES = [
+  "application-and-personal",
   "correspondence",
+  "decision-writing",
   "documentation",
   "education",
   "policy",
@@ -37,8 +39,13 @@ describe("human-centered writing guidance", () => {
     expect(standard).toContain("Preserve source meaning");
     expect(standard).toContain("Select other supported details according to purpose");
     expect(standard).toContain("Never invent experience");
+    expect(standard).toContain("Do not add deliberate errors");
     expect(standard).toContain("samples as style evidence, not factual authority");
     expect(standard).toContain("are contextual watch items, not prohibitions");
+    expect(standard).toContain(
+      "Ask whether a consequential passage could appear substantially unchanged"
+    );
+    expect(standard).toContain("Look for meaningful clusters across content");
     expect(standard).toContain("machine keys, enums, IDs, exact quotations or excerpts, commands");
     expect(standard).toContain("source-fidelity check");
     expect(standard).toContain("Independent verification");
@@ -54,18 +61,23 @@ describe("human-centered writing guidance", () => {
     expect(review).toContain(
       "Do not use a blacklist, detector, phrase count, numerical style score"
     );
+    expect(review).toContain("Run a genericity test");
+    expect(review).toContain("Run a pattern-cluster test");
+    expect(review).toContain("use detail in proportion to consequence");
     expect(review).toContain("Integrity or contract failures cannot be offset");
   });
 
   it("keeps promised examples and optional personal-writing guidance in the advisory reference", () => {
     const reference = read("docs/humans/writing/reference.md");
     expect(reference).toContain("## Illustrative revisions");
+    expect(reference).toContain("For a useful genericity test");
     expect(reference).toContain("## Personal and application writing");
+    expect(reference).toContain("## Decision and executive writing");
     expect(reference).toContain("## Optional author review");
     expect(reference).toContain("not proof that external claims were independently verified");
   });
 
-  it("provides indexed genre additions for all six supported writing families", () => {
+  it("provides indexed genre additions for all supported writing families", () => {
     const index = read("docs/agents/writing/genres/AGENTS.md");
     for (const genre of GENRES) {
       const file = `docs/agents/writing/genres/${genre}.md`;
@@ -73,6 +85,12 @@ describe("human-centered writing guidance", () => {
       expect(index).toContain(`(${genre}.md)`);
       expect(read(file).trim().length).toBeGreaterThan(200);
     }
+    expect(read("docs/agents/writing/genres/application-and-personal.md")).toContain(
+      "Do not flatten the person into a generic professional persona"
+    );
+    expect(read("docs/agents/writing/genres/decision-writing.md")).toContain(
+      "the condition that would change the recommendation"
+    );
     expect(read("docs/agents/writing/genres/documentation.md")).toContain("verification commands");
     expect(read("docs/agents/writing/genres/policy.md")).toContain("MUST, SHALL, SHOULD, and MAY");
     expect(read("docs/agents/writing/genres/research.md")).toContain(
@@ -91,13 +109,17 @@ describe("human-centered writing guidance", () => {
     expect(audit).toContain("read-only audit");
     expect(audit).toContain("do not edit or overwrite");
     expect(audit).toContain("do not pad or cap the findings");
+    expect(audit).toContain("Genericity test");
+    expect(audit).toContain("Pattern-cluster test");
     expect(audit).toContain("Do not issue an AI-authorship verdict");
   });
 
   it("keeps only a compact universal policy in the Cognitive Frame", () => {
     const frame = read(".pi/SYSTEM.md");
-    expect(frame).toContain("For human-readable prose, match the reader, purpose, genre");
-    expect(frame).toContain("apply the human-centered writing guidance");
+    expect(frame).toContain(
+      "Match prose to the reader, purpose, genre, and supported author or project voice"
+    );
+    expect(frame).toContain("Apply the human-centered writing guidance");
     expect(frame).toContain("machine-readable contracts");
     expect(frame).not.toContain("Human-Centered Writing Standard");
   });
@@ -107,12 +129,14 @@ describe("human-centered writing guidance", () => {
       ".pi/skills/assess/assets/prompts/carren-authoring_assessment.md",
       ".pi/skills/decide/assets/prompts/demetri-deciding.md",
       ".pi/skills/diagnose/assets/prompts/demetri-adjudicating_diagnosis.md",
+      ".pi/skills/define/assets/prompts/rhea-authoring_specification.md",
       ".pi/skills/plan/assets/prompts/piper-strategizing.md",
       ".pi/skills/produce/assets/prompts/skribble-materializing_artifact.md",
       ".pi/skills/research/assets/prompts/synthia-synthesizing.md",
     ];
     const editorialPrompts = [
       ".pi/skills/decide/assets/prompts/carren-critiquing_decision.md",
+      ".pi/skills/define/assets/prompts/carren-critiquing_specification.md",
       ".pi/skills/plan/assets/prompts/carren-critiquing_strategy.md",
       ".pi/skills/produce/assets/prompts/carren-critiquing_artifact.md",
       ".pi/skills/research/assets/prompts/carren-critiquing_report.md",
@@ -121,6 +145,7 @@ describe("human-centered writing guidance", () => {
       ".pi/skills/assess/assets/prompts/vera-verifying_assessment.md",
       ".pi/skills/decide/assets/prompts/vera-verifying_decision.md",
       ".pi/skills/diagnose/assets/prompts/vera-verifying_diagnosis.md",
+      ".pi/skills/define/assets/prompts/vera-verifying_specification.md",
       ".pi/skills/plan/assets/prompts/vera-verifying_strategy.md",
       ".pi/skills/produce/assets/prompts/vera-verifying_artifact.md",
       ".pi/skills/research/assets/prompts/vera-validating.md",

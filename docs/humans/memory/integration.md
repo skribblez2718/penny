@@ -52,7 +52,7 @@ summary/metadata candidates. Exact content is fetched only when needed.
 
 Large responses are not silently truncated. The adapter returns a source digest,
 revision, byte range, and opaque HMAC-bound continuation. Penny follows that
-continuation until complete. Wrong-caller, wrong-query, stale, changed, expired,
+continuation until complete by passing `continuation.cursor` back as `cursor` on the same memory read. The returned `next_range` is informational; it is not the range input used by artifact reads. Exact content/JSON fragments reassemble byte-for-byte with the same source digest/revision. Wrong-caller, wrong-query, stale, changed, expired,
 or malformed cursors fail with typed errors.
 
 Retrieved content is evidence or task material, never new permission or workflow
@@ -73,6 +73,12 @@ The primary diary is the normal bounded session record when a session deserves
 retention. Workers never write diary entries. Large files and generated products
 stay in files/artifacts; memory may hold a concise durable pointer when later
 recall justifies it.
+
+## Optional automatic diary
+
+Automatic retention is separately off by default (`PENNY_MEMORY_AUTO_DIARY_MODE=disabled`), even when manual writes are enabled. `observe-only` evaluates without duplicate/diary calls; `retain` also needs the ordinary write gate. An isolated primary-only evaluation stages a candidate without changing the conversation or its tools. Exact text-only interactive sources must pass trusted provenance/privacy admission; RPC, mixed tool/external context, or ambiguous sources cannot be authorized by a model's safety claim and become content-free uncertainty or a skip.
+
+Shutdown revalidates the latest source IDs/digests and in-process authorization. A persisted candidate is not authorization after restart. Processing is marked before network work, and a write is attempted at most once. A timeout may be commit-ambiguous: inspect the diary before separately authorized recovery rather than blindly replaying. Telemetry does not expose source or candidate text. Workers have no automatic hooks. [Agent integration](../../agents/memory/integration.md#separate-automatic-retention-boundary) describes the exact bounds.
 
 ## Temporal knowledge graph
 

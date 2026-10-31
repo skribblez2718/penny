@@ -23,8 +23,8 @@ vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return {
     ...actual,
-    readFileSync: vi.fn((p: unknown) => {
-      const s = String(p);
+    readFileSync: vi.fn((...args: Parameters<typeof actual.readFileSync>) => {
+      const s = String(args[0]);
       if (s.endsWith("models.json")) {
         return JSON.stringify({
           providers: {
@@ -40,7 +40,8 @@ vi.mock("node:fs", async () => {
       if (s.endsWith("settings.json")) {
         return JSON.stringify({ defaultProvider: "anthropic" });
       }
-      return "unrelated file contents";
+      // Keep build provenance and other unrelated inputs real and verifiable.
+      return actual.readFileSync(...args);
     }),
   };
 });

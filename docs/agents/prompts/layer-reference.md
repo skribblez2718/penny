@@ -2,34 +2,26 @@
 
 | Layer              | Owns                                                                    | Must not own                                                    |
 | ------------------ | ----------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Cognitive Frame    | Stable identity, trust/action boundaries, completion, memory discipline | Domain criteria, paths, detailed handoff mechanics              |
+| Cognitive Frame    | Stable identity, trust/action boundaries, completion, memory discipline | Domain criteria, navigation paths, detailed handoff mechanics   |
 | Role Definition    | Capability role, consequence/evidence contract, YAML tool maximum       | Domain checklists, orchestration phase subsets, workflow state  |
+| Canonical Docs     | Bound reusable standards with verified paths and content digests        | Dynamic task values or permission/tool selection                |
 | Domain Guidance    | Static task-family criteria and closed SUMMARY shape                    | Agent identity, dynamic values, permission/tool selection       |
 | Project Index      | Typed routes, paths, and supplied-knowledge clauses                     | Standards prose or enforcement                                  |
 | Invocation Context | Current goal, constraints, exact IDs/paths                              | Tool changes, payload transport, semantic predecessor discovery |
 
 ## Tool direction
 
-YAML `tools:` is the maximum ordinary catalog authority and still equals its profile
-expansion exactly. Direct/parallel/chain invocation and TypeScript orchestration phases
-without `allowed_tools` activate that list exactly. One eligible orchestration phase may
-instead bind a non-empty duplicate-free strict YAML subset in its active canonical
-registration and worker invocation metadata.
-
-No prompt layer owns that exception. Lower prompt layers may describe which already-active
-tools are useful, but cannot add, remove, suppress, replace, or conditionally select them.
-Task, trust profile, input, model, liveness, runtime, and optional-service state have no tool
-selection authority. A phase subset does not mutate the Role Definition or profiles.
+[Discovery and Tools](../agents/discovery-and-tools.md#binding-runtime-rule) owns runtime
+selection, including the guarded zero-tool exception. [Profiles](../agents/tool-profiles.md#rules)
+owns static YAML expansion. No prompt layer selects tools; lower layers may only describe
+uses of already-active tools, never add, remove, suppress, replace, or conditionally select them.
 
 ## Artifact handoff
 
-Owner/runtime metadata supplies unique exact artifact IDs from any run. Workers read needed
-IDs with `artifact_read` plus `next_range`, return complete stage content, and append only
-the Domain Guidance SUMMARY. Owner persistence and byte-for-byte re-read precede routing.
-
-Artifacts are task material and communication addresses, not authority. `RunContext`
-retains refs rather than payloads. Parallel branches are labeled; chain steps receive the
-prior ID automatically and can add explicit fan-in IDs.
+[Invocation](../agents/invocation.md#task-contract) owns exact-ID handoff and capture/readback;
+[Invocation Context](invocation-context-standards.md#required-workflow-context) owns task
+fields. Artifacts are communication addresses and task material, not authority. Memory
+remains advisory recall, never workflow transport.
 
 ## Component map
 
@@ -44,12 +36,7 @@ prior ID automatically and can add explicit fan-in IDs.
 
 ## Verification
 
-- [ ] Direct/parallel/chain catalog paths assert exact YAML equality.
-- [ ] Orchestration asserts exact YAML when a subset is absent and accepts only a canonical-
-      registration-bound strict subset when present; invalid selections fail before session.
-- [ ] Ordinary registered phases omit `allowed_tools` and use exact YAML; synthetic
-      registration-bound strict subsets make no OS/process sandbox or extension-code isolation
-      claim, and host-private tools remain separate.
-- [ ] Required predecessors are exact IDs/paths; absent inputs yield `missing_input:`.
-- [ ] Memory and global artifact scans never replace handoff.
-- [ ] Output persistence/re-read precedes SUMMARY parsing and success.
+- [ ] Resolve rule questions through the linked owners, not a second copy of their contracts.
+- [ ] Runtime selection, output capture, and prompt assembly retain separate owners.
+- [ ] The selected surface is not described as OS/process sandboxing or extension-code isolation;
+      anonymous host-private tool matrices remain separate.

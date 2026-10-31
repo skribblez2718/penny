@@ -1,62 +1,44 @@
 # Skill Quick Reference — Artifact-first build checklist
 
+Optional navigation for authors; it adds no requirements beyond the linked owners.
+
 ## Design
 
-- Prove the workflow manually.
-- Name the failure each phase/order rule prevents.
-- Draw the flow before coding.
-- Place gates at reversibility cliffs and bound every loop.
+- Warrant durable state, gates, repair, fan-out, or resume—not a minimum worker count.
+- Name the failure/dependency each state and ordering rule addresses.
+- Resolve shared decisions before consumers; bound loops and gate consequences.
+- Use [Design Methodology](design-methodology.md) and, when drawing the required mirror,
+  [Flow Diagrams](flow-diagrams.md). Diagram-first is optional; final descriptor agreement is not.
 
 ## Build
 
-1. Add and register a TypeScript `PlaybookCoreV1` implementation.
-2. Write `.pi/skills/<name>/SKILL.md` with `engine: orchestration`. Do not add the retired
-   `release_status` field or a top-level `license`. Omit `disable-model-invocation` for a
-   model-visible package; set it only as `true`, and only when the package must be hidden. Disabled
-   development packages may remain unregistered.
-3. Write one Domain Guidance prompt per worker/state.
-4. Make every cognitive directive declare exact `input_artifacts` and an owner
-   `output_artifact` contract.
-5. Require workers to use `artifact_read` through `next_range`, return
-   complete stage content, and keep routing fields separate from product bytes.
-6. Add README, reference, and `resources/flow.html`.
-7. Add playbook, artifact-handoff, memory-absent recovery, composition, and source-guard tests.
-8. Run the structure checker. Do not register a live skill in
-   `tiered_memory/skill_rooms.json`; that file is legacy-corpus classification.
+1. Implement and register a TypeScript `PlaybookCore` per [Skill Standard](skill-standard.md).
+2. Use [SKILL.md Format](skill-md-format.md) and its [template](skill-md-template.md) for YAML,
+   visibility, and content boundaries.
+3. Supply state-specific prompts, exact artifact contracts, README/reference and `resources/flow.html`.
+4. Follow [Invocation](../agents/invocation.md) for exact transport/capture and
+   [Skill Orchestration](orchestration.md) for checkpoint/admission deltas.
 
 ## Validate
 
-- [ ] Manifest and description comply; no `license` or redundant
-      `disable-model-invocation: false` is present.
-- [ ] Registration ingress/start admission/liveness and contract agree.
-- [ ] Pi native discovery, Penny model visibility, and `.pi/skills/.ignore` agree exactly with parsed
-      `disable-model-invocation`.
-- [ ] Typed composition validates exact bytes and every required port before run creation.
-- [ ] Playbook registry and flow diagram agree; run `bun run --cwd apps/orchestration test -- tests/flow-diagrams.test.ts` and `bun .pi/extensions/playwright/scripts/validate-flow-html.ts`.
-- [ ] Skill directory contains no executable delegate.
-- [ ] Prompts contain exact handoff and no memory-write, room, or memory-handoff instruction.
-- [ ] Owner capture/ref verification precedes SUMMARY routing.
-- [ ] Payload bytes never enter RunContext.
-- [ ] Retry, clarification, restart, and partial fan recovery preserve selected refs.
-- [ ] Memory-unavailable paths complete unchanged.
-- [ ] Terminal result exposes the selected exact product ref.
-- [ ] Full engine suite and repository source guards pass.
+Use the [testing evidence matrix](testing.md#required-coverage), including applicable negative,
+recovery, composition, package/clean-pack and source-guard checks. Record what actually ran and
+its scope; neither a checklist nor an existing assertion establishes a pass.
 
 ## Common mistakes
 
-- Reintroducing `state_machine: true` or argv state.
-- Passing predecessor text inline instead of exact refs.
-- Treating a SUMMARY or model-authored locator as persistence proof.
-- Giving workers memory-write/logstream tools or using memory for workflow handoff. Bounded read-only recall comes only from agent YAML.
-- Requiring a room-manifest entry for a new skill.
-- Silently truncating artifact content instead of following `next_range`.
+- Reintroducing `state_machine: true`, argv state, an executable skill delegate, or a room requirement.
+- Passing predecessor text inline, discovering missing predecessors, or truncating instead of
+  continuing `next_range`.
+- Treating a SUMMARY, model locator, or memory write as persistence proof.
+- Adding generic SUMMARY keys rejected by the active closed phase schema.
+- Giving workers memory-write/logstream tools or using memory for workflow handoff.
 
 ## Files
 
-| File                                       | Purpose              |
-| ------------------------------------------ | -------------------- |
-| `docs/agents/skills/design-methodology.md` | Design method        |
-| `docs/agents/skills/skill-standard.md`     | Full standard        |
-| `docs/agents/skills/testing.md`            | Tests                |
-| `scripts/tools/scaffold-skill.py`          | Canonical scaffolder |
-| `scripts/tools/templates/skill-flow.html`  | Canonical flow frame |
+| File                                      | Purpose              |
+| ----------------------------------------- | -------------------- |
+| [Skill Standard](skill-standard.md)       | Requirements         |
+| [Testing](testing.md)                     | Evidence matrix      |
+| `scripts/tools/scaffold-skill.py`         | Canonical scaffolder |
+| `scripts/tools/templates/skill-flow.html` | Safe flow frame      |

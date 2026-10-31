@@ -121,6 +121,12 @@ FLAT: Dict[str, List[str]] = {
     "web.transcript": ["youtube_transcript"],
     "docgen": ["word_generate", "powerpoint_generate"],
     "artifact": ["artifact_read"],
+    # SCA broker tools are typed, bounded facades. Keeping each operation in its
+    # own profile lets catalog roles receive only the broker authority required
+    # by their registered SCA phases.
+    "sca.source_query": ["sca_source_query"],
+    "sca.graph_query": ["sca_graph_query"],
+    "sca.application_test": ["sca_application_test"],
     # Read-only memory recall: search, read drawers/list/taxonomy, read KG,
     # read Penny's diary. No write operations (add_drawer, diary_write,
     # kg_add, kg_invalidate, kg_supersede) and no logstream tools.

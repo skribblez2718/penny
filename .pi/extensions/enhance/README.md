@@ -33,7 +33,7 @@ rough prompt, copying the enhanced result out of the reply, and re-pasting it.
 - The flag is **always consumed** — the literal `-i` never reaches the model.
 - The original prompt (with flag) is persisted via `appendEntry("enhance", …)`
   for audit; pi itself only stores the transformed text.
-- Every failure path (model missing, auth missing, timeout, empty or runaway
+- Every failure path (model missing, auth missing, provider error, empty or runaway
   rewrite) degrades to the **flag-stripped raw prompt**, so the request still
   runs — just un-enhanced — and logs a warning.
 - Headless contexts (`-p`, `--mode json`, subagents) strip the flag and run the
@@ -45,8 +45,9 @@ rough prompt, copying the enhanced result out of the reply, and re-pasting it.
 | Variable                          | Default       | Meaning                                                                                                                                                                   |
 | --------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PENNY_ENHANCE_MODEL`             | session model | `provider/model-id` for the enhancement call. Must be a **large-context** model — it receives the whole session. Currently `ollama/glm-5.2:cloud` (999,424 ctx)           |
-| `PENNY_ENHANCE_TIMEOUT_MS`        | `25000`       | hard cap on the enhancement call (set to `60000` in `.env`)                                                                                                               |
-| `PENNY_ENHANCE_CONTEXT_MAX_CHARS` | `3200000`     | safety valve only (~800K tokens). Oldest entries are dropped first if the transcript would overflow the enhance model. Not a trimming policy — full context is the design |
+| `PENNY_ENHANCE_CONTEXT_MAX_CHARS` | `3200000`     | Safety valve only (~800K tokens). Oldest entries are dropped first if the transcript would overflow the enhance model. Not a trimming policy — full context is the design |
+
+Enhancement has no fixed elapsed-time ceiling. Provider errors still fall back honestly to the flag-stripped prompt.
 
 ## Usage
 

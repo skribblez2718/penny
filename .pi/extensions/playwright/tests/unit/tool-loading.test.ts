@@ -15,7 +15,8 @@ import {
   type LoadToolsParams,
 } from "../../tool-loading.js";
 import type { PlaywrightConfig } from "../../types.js";
-import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 
 interface RegisteredLoaderTool {
   execute(toolCallId: string, params: LoadToolsParams): Promise<{ details: { added: string[] } }>;

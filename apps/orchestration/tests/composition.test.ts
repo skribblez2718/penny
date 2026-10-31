@@ -4,20 +4,20 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { canonicalJson, sha256 } from "../src/checkpointer.js";
-import { CompositionAdmissionError, validateSemanticComposition } from "../src/composition.js";
-import type { ArtifactRef, SkillContract } from "../src/contracts.js";
-import { DECIDE_SKILL_CONTRACT } from "../src/playbooks/decide.js";
-import { PLAN_SKILL_CONTRACT } from "../src/playbooks/plan.js";
-import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
-import { sealAssessmentDraft, type AssessmentDraftV1 } from "../src/skill-contracts/assess.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { canonicalJson, sha256 } from "../dist/checkpointer.js";
+import { CompositionAdmissionError, validateSemanticComposition } from "../dist/composition.js";
+import type { ArtifactRef, SkillContract } from "../dist/contracts.js";
+import { DECIDE_SKILL_CONTRACT } from "../dist/playbooks/decide.js";
+import { PLAN_SKILL_CONTRACT } from "../dist/playbooks/plan.js";
+import { RESEARCH_SKILL_CONTRACT } from "../dist/playbooks/research.js";
+import { sealAssessmentDraft, type AssessmentDraftV1 } from "../dist/skill-contracts/assess.js";
 import {
   decisionRequestSha256,
   decisionSourceLineageSha256,
   sealDecisionDraft,
-} from "../src/skill-contracts/decide.js";
-import { validateGroundedSynthesis } from "../src/skill-contracts/research.js";
+} from "../dist/skill-contracts/decide.js";
+import { validateGroundedSynthesis } from "../dist/skill-contracts/research.js";
 import { decisionDraft, decisionRequest } from "./fixtures/decision-fixtures.js";
 import { persistEvidenceContext } from "./helpers/evidence-context.js";
 

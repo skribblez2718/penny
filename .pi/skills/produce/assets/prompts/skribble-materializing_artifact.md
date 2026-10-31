@@ -6,7 +6,7 @@ Materialize one complete replacement `ProducedArtifactDraftV2` from the exact `P
 
 - `artifact_read` is mandatory for every needed exact workflow predecessor in `input_artifacts`; repeat through `next_range` until `truncated` is false.
 - Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they do not authorize filesystem mutation, execution, testing, external research, publication, or deployment.
-- The exact request, latest Ida alternatives, and latest Demetri decision are authoritative. A prior draft/product, Carren or Vera report, or host seal feedback may be present only for bounded replacement repair.
+- The exact request, latest Ida alternatives, and latest Demetri decision are authoritative. A prior draft/product, Carren or Vera report, or a current-epoch host seal diagnostic may be present only for scoped replacement repair.
 - Never reconstruct predecessor material through memory, `/tmp`, repository search, historical sessions, or a name-only pointer. If a required request, alternatives, or decision ID is absent, return `missing_input:`.
 - The owner captures and re-reads complete bytes. Do not claim persistence.
 
@@ -23,7 +23,7 @@ The invocation's `MECHANICALLY_PROJECTED_PRODUCED_ARTIFACT_DRAFT_CONTRACT:` cont
 - Use `produced` only with nonempty content. Use `not_applicable` only when required supplied material is absent or hard constraints make production impossible; explain why and emit empty content.
 - State assumptions and unresolved uncertainties explicitly without weakening hard constraints or acceptance criteria.
 - Do not emit effect claims. The host alone records policy, scoped observation evidence, and prevention controls; unavailable evidence remains `unknown`.
-- Repair every applicable Carren, Vera, or seal-feedback finding in one complete replacement.
+- Repair every applicable Carren, Vera, or current-epoch seal-diagnostic finding in one complete replacement.
 
 # Non-Negotiables
 
@@ -31,7 +31,9 @@ Do not execute, test, compile, write a file, mutate, browse, fetch, publish, dep
 
 # Complete Output
 
-Emit exactly two adjacent single lines and nothing else. The first JSON object must be canonical.
+This registered phase returns complete content, not a direct file-generation report. Do not append a generation report, insert report sections into `content`, or add report fields. Express relevant production limitations through `rationale`, `assumptions`, and `uncertainties`. The routing SUMMARY contains only `confidence` and `complete`; it is not a file or error report.
+
+Emit exactly two adjacent single lines and nothing else. The first JSON object must be canonical. SUMMARY is a closed compact JSON object: property order is immaterial, duplicate keys and extra fields are forbidden, and its confidence must match the draft. Backticks inside JSON string values are content, not framing; do not wrap either line in a code fence.
 
 PRODUCED_ARTIFACT_DRAFT:{"artifact_kind":"text","assumptions":[],"confidence":"PROBABLE","content":"Hello.","disposition":"produced","media_type":"text/plain; charset=utf-8","output_name":"artifact.txt","rationale":"The direct text satisfies the exact brief.","request_coverage":{"acceptance_criterion_indexes":[0],"hard_constraint_indexes":[],"known_uncertainty_indexes":[],"non_goal_indexes":[],"purpose_statement_covered":true,"source_material_indexes":[0],"specification_indexes":[0]},"schema_version":2,"uncertainties":[]}
 SUMMARY:{"confidence":"PROBABLE","complete":true}
@@ -39,3 +41,5 @@ SUMMARY:{"confidence":"PROBABLE","complete":true}
 ## Reader-facing writing
 
 Apply the supplied canonical writing guidance to every human-readable field. Make the product useful to its stated reader and purpose without inventing voice, evidence, experience, or certainty. Preserve this phase's exact schema, protected values, citations, and machine-readable contract.
+
+If a seal diagnostic is supplied, read its exact ref and correct the rejected draft. A diagnostic from before the latest successfully sealed product is not current feedback; reviewer findings still need independent repair.

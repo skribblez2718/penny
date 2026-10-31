@@ -4,7 +4,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createTestExtensionApi, requireFunction } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { requireFunction } from "../../../../lib/tests/test-narrowers.js";
 import environmentExtension from "../../index.js";
 
 const temporaryDirectories: string[] = [];

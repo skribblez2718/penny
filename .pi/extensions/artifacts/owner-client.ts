@@ -4,7 +4,8 @@ import {
   ArtifactStore,
   currentArtifactRef,
   PennyStateResolutionError,
-  resolvePennyRuntimeState,
+  resolvePennyProjectState,
+  isSqliteCorruption,
 } from "@penny/orchestration";
 import type {
   CurrentArtifactRef as TypeScriptArtifactRef,
@@ -29,6 +30,7 @@ export interface OutputArtifactExpectation {
 }
 
 export type ArtifactClientErrorCode =
+  | "ARTIFACT_STORE_CORRUPT"
   | "ARTIFACT_CONFIG_INVALID"
   | "ARTIFACT_CONTRACT_INVALID"
   | "ARTIFACT_DIGEST_MISMATCH"
@@ -300,10 +302,10 @@ export function stableArtifactReceiptId(metadataValue: OutputArtifactMetadata | 
   return `artifact-receipt:${digest}`;
 }
 
-export function resolveArtifactRoot(
+export function resolveArtifactState(
   projectRoot: string,
   env: Readonly<Record<string, string | undefined>> = process.env
-): string {
+) {
   for (const name of ["PENNY_ARTIFACT_ROOT", "PENNY_ARTIFACT_GRANT_ROOT"] as const) {
     if (env[name]?.trim()) {
       throw new ArtifactClientError(
@@ -313,14 +315,23 @@ export function resolveArtifactRoot(
     }
   }
   try {
-    return resolvePennyRuntimeState(projectRoot, { env }).paths.artifacts.root;
+    return resolvePennyProjectState(projectRoot, { env });
   } catch (error) {
     throw new ArtifactClientError(
-      "ARTIFACT_CONFIG_INVALID",
+      error instanceof PennyStateResolutionError && error.code === "STATE_DATABASE_CORRUPT"
+        ? "ARTIFACT_STORE_CORRUPT"
+        : "ARTIFACT_CONFIG_INVALID",
       error instanceof Error ? error.message : "Penny project state is unavailable",
       stateFailureMetadata(error)
     );
   }
+}
+
+export function resolveArtifactRoot(
+  projectRoot: string,
+  env: Readonly<Record<string, string | undefined>> = process.env
+): string {
+  return resolveArtifactState(projectRoot, env).paths.artifacts.root;
 }
 
 export async function refArtifactById(input: {
@@ -329,12 +340,19 @@ export async function refArtifactById(input: {
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<ArtifactRef | undefined> {
   try {
-    const artifactRoot = resolveArtifactRoot(input.projectRoot, input.env);
-    const state = resolvePennyRuntimeState(input.projectRoot, { env: input.env });
-    using store = ArtifactStore.openExisting(artifactRoot, { projectId: state.projectId });
+    const state = resolveArtifactState(input.projectRoot, input.env);
+    using store = ArtifactStore.openExisting(state.paths.artifacts.root, {
+      projectId: state.projectId,
+    });
     return store.refById(input.artifactId);
   } catch (error) {
     if (error instanceof ArtifactClientError) throw error;
+    if (isSqliteCorruption(error)) {
+      throw new ArtifactClientError(
+        "ARTIFACT_STORE_CORRUPT",
+        error instanceof Error ? error.message : "Artifact database is damaged"
+      );
+    }
     throw new ArtifactClientError(
       "ARTIFACT_CONFIG_INVALID",
       error instanceof Error ? error.message : "artifact manifest lookup failed"
@@ -348,9 +366,10 @@ export async function readArtifactsById(input: {
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<Array<{ ref: ArtifactRef; content: Buffer }>> {
   try {
-    const artifactRoot = resolveArtifactRoot(input.projectRoot, input.env);
-    const state = resolvePennyRuntimeState(input.projectRoot, { env: input.env });
-    using store = ArtifactStore.openExisting(artifactRoot, { projectId: state.projectId });
+    const state = resolveArtifactState(input.projectRoot, input.env);
+    using store = ArtifactStore.openExisting(state.paths.artifacts.root, {
+      projectId: state.projectId,
+    });
     return input.artifactIds.map((artifactId) => {
       const ref = store.refById(artifactId);
       if (ref === undefined) {
@@ -362,6 +381,12 @@ export async function readArtifactsById(input: {
     });
   } catch (error) {
     if (error instanceof ArtifactClientError) throw error;
+    if (isSqliteCorruption(error)) {
+      throw new ArtifactClientError(
+        "ARTIFACT_STORE_CORRUPT",
+        error instanceof Error ? error.message : "Artifact database is damaged"
+      );
+    }
     const message = error instanceof Error ? error.message : "artifact read failed";
     const code = /verification|digest|byte/i.test(message)
       ? "ARTIFACT_DIGEST_MISMATCH"
@@ -380,7 +405,7 @@ export async function readArtifactById(input: {
   const [read] = await readArtifactsById({
     artifactIds: [input.artifactId],
     projectRoot: input.projectRoot,
-    env: input.env,
+    ...(input.env === undefined ? {} : { env: input.env }),
   });
   if (read === undefined) {
     throw new ArtifactClientError("ARTIFACT_MISSING", "artifact is absent from the manifest");
@@ -398,7 +423,7 @@ export async function readArtifactOutput(input: {
   const read = await readArtifactById({
     artifactId: supplied.artifact_id,
     projectRoot: input.projectRoot,
-    env: input.env,
+    ...(input.env === undefined ? {} : { env: input.env }),
   });
   if (canonicalArtifactJson(read.ref) !== canonicalArtifactJson(supplied)) {
     throw new ArtifactClientError("ARTIFACT_REF_INVALID", "artifact ref does not match manifest", {
@@ -420,9 +445,10 @@ export async function persistArtifactOutput(input: {
     ? Buffer.from(input.output)
     : Buffer.from(input.output, "utf8");
   try {
-    const artifactRoot = resolveArtifactRoot(input.cwd, input.env);
-    const state = resolvePennyRuntimeState(input.cwd, { env: input.env });
-    using store = ArtifactStore.openExisting(artifactRoot, { projectId: state.projectId });
+    const state = resolveArtifactState(input.cwd, input.env);
+    using store = ArtifactStore.openExisting(state.paths.artifacts.root, {
+      projectId: state.projectId,
+    });
     const ref = parseArtifactRef(
       store.persist({
         metadata,
@@ -444,6 +470,12 @@ export async function persistArtifactOutput(input: {
     return ref;
   } catch (error) {
     if (error instanceof ArtifactClientError) throw error;
+    if (isSqliteCorruption(error)) {
+      throw new ArtifactClientError(
+        "ARTIFACT_STORE_CORRUPT",
+        error instanceof Error ? error.message : "Artifact database is damaged"
+      );
+    }
     throw new ArtifactClientError(
       "ARTIFACT_PERSIST_FAILED",
       error instanceof Error ? error.message : "TypeScript artifact persistence failed",

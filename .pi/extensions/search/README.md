@@ -22,7 +22,7 @@ Both tools call Ollama's **cloud** API (`https://ollama.com`), not the local Oll
 | query | string | Yes | The search query (1–16,384 characters) |
 | max_results | integer | No | Max results, 1-10 (default 5) |
 
-**Returns**: `{ success, query, results: [{ title, url, content }] }` as JSON text. Bounded responses keep this representation unchanged. The complete Pi result envelope obeys Penny's shared budget (by default 32,768 bytes, 32,768 characters, and 8,192 estimated tokens) and an independent 2,000-line ceiling; owner-supplied lower shared caps are honored. If truncation is needed, the model-visible value contains a UTF-8-safe prefix ending on a complete line and an explicit notice. The complete JSON is written to a newly created owner-only temporary directory (`0700`) and file (`0600`), and the notice gives its exact path for range-limited `read` calls.
+**Returns**: `{ success, query, results: [{ title, url, content }] }` as JSON text. Bounded responses keep this representation unchanged. The complete Pi result envelope obeys Penny's [opt-in shared budget](../lib/README.md#tool-result-budget) and an independent 2,000-line ceiling; owner-supplied lower shared caps are honored. Although its named hard caps are 32,768 bytes, 32,768 UTF-16 code units and 8,192 estimated tokens, the one-estimated-token-per-byte calculation makes the effective default **8,192 serialized bytes**, including envelope/notice overhead. If truncation is needed, the model-visible value contains a UTF-8-safe prefix ending on a complete line and an explicit notice. The complete JSON is written to a newly created owner-only temporary directory (`0700`) and file (`0600`), and the notice gives its exact path for range-limited `read` calls.
 
 Provider responses are streamed through an 8 MiB byte cap, JSON structural complexity is bounded, and result counts above the requested maximum are rejected. Full-result spill files are capped and live below one owner-only dedicated temporary root. At most four are retained per session; they are deleted on `session_shutdown`, while abnormal-termination cleanup incrementally visits at most 1,024 entries and removes at most 256 spills older than 24 hours per session start.
 
@@ -35,7 +35,7 @@ Provider responses are streamed through an 8 MiB byte cap, JSON structural compl
 |------|------|----------|-------------|
 | url | string | Yes | http(s) URL of the page to fetch |
 
-**Returns**: `{ success, url, title, content, truncated, links }` as JSON text. Content is truncated at 80,000 characters (`truncated: true` when clipped).
+**Returns**: `{ success, url, title, content, truncated, links }` as JSON text. Content is truncated at 80,000 JavaScript UTF-16 code units (`truncated: true` when clipped). Unlike successful `web_search`, neither normal nor GitHub-fallback `web_fetch` results use the shared envelope fitter or save a spill file. The clipped tail has no continuation; title and links are returned outside that content cutoff, and a result may exceed the shared ceiling. Search/fetch error replies also bypass shared fitting. This is existing presentation behavior, not a claim of lossless retrieval.
 
 When Ollama Web Fetch returns provider HTTP 404 for a requested URL, the tool applies a bounded fallback sequence:
 
@@ -50,7 +50,7 @@ Errors are categorized and logged with structured error codes:
 - `SEARCH_CLIENT_ERROR` — 4xx responses (includes auth guidance for 401/403)
 - `SEARCH_SERVER_ERROR` — 5xx responses or invalid JSON
 - `SEARCH_NETWORK_ERROR` — connection failures
-- `SEARCH_ABORTED` — timeout or caller cancellation
+- `SEARCH_ABORTED` — transport inactivity expiry or caller cancellation
 
 `web_fetch` errors say that Ollama Web Fetch could not return content for the **requested URL**. They call the HTTP code a **provider status** and explicitly avoid claiming that the destination itself returned that code. Failed fetch payloads include the requested `url`, a reason-specific `failure_scope`, optional `provider_status`, a diagnostic, any failed `github_api_fallback`, and—when appropriate—a structured `retry_with: { tool, arguments, available, reason }` Playwright action. Successful GitHub retries include `fallback: { strategy, kind, fetched_url, reason }`. Input validation failures and caller cancellations do not recommend another fetch automatically. Other tool errors retain the compact `{ success: false, error: "..." }` form.
 
@@ -67,7 +67,7 @@ Errors are categorized and logged with structured error codes:
 | -------------------------------- | ------------------ | --------------------------------------------------- |
 | OLLAMA_API_KEY                   | (none — required)  | API key from https://ollama.com/settings/keys       |
 | OLLAMA_WEB_SEARCH_BASE_URL       | https://ollama.com | Override the API base URL (e.g. for a proxy)        |
-| OLLAMA_WEB_SEARCH_TIMEOUT_MS     | 30000              | Per-request timeout in milliseconds                 |
+| OLLAMA_WEB_SEARCH_TIMEOUT_MS     | 30000              | Backward-compatible transport inactivity interval   |
 | PENNY_TOOL_RESULT_MAX_BYTES      | 32768              | Optional lower shared complete-result byte cap      |
 | PENNY_TOOL_RESULT_MAX_CHARACTERS | 32768              | Optional lower shared complete-result character cap |
 | PENNY_TOOL_RESULT_MAX_TOKENS     | 8192               | Optional lower shared estimated-token cap           |

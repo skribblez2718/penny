@@ -12,11 +12,19 @@ bearer permissions, grants, or session-bound capabilities.
 }
 ```
 
-`range` is optional and uses UTF-8 byte offsets in `[start,end)` form. A bounded result
-returns `next_range` when more bytes remain; repeat the call with that range until
-`truncated` is false. Ranges and IDs do not expire.
+For textual media, `range` is optional and uses UTF-8 byte offsets in `[start,end)` form.
+A bounded result returns `next_range` when more bytes remain; repeat the call with that
+range until `truncated` is false. Text wire output is unchanged. Ranges and IDs do not
+expire.
 
-There is no list, search, wildcard, prefix, cursor, materialization, or write operation.
+For canonical `image/png`, omit `range`. The tool revalidates the complete static PNG and
+returns one bounded JSON metadata text block followed by one Pi image block. Metadata
+contains the exact ID, digest, media type, byte length, and dimensions. Base64 exists only
+inside the image block's `data` field; it is absent from text, details, logs, and durable
+state. Stored PNGs are validated, never rewritten during delivery.
+
+Other binary media, noncanonical PNGs, and range-on-image requests fail closed. There is no
+list, search, wildcard, prefix, cursor, materialization, or write operation.
 Callers receive exact IDs from `subagent`, `skill`, or a current-session handoff index.
 
 ## Store
@@ -57,6 +65,19 @@ Inputs are unique exact IDs from any run in the current project partition. Owner
 verifies existence and integrity before worker spawn. Cross-run and multi-source fan-in are
 supported; cross-project lookup fails closed.
 
+## PNG safety contract
+
+The shared orchestration PNG codec fully inflates and unfilters pixels under source,
+compressed, decompressed, dimension, pixel, and ancillary-data limits. It accepts static,
+non-interlaced 8-bit grayscale/RGB with optional alpha. Backend admission canonicalizes to
+metadata-free RGBA with one IDAT; artifact delivery accepts only that canonical shape.
+APNG, palettes, unknown critical chunks, malformed CRC/DEFLATE/filter data, trailing data,
+and limit violations reject.
+
+The implementation uses Node's built-in `node:zlib` and adds no image-decoder package. See
+`docs/agents/architecture/binary-artifacts.md` for the dependency/license/advisory posture,
+canonicalization rationale, and model capability boundary.
+
 ## Errors
 
 - `ARTIFACT_INVALID_ID`
@@ -64,15 +85,28 @@ supported; cross-project lookup fails closed.
 - `ARTIFACT_DIGEST_MISMATCH`
 - `ARTIFACT_ENCODING_INVALID`
 - `ARTIFACT_RANGE_INVALID`
+- `ARTIFACT_RANGE_UNSUPPORTED`
+- `ARTIFACT_MEDIA_UNSUPPORTED`
+- `ARTIFACT_IMAGE_INVALID`
+- `ARTIFACT_IMAGE_NOT_CANONICAL`
+- `ARTIFACT_IMAGE_LIMIT_EXCEEDED`
 - `ARTIFACT_CONFIG_INVALID`
 - `ARTIFACT_RESULT_BUDGET_EXCEEDED`
 
 ## Configuration
 
-| Variable                            | Meaning                                                    |
-| ----------------------------------- | ---------------------------------------------------------- |
-| `PENNY_STATE_ROOT`                  | Optional absolute Penny state root; defaults below Pi home |
-| Shared tool-result budget variables | Bound serialized read results                              |
+| Variable                              | Meaning                                                    |
+| ------------------------------------- | ---------------------------------------------------------- |
+| `PENNY_STATE_ROOT`                    | Optional absolute Penny state root; defaults below Pi home |
+| Shared tool-result budget variables   | Bound serialized textual result metadata                   |
+| `PENNY_PNG_MAX_SOURCE_BYTES`          | Lower canonical PNG source-byte ceiling                    |
+| `PENNY_PNG_MAX_WIDTH`                 | Lower PNG width ceiling                                    |
+| `PENNY_PNG_MAX_HEIGHT`                | Lower PNG height ceiling                                   |
+| `PENNY_PNG_MAX_PIXELS`                | Lower PNG pixel-count ceiling                              |
+| `PENNY_PNG_MAX_COMPRESSED_BYTES`      | Lower aggregate IDAT ceiling                               |
+| `PENNY_PNG_MAX_DECOMPRESSED_BYTES`    | Lower inflated-scanline ceiling                            |
+| `PENNY_PNG_MAX_ANCILLARY_CHUNK_BYTES` | Lower per-ancillary-chunk ceiling                          |
+| `PENNY_PNG_MAX_ANCILLARY_BYTES`       | Lower aggregate ancillary-data ceiling                     |
 
 `PENNY_ARTIFACT_ROOT`, `PENNY_ARTIFACT_GRANT_ROOT`, and XDG artifact fallback are retired
 and rejected. No artifact-specific grant, invocation, HMAC, cursor, TTL, or materialization

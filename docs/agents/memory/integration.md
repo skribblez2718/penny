@@ -8,12 +8,14 @@ import a raw memory peer, open palace bytes, spawn a per-call bridge, or fall ba
 to direct/prefer storage. Hub outage fails closed.
 
 Only the **unmarked primary Pi runtime** receives the full memory bundle and
-lifecycle hooks. Since the operator-approved policy change of 2026-08-17,
-subagent workers additionally receive a **read-only recall subset** declared in
+lifecycle hooks. Catalog workers may additionally receive a **read-only recall subset** declared in
 their frontmatter `tools:` via the `memory.read` tool profile: search, exact
 drawer/taxonomy reads, KG reads, and primary-diary read. Workers get no write
 surface, no diary write, no KG mutation, no logstream, and no lifecycle hooks. SDK
 skill workers receive the same YAML-declared read subset through an owner-scoped provider.
+
+Profiles statically lint the YAML maximum; changes to tool exposure follow the
+[binding runtime rule](../agents/discovery-and-tools.md#binding-runtime-rule), not memory policy or task-selected filtering. [Invocation](../agents/invocation.md) owns exact artifact communication and recovery.
 
 Read-only recall lets an agent look up prior durable knowledge. It is not a
 channel: with no write surface, no agent can post a message for another to read.
@@ -26,7 +28,7 @@ state uses the orchestration checkpointer. Memory is neither channel.
 | ------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Recall read   | Bounded semantic search, exact drawer read, taxonomy/list reads.                                                 |
 | Curated write | Add durable drawers. Near-duplicate enforcement occurs in the write path; callers do not run a routine precheck. |
-| Diary         | Read/write the primary `penny` diary; one bounded automatic primary entry may be written at shutdown.            |
+| Diary         | Read/write the primary `penny` diary; automatic retention has a separate default-off admission gate below.       |
 | KG read       | Query governed facts, timelines, and statistics.                                                                 |
 | KG write      | Add, invalidate, or supersede allowlisted temporal facts.                                                        |
 
@@ -100,6 +102,18 @@ Never store secrets. Large binary or full generated products belong in the file
 or artifact plane; memory may hold a concise durable pointer when future recall
 justifies it.
 
+## Separate automatic-retention boundary
+
+`PENNY_MEMORY_AUTO_DIARY_MODE` defaults to `disabled`, independently of the ordinary write gate. `observe-only` evaluates a candidate but makes no duplicate or diary request. `retain` additionally requires `PENNY_MEMORY_WRITE_MODE=enabled` before one duplicate check and at most one diary-write attempt. Disabling automatic mode does not disable owner-enabled manual diary writes.
+
+Only the unmarked primary runtime receives input/settled/shutdown hooks. After matched new direct user activity, an isolated client request exposes exactly the non-persistent `memory_stage_diary_candidate` schema; it does not change primary active tools or insert a response/follow-up turn. The extension accepts exactly one valid staging call; prose, unrelated/multiple calls, malformed output, and model failure fail closed. Routine/transient activity is skipped. Sensitive, quoted, pasted, external, injected, unsupported, or privacy/provenance-ambiguous material is uncertain or skipped. Transcript size and activity counts never authorize retention.
+
+Admission does not trust the model's `safe_to_retain` claim. Retain eligibility requires exact text-only interactive input and no tool result, custom model-visible message, compaction, branch summary, or bash result in the evaluated activity. RPC or mixed external/tool context is coerced to a **content-free `uncertain`** candidate even if the model requests retain. Missing, transformed, over-bound, or ambiguous source receipts fail closed; no keyword/secret-pattern classifier grants admission.
+
+Evaluation binds at most eight exact user-entry IDs and digests. Shutdown examines at most 512 current-branch entries and revalidates the latest activity, source IDs/digests, uniqueness, bounds, candidate state, and bounded in-process authorization created only after successful automatic staging. Persisted candidates never restore authorization after restart. A verified content-free processed marker precedes network work; stale, forged, skipped, uncertain, missing, or unevaluated-latest state cannot be adopted or blindly replayed. Entries are at most 2,048 UTF-8 bytes; assessments/reasons at most 512.
+
+`observe-only` emits disposition/byte counts without candidate text or hub access. Writable retain requires an unambiguous boolean duplicate result before one **non-retried** diary write with topic `automatic-session-continuity-v1`. Isolated evaluation and duplicate/write shutdown each use the configured bounded timeout (`PENNY_MEMORY_AUTO_DIARY_TIMEOUT_MS`, default 2,000 ms, range 100–10,000 ms); duplicate/write share one shutdown boundary. A write timeout is commit-ambiguous: review the diary before separately authorized manual recovery, never blindly retry. Automatic telemetry is content-free; existing entries are never deleted or rewritten. Workers/skill drivers receive no staging schema or automatic hooks. The [extension contract](../../../.pi/extensions/memory/README.md#automatic-diary) owns implementation detail.
+
 ## Online admin and offline boundary
 
 - **Online:** admin, eval, audit, and retention planning use the authenticated
@@ -126,6 +140,7 @@ serialized UTF-8 byte, making the unchanged 8,192 estimated-token cap an at-most
 release minimum context headroom is 16,384 tokens, so a conforming result leaves
 at least 8,192 tokens reserved after it. Oversized exact or structured reads
 return byte counts, range, digest/revision, and an HMAC-bound continuation.
+For a memory read, pass returned `continuation.cursor` as the same tool's `cursor` argument with unchanged bound query/filter arguments, until `truncated: false`. `continuation.next_range` describes the next UTF-8 byte range; it is informational, not a memory-tool input. This differs from artifact reads, which accept explicit non-expiring ranges. Exact content ranges or normalized-JSON fragments must concatenate byte-for-byte with a stable source digest/revision. Memory cursors expire and remain bound to operation, caller/session, query, filters, source, and next range.
 Wrong-caller, wrong-query, stale, changed, evicted, expired, and malformed cursors
 fail with typed errors. Nothing is silently truncated and continuations never
 replay writes.
@@ -147,6 +162,9 @@ live supported-model trial or a no-compaction outcome.
 - [ ] Primary retrieval is relevance-driven and bounded.
 - [ ] Writes are curated; no routine duplicate precheck or routine KG linking.
 - [ ] Diary writes come only from the primary runtime.
+- [ ] Automatic mode is independently default-off; retain requires both provenance/privacy admission and the ordinary write gate.
+- [ ] Automatic restart never adopts persisted candidates as authorization; ambiguous writes are not replayed.
+- [ ] Memory continuation uses `continuation.cursor`, preserves exact bytes/digest/revision, and fails closed on cursor errors.
 - [ ] Offline access is copied-target + drain/stop/receipt gated.
 - [ ] Setup, cutover, and uninstall preserve data unless deletion is separately authorized.
 

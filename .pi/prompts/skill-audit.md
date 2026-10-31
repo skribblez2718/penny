@@ -7,7 +7,9 @@ argument-hint: "<skill-name> [additional details...]"
 
 Audit the Penny skill named **`$1`**. Determine whether its complete package and direct execution path produce the intended user-visible outcome, support Penny's broader purpose, and remain trustworthy and adaptable as models improve. Recommend changes only when evidence supports them, and preserve every capability that already works.
 
-Additional details (optional): `${@:2}`
+**Additional details (optional):**
+
+${@:2}
 
 ## 1. Inputs and stopping rules
 

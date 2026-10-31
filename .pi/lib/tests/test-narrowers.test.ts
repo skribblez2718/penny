@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createTestExtensionApi, createTestToolInfos } from "./pi-test-host.js";
 import {
-  createTestExtensionApi,
   parseJson,
   requireArray,
   requireArrayElement,
@@ -36,6 +36,65 @@ describe("test fixture narrowers", () => {
     expect(invoke).toThrow(message);
   });
 
+  it("keeps SDK tool metadata while isolating each provider fixture", () => {
+    const tools = createTestToolInfos(["first", "second"]);
+    const first = requireArrayElement(tools, 0);
+    const second = requireArrayElement(tools, 1);
+    expect(tools.map((tool) => tool.name)).toEqual(["first", "second"]);
+    expect(first.parameters).not.toBe(second.parameters);
+    expect(first.sourceInfo).not.toBe(second.sourceInfo);
+    expect(first.sourceInfo).toMatchObject({
+      path: "/test-tools/first",
+      source: "test-host",
+      scope: "project",
+      origin: "top-level",
+    });
+    // Pi 1.x supplies exposure; the baseline predates that metadata field.
+    const info = requireRecord(first);
+    if (Object.hasOwn(info, "exposure")) expect(info.exposure).toBe("direct");
+  });
+
+  it("refuses unmodeled SDK additions instead of invoking the underlying capability", () => {
+    const api = createTestExtensionApi();
+    const capability = vi.fn();
+    // Model an additive SDK method without depending on a particular Pi release.
+    Object.assign(api, { futureSdkCapability: capability });
+    const invoke = requireFunction(requireRecord(api).futureSdkCapability);
+    expect(() => invoke("private fixture input")).toThrow(
+      "test ExtensionAPI capability is not implemented: futureSdkCapability"
+    );
+    expect(capability).not.toHaveBeenCalled();
+    expect(requireRecord(createTestExtensionApi()).futureSdkCapability).toBeUndefined();
+  });
+
+  it("keeps hooks and event subscriptions private to each fixture", () => {
+    const seen: unknown[] = [];
+    const first = createTestExtensionApi({ onAppendEntry: (_name, data) => seen.push(data) });
+    const second = createTestExtensionApi();
+    const receive = vi.fn();
+    const unsubscribe = first.events.on("fixture", receive);
+    second.events.emit("fixture", "other fixture");
+    first.events.emit("fixture", "own fixture");
+    unsubscribe();
+    first.events.emit("fixture", "after unsubscribe");
+    second.appendEntry("fixture", "not forwarded");
+    first.appendEntry("fixture", "forwarded");
+    expect(receive).toHaveBeenCalledTimes(1);
+    expect(receive).toHaveBeenCalledWith("own fixture");
+    expect(seen).toEqual(["forwarded"]);
+  });
+
+  it("preserves replaceable test methods and refuses unconfigured execution", () => {
+    const api = createTestExtensionApi();
+    api.appendEntry = vi.fn();
+    api.appendEntry("fixture", { value: 1 });
+    expect(api.appendEntry).toHaveBeenCalledTimes(1);
+    expect(api.appendEntry).toHaveBeenCalledWith("fixture", { value: 1 });
+    expect(() => api.exec("unexpected", [])).toThrow(
+      "test ExtensionAPI capability is not implemented: exec"
+    );
+  });
+
   it("exposes registered extension values to typed test hooks", () => {
     const seen: unknown[] = [];
     const api = createTestExtensionApi({
@@ -51,12 +110,13 @@ describe("test fixture narrowers", () => {
       parameters: { type: "object" },
       execute: vi.fn(),
     });
-    api.on("session_start", handler);
+    const unsubscribe = requireFunction(api.on("session_start", handler));
 
     expect(seen).toEqual([
       expect.objectContaining({ name: "fixture_tool" }),
       "session_start",
       handler,
     ]);
+    expect(unsubscribe()).toBeUndefined();
   });
 });

@@ -6,7 +6,7 @@ import {
   admitScaModelExecutionV1,
   buildScaModelRegistryV1,
   validateScaModelRegistryV1,
-} from "../src/sca/agent-models.js";
+} from "../dist/sca/agent-models.js";
 
 const RUNTIME = "a".repeat(64);
 

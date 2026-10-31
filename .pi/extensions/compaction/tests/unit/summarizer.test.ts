@@ -170,6 +170,48 @@ describe("generateModelSummary", () => {
     expect(await generateModelSummary(baseInput, ctxWithModel())).toBeNull();
   });
 
+  it("does not dispatch a summary when cancellation precedes or arrives during serialization", async () => {
+    const controller = new AbortController();
+    let completions = 0;
+    _summaryInternals.complete = async () => {
+      completions++;
+      return { content: [] };
+    };
+    _summaryInternals.serialize = async () => {
+      controller.abort();
+      return "serialized";
+    };
+    expect(
+      await generateModelSummary({ ...baseInput, signal: controller.signal }, ctxWithModel())
+    ).toBeNull();
+    expect(
+      await generateModelSummary({ ...baseInput, signal: controller.signal }, ctxWithModel())
+    ).toBeNull();
+    expect(completions).toBe(0);
+  });
+
+  it("forwards cancellation and never reports late progress or accepts an aborted summary", async () => {
+    const controller = new AbortController();
+    const reported: unknown[] = [];
+    _summaryInternals.serialize = async () => "serialized";
+    _summaryInternals.complete = async (_model, _context, options, progress) => {
+      const signal = options.signal;
+      if (!(signal instanceof AbortSignal)) throw new Error("missing native cancellation signal");
+      progress?.({ activity_class: "assistant_text_delta", observed_units: 1 });
+      controller.abort("cancel summary");
+      expect(signal.aborted).toBe(true);
+      progress?.({ activity_class: "assistant_thinking_delta", observed_units: 2 });
+      return { content: [{ type: "text", text: "late ignored summary" }] };
+    };
+    expect(
+      await generateModelSummary(
+        { ...baseInput, signal: controller.signal, onProgress: (event) => reported.push(event) },
+        ctxWithModel()
+      )
+    ).toBeNull();
+    expect(reported).toEqual([{ activity_class: "assistant_text_delta", observed_units: 1 }]);
+  });
+
   it("returns null when the model call throws (timeout/abort/error)", async () => {
     _summaryInternals.serialize = async () => "x";
     _summaryInternals.complete = async () => {

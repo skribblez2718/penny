@@ -1,4 +1,10 @@
+import {
+  verifyHostEffectBinding,
+  verifyHostResultWrapper,
+} from "./host-operations/effect-protocol.js";
+import { recordVideogenGateAnswer } from "./videogen/owner-selection.js";
 import path from "node:path";
+import { validateSourceRoutingSummary } from "./source-routing-summary.js";
 
 import type {
   ArtifactHostStore,
@@ -13,8 +19,18 @@ import {
   sha256,
 } from "./checkpointer.js";
 import { readRunInput, settleRunInput } from "./private-inputs.js";
-import { RunContext } from "./context.js";
+import { optionalCycleLimit, RunContext } from "./context.js";
 import type { ChildWorkflowCallRecord } from "./child-workflows/contracts.js";
+import {
+  ProjectedChildResponseV1Schema,
+  projectChildGate,
+  validateProjectedChildResponse,
+} from "./child-workflows/gates.js";
+import {
+  validateHostOperationReceipt,
+  validateHostOperationResult,
+  type HostOperationCallRecordV1,
+} from "./host-operations/contracts.js";
 import {
   OperationReceiptStore,
   promotionApplyOperationSourceIdentity,
@@ -25,7 +41,7 @@ import type { OperationEventGroup } from "./kb/contracts.js";
 import {
   ArtifactDispatchStateV1Schema,
   ContractValidationError,
-  EvaluationResultV2Schema,
+  EvaluationResultSchema,
   FeedbackRouteEvidenceV1Schema,
   OrchestrationRequestSchema,
   artifactDispatchRecoveryV1,
@@ -40,7 +56,7 @@ import {
   type CompletionProductEvidence,
   type Confidence,
   type Directive,
-  type EvaluationResultV2,
+  type EvaluationResult,
   type FeedbackRouteEvidenceV1,
   type JsonValue,
   type LivenessSnapshotV1,
@@ -58,6 +74,7 @@ import {
   hasApprovedPromotionCompletion,
   hasExternalStartOperationGroup,
   hasFanAggregate,
+  hasGenericGateResponseStorage,
   hasGenericResponsePolicy,
   hasHostContinuation,
   hasHostReviewedGateValidation,
@@ -68,8 +85,8 @@ import {
   hasStateAwareRepair,
   isHostContinuation,
   type CompletionReceiptPredicateV1,
-  type PlaybookStepOutcomeV1,
-  type PlaybookV1,
+  type PlaybookStepOutcome,
+  type Playbook,
 } from "./playbooks/playbook.js";
 import {
   bindGenericChildYamlAuthority,
@@ -80,14 +97,21 @@ import {
   runtimeRegistrationSha256,
   skillContractSha256,
   validateRegistrationContract,
-  type PlaybookRegistrationV1,
-  type PlaybookRegistryV1,
+  withOrdinaryFaultConstructor,
+  type PlaybookRegistration,
+  type PlaybookRegistry,
   type PreparedStartV1,
+  type OrdinaryHostFaultV1,
 } from "./playbooks/registry.js";
 import { ReceiptAuthority, trustedInvocationDigest } from "./receipts.js";
 import type { ResearchContextOwnerV2 } from "./research-context.js";
-import { validateSemanticComposition } from "./composition.js";
+import { assertResolvedModelIdentity, validateRequiredModelIdentity } from "./required-model.js";
+import type { ImagegenStartAdmissionProvidersV1 } from "./imagegen/types.js";
+import { CompositionAdmissionError, validateSemanticComposition } from "./composition.js";
+import { nativeStartRequest, assertAdmittedArtifactInputs } from "./contextual-artifacts.js";
+import { ArtifactStore } from "./artifact-store.js";
 import type { EffectEvidenceProviderV1 } from "./skill-contracts/effects.js";
+import type { ScaP02ComponentValidationAuthorityV1 } from "./sca/p02-contracts.js";
 import {
   LivenessController,
   malformedErrorDigest,
@@ -96,7 +120,8 @@ import {
 
 export interface EngineOptions {
   readonly projectRoot: string;
-  readonly maxSteps: number;
+  readonly maxSteps?: number | null;
+  readonly maxIterations?: number | null;
   readonly dispatchMode?: () => string | undefined;
   /** Durable hosts must inject their canonical receipt authority. */
   readonly receiptAuthority: ReceiptAuthority;
@@ -106,22 +131,32 @@ export interface EngineOptions {
   readonly artifactStore?: ArtifactHostStore;
   /** Exact-byte capability used for typed import admission before run mutation. */
   readonly artifactReader?: ArtifactReader;
+  /** Project binding for prospective composition assurance (the store and DB are rechecked). */
+  readonly assuranceProjectId?: string;
   /** Owner-resolved, metadata-only research context seam. */
   readonly researchContext?: ResearchContextOwnerV2;
+  /** Private image profile/export/storage registries used only by typed start admission. */
+  readonly imagegen?: ImagegenStartAdmissionProvidersV1;
   readonly livenessController?: LivenessController;
   /** Test/private registration fallback; durable bound policy bytes always win on replay. */
   readonly livenessPolicyResolver?: LivenessPolicyResolver;
-  /** Deterministic crash-boundary injection used only by local host-recovery tests. */
+  /** Host-only ordinary-skill crash-boundary injection; not part of requests or environment. */
+  readonly hostFault?: OrdinaryHostFaultV1;
+  /** Legacy Research-only host injection; mutually exclusive with hostFault. */
   readonly researchHostFault?: (point: string) => void;
+  /** Trusted host gate-evaluation clock; tests may inject a deterministic value. */
+  readonly trustedClock?: () => Date;
+  /** Host-owned P02 component admission authority; absent authority fails candidate construction. */
+  readonly scaP02ComponentValidationAuthority?: ScaP02ComponentValidationAuthorityV1;
   /** Optional trusted, immutable effect-trace snapshot provider. Absence means unknown. */
   readonly effectEvidenceProvider?: EffectEvidenceProviderV1;
   /**
    * Playbook registry override. Production uses the shipped single-entry registry;
    * tests inject a double to prove multi-playbook dispatch without activating a skill.
    */
-  readonly playbookRegistry?: PlaybookRegistryV1;
+  readonly playbookRegistry?: PlaybookRegistry;
   /** Exact registration already resolved through an allowed candidate path. */
-  readonly playbookRegistration?: PlaybookRegistrationV1;
+  readonly playbookRegistration?: PlaybookRegistration;
   /**
    * Which registered playbook this engine instance drives. Defaults to the sole
    * production playbook (research). The KB skill drives the engine with its own
@@ -250,9 +285,15 @@ function metadata(identity: RunIdentity): Record<string, JsonValue> {
 
 type TerminalDirective = Extract<Directive, { result: Record<string, JsonValue> }>;
 
+export interface PreparedHostOperationContinuationV1 {
+  readonly source_snapshot_sha256: string;
+  readonly context: RunContext;
+  readonly next: Directive;
+}
+
 interface RoutedRepairV1 {
-  readonly next: PlaybookStepOutcomeV1;
-  readonly evidence: FeedbackRouteEvidenceV1;
+  readonly next: PlaybookStepOutcome;
+  readonly evidence?: FeedbackRouteEvidenceV1;
 }
 
 function terminalDirective(value: Directive): TerminalDirective | undefined {
@@ -277,8 +318,13 @@ function resolveLatestProduct(input: {
       },
     };
   }
+  // A terminal evidence graph may also include an imported product of the same kind
+  // and producing phase. Only this run's output can satisfy its completion gate.
   const matches = input.terminal.artifacts.filter(
-    (artifact) => artifact.kind === spec.artifact_kind && artifact.phase === spec.producing_state
+    (artifact) =>
+      artifact.run_id === input.context.identity.run_id &&
+      artifact.kind === spec.artifact_kind &&
+      artifact.phase === spec.producing_state
   );
   if (matches.length === 0) return { failure: "LATEST_PRODUCT_MISSING" };
   if (matches.length > 1) return { failure: "LATEST_PRODUCT_AMBIGUOUS" };
@@ -289,7 +335,10 @@ function resolveLatestProduct(input: {
   );
   const highestVersion = Math.max(
     ...input.context.selectedArtifacts
-      .filter((candidate) => candidate.operation_id === artifact.operation_id)
+      .filter(
+        (candidate) =>
+          candidate.run_id === artifact.run_id && candidate.operation_id === artifact.operation_id
+      )
       .map((candidate) => candidate.version)
   );
   if (
@@ -368,6 +417,7 @@ export function admitCompletionCandidate(input: {
   pendingPhaseResult?: PhaseResult;
   artifactReader?: ArtifactReader;
   projectRoot?: string;
+  verifyExecutionReceipt?: import("./receipts.js").ExecutionReceiptVerifier;
 }): Directive {
   const terminal = terminalDirective(validateDirective(input.candidate));
   if (
@@ -412,6 +462,9 @@ export function admitCompletionCandidate(input: {
           latestProduct: latest.product,
           ...(input.artifactReader !== undefined ? { artifactReader: input.artifactReader } : {}),
           projectRoot: input.projectRoot ?? input.context.projectRoot,
+          ...(input.verifyExecutionReceipt === undefined
+            ? {}
+            : { verifyExecutionReceipt: input.verifyExecutionReceipt }),
           ...(input.pendingPhaseResult !== undefined
             ? { pendingPhaseResult: input.pendingPhaseResult }
             : {}),
@@ -468,10 +521,10 @@ export function admitCompletionCandidate(input: {
 export class OrchestrationEngine {
   // Typed as the capability-probed union, never as a concrete playbook class: the engine
   // must not know which playbook it is driving. See playbooks/playbook.ts (W1).
-  private readonly playbook: PlaybookV1;
-  private readonly registry: PlaybookRegistryV1;
+  private readonly playbook: Playbook;
+  private readonly registry: PlaybookRegistry;
   /** The exact validated active registration used by engine and workers (W6). */
-  readonly registration: PlaybookRegistrationV1;
+  readonly registration: PlaybookRegistration;
   /** The active skill contract (W3). */
   readonly contract: SkillContract;
   private readonly completionPredicates: ReadonlyMap<string, CompletionReceiptPredicateV1>;
@@ -480,18 +533,24 @@ export class OrchestrationEngine {
   private readonly projectRoot: string;
   /** Exact caller catalog used to bind generic-child YAML maxima for this engine instance. */
   private readonly catalogAgentProjectRoot: string;
-  private readonly maxSteps: number;
+  private readonly maxSteps: number | null;
   private readonly dispatchMode: () => string | undefined;
   private readonly artifactReader: ArtifactReader | undefined;
   private readonly artifactStore: ArtifactHostStore | undefined;
+  private readonly trustedClock: () => Date;
   private readonly researchContext: ResearchContextOwnerV2 | undefined;
+  private readonly imagegen: ImagegenStartAdmissionProvidersV1 | undefined;
   readonly receiptAuthority: ReceiptAuthority;
   readonly liveness: LivenessController;
+  readonly maxIterations: number | null;
 
   constructor(
     private readonly checkpointer: Checkpointer,
     options: EngineOptions
   ) {
+    if (options.hostFault !== undefined && options.researchHostFault !== undefined) {
+      throw new Error("ambiguous host fault hooks: choose hostFault or researchHostFault");
+    }
     this.checkpointer.bindKbRuntimeProjectRoot(options.projectRoot);
     this.registry =
       options.playbookRegistry ??
@@ -512,7 +571,9 @@ export class OrchestrationEngine {
     }
     this.catalogAgentProjectRoot = path.resolve(options.projectRoot);
     const registration = bindGenericChildYamlAuthority(
-      selectedRegistration,
+      options.hostFault !== undefined || options.researchHostFault !== undefined
+        ? withOrdinaryFaultConstructor(selectedRegistration)
+        : selectedRegistration,
       this.catalogAgentProjectRoot
     );
     // W3: authority metadata is validated before playbook construction.
@@ -528,17 +589,26 @@ export class OrchestrationEngine {
       options.artifactReader ??
       this.artifactStore ??
       (isArtifactReader(options.artifactRevisions) ? options.artifactRevisions : undefined);
+    this.trustedClock = options.trustedClock ?? (() => new Date());
     this.researchContext = options.researchContext;
+    this.imagegen = options.imagegen;
     this.playbook = registration.construct({
       ...(options.artifactRevisions ? { artifactRevisions: options.artifactRevisions } : {}),
       ...(this.artifactReader ? { artifactReader: this.artifactReader } : {}),
       ...(this.artifactStore ? { artifactStore: this.artifactStore } : {}),
       ...(this.researchContext ? { researchContext: this.researchContext } : {}),
       checkpointer: this.checkpointer,
+      verifyExecutionReceipt: (receipt) => options.receiptAuthority.verify(receipt),
+      ...(options.hostFault ? { hostFault: options.hostFault } : {}),
       ...(options.researchHostFault ? { researchHostFault: options.researchHostFault } : {}),
+      ...(options.trustedClock ? { trustedClock: options.trustedClock } : {}),
+      ...(options.scaP02ComponentValidationAuthority
+        ? { scaP02ComponentValidationAuthority: options.scaP02ComponentValidationAuthority }
+        : {}),
       ...(options.effectEvidenceProvider
         ? { effectEvidenceProvider: options.effectEvidenceProvider }
         : {}),
+      ...(this.imagegen ? { imagegen: this.imagegen } : {}),
       /**
        * The private-input custody seam (§5.6), bound to THIS engine's control DB
        * and project root. Playbooks that never declare the capability (research)
@@ -555,7 +625,9 @@ export class OrchestrationEngine {
       },
     });
     this.projectRoot = path.resolve(options.projectRoot);
-    this.maxSteps = options.maxSteps;
+    this.assuranceProjectId = options.assuranceProjectId;
+    this.maxSteps = optionalCycleLimit(options.maxSteps, "max_steps");
+    this.maxIterations = optionalCycleLimit(options.maxIterations, "max_iterations");
     this.dispatchMode = options.dispatchMode ?? (() => process.env[ARTIFACT_DISPATCH_MODE_ENV]);
     this.receiptAuthority = options.receiptAuthority;
     this.liveness =
@@ -568,15 +640,58 @@ export class OrchestrationEngine {
     );
   }
 
+  private readonly assuranceProjectId: string | undefined;
+
+  private assuranceHost(
+    runId: string
+  ): import("./playbooks/registry.js").StartAdmissionReadOnlyHostV1["assurance"] {
+    if (!(this.artifactStore instanceof ArtifactStore) || this.assuranceProjectId === undefined)
+      return undefined;
+    const defineRegistration = resolvePlaybook("define", PLAYBOOK_REGISTRY);
+    const supportedDefineRegistrationSha256 =
+      defineRegistration === undefined
+        ? null
+        : runtimeRegistrationSha256(
+            bindGenericChildYamlAuthority(defineRegistration, this.catalogAgentProjectRoot)
+          );
+    return {
+      artifacts: this.artifactStore,
+      checkpointer: this.checkpointer,
+      project_id: this.assuranceProjectId,
+      project_root: this.projectRoot,
+      supported_define_registration_sha256: supportedDefineRegistrationSha256,
+      consumer: {
+        run_id: runId,
+        registration_name: this.registration.name,
+        contract_sha256: this.registrationContractSha256,
+        registration_sha256: this.runtimeRegistrationSha256,
+      },
+    };
+  }
+
   private prepareStart(request: StartRequest): PreparedStartV1 | undefined {
+    const hasContext =
+      request.input_artifacts?.artifacts.some((binding) => binding.designation === "context") ??
+      false;
+    if (hasContext && this.registration.contextual_inputs !== "accepted_terminal_products_v1")
+      throw new CompositionAdmissionError(
+        "COMPOSITION_CONTEXT_UNACCEPTED",
+        "registration does not admit nonbinding context"
+      );
     if (this.registration.ingress !== "skill") return undefined;
     const admission = this.registration.start_admission;
     if (admission === undefined) {
       throw new Error(`skill registration '${this.registration.name}' has no start admission`);
     }
-    const prepared = admission.prepare(request, {
+    const assurance = this.assuranceHost(request.identity.run_id);
+    const contexts =
+      request.input_artifacts?.artifacts.filter((binding) => binding.designation === "context") ??
+      [];
+    const prepared = admission.prepare(nativeStartRequest(request), {
+      ...(assurance === undefined ? {} : { assurance }),
       ...(this.artifactReader === undefined ? {} : { artifactReader: this.artifactReader }),
       ...(this.researchContext === undefined ? {} : { researchContext: this.researchContext }),
+      ...(this.imagegen === undefined ? {} : { imagegen: this.imagegen }),
     });
     if (
       prepared.schema_id !== this.contract.io.request.schema_id ||
@@ -587,37 +702,208 @@ export class OrchestrationEngine {
     }
     validateSemanticComposition({
       contract: this.contract,
-      ...(prepared.input_artifacts === undefined
+      inputArtifacts: {
+        schema_version: 2,
+        artifacts: [...(prepared.input_artifacts?.artifacts ?? []), ...contexts],
+      },
+      ...(contexts.length === 0
         ? {}
-        : { inputArtifacts: prepared.input_artifacts }),
+        : { acceptContextProduct: (ref: ArtifactRef) => this.assertAcceptedContextProduct(ref) }),
       ...(this.artifactReader === undefined ? {} : { artifactReader: this.artifactReader }),
     });
     return prepared;
   }
 
+  private assertAcceptedContextProduct(ref: ArtifactRef): void {
+    const fail = (): never => {
+      throw new CompositionAdmissionError(
+        "COMPOSITION_CONTEXT_UNACCEPTED",
+        "context must be the exact current accepted terminal product of a supported producer"
+      );
+    };
+    const producer = this.checkpointer.loadRunById(ref.run_id);
+    if (producer === undefined) return fail();
+    const template =
+      resolvePlaybook(producer.identity.playbook, this.registry) ??
+      resolvePlaybook(producer.identity.playbook, PLAYBOOK_REGISTRY);
+    if (template === undefined) return fail();
+    const registration = bindGenericChildYamlAuthority(template, this.catalogAgentProjectRoot);
+    if (registration.contextual_inputs !== "accepted_terminal_products_v1") return fail();
+    validateRegistrationContract(registration, this.catalogAgentProjectRoot);
+    const binding = producer.registrationContractBinding;
+    if (
+      binding?.registration_name !== registration.name ||
+      binding.contract_sha256 !== skillContractSha256(registration.contract) ||
+      binding.registration_sha256 !== runtimeRegistrationSha256(registration)
+    )
+      return fail();
+    const terminal = producer.terminalDirective;
+    if (
+      producer.status !== "complete" ||
+      !producer.met ||
+      terminal?.action !== "complete" ||
+      terminal.status !== "complete" ||
+      !terminal.met ||
+      canonicalJson(terminal.result.output_artifact_ref ?? null) !== canonicalJson(ref)
+    )
+      return fail();
+    if (
+      !registration.contract.io.active_output_ports.some(
+        (port) =>
+          port.semantic_product &&
+          port.artifact_kind === ref.kind &&
+          port.schema_id === ref.content_schema?.schema_id &&
+          port.schema_version_required === ref.content_schema?.schema_version
+      )
+    )
+      return fail();
+    const envelope = this.checkpointer.completionAdmission(ref.run_id);
+    if (
+      envelope === undefined ||
+      envelope.evidence_refs.some(
+        (evidence) => !this.checkpointer.completionEvidenceRefExists(evidence, ref.run_id)
+      )
+    )
+      return fail();
+    // Replay the current host predicates on an isolated checkpoint clone. No owner state is changed.
+    const checked = admitCompletionCandidate({
+      checkpointer: this.checkpointer,
+      contract: registration.contract,
+      predicates: registration.completionReceiptPredicates,
+      context: producer,
+      candidate: terminal,
+      ...(this.artifactReader === undefined ? {} : { artifactReader: this.artifactReader }),
+      projectRoot: this.projectRoot,
+      verifyExecutionReceipt: (receipt) => this.receiptAuthority.verify(receipt),
+    });
+    if (
+      canonicalJson(checked) !== canonicalJson(terminal) ||
+      canonicalJson(producer.pendingCompletionAdmission()) !== canonicalJson(envelope)
+    )
+      return fail();
+  }
+
   private materializeStart(prepared: PreparedStartV1): readonly ArtifactRef[] {
     const admission = this.registration.start_admission;
     if (admission === undefined) return [];
+    const assurance = this.assuranceHost(prepared.request.identity.run_id);
     return admission.materialize(prepared, {
       run_id: prepared.request.identity.run_id,
+      ...(assurance === undefined ? {} : { assurance }),
       ...(this.artifactReader === undefined ? {} : { artifactReader: this.artifactReader }),
       ...(this.artifactStore === undefined ? {} : { artifactStore: this.artifactStore }),
+      trustedClock: this.trustedClock,
       ...(this.researchContext === undefined ? {} : { researchContext: this.researchContext }),
+      ...(this.imagegen === undefined ? {} : { imagegen: this.imagegen }),
     });
+  }
+
+  private catalogPhase(state: string, agent?: string) {
+    const worker = this.registration.worker;
+    if (worker.kind !== "catalog-agent") return undefined;
+    const direct = worker.phases.get(state);
+    const aliases = [...worker.phases.values()].filter(
+      (phase) =>
+        phase.directive_state_id === state && (agent === undefined || phase.agent === agent)
+    );
+    return direct !== undefined && (agent === undefined || direct.agent === agent)
+      ? direct
+      : aliases.length === 1
+        ? aliases[0]
+        : undefined;
+  }
+
+  /** Undefined policy is deliberately a no-op, including projected domain-core phases. */
+  private sourceSummaryPreserved(original: PhaseResult, proposed?: PhaseResult): boolean {
+    const phase = this.catalogPhase(original.state_id, original.agent);
+    if (phase?.routing_repair_policy !== "preserve_source_summary_v1") return true;
+    try {
+      const reader = this.artifactReader;
+      const ref = original.output_artifact;
+      if (
+        reader === undefined ||
+        canonicalJson(reader.refById(ref.artifact_id)) !== canonicalJson(ref)
+      )
+        return false;
+      const bytes = reader.readById(ref.artifact_id);
+      if (bytes.byteLength !== ref.byte_length || sha256(bytes) !== ref.content_digest)
+        return false;
+      return validateSourceRoutingSummary(bytes, phase.schema, proposed) !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Shared negative refusal, not exhaustion or a model-authored verdict. No selected
+   * artifact or accepted sibling is discarded; reports are separate from partial products. */
+  private repairRefusal(
+    context: RunContext,
+    code: string,
+    reports: readonly ArtifactRef[]
+  ): Directive {
+    const next = directive({
+      schema_version: 2,
+      action: "incomplete",
+      identity: context.identity,
+      status: "incomplete",
+      met: false,
+      result: {
+        reason_code: code,
+        feedback_report_refs: reports,
+        best_partial_artifact_refs: context.selectedArtifacts.filter(
+          (ref) =>
+            ref.kind !== "routing-metadata" &&
+            !reports.some((report) => report.artifact_id === ref.artifact_id)
+        ),
+      },
+      artifacts: context.selectedArtifacts,
+      unresolved: [code],
+    });
+    context.status = "incomplete";
+    context.met = false;
+    context.pendingDirective = next;
+    context.terminalDirective = next;
+    return next;
+  }
+
+  private refuseSourceSummary(
+    context: RunContext,
+    original: PhaseResult,
+    receipt: PhaseResult,
+    branchId: string
+  ): Directive {
+    const next = this.repairRefusal(context, "source_summary_unpreservable", [
+      original.output_artifact,
+    ]);
+    this.checkpointer.saveWithReceipt(context, receipt, branchId, "routing_repair_refused", {
+      ...metadata(context.identity),
+      state_id: original.state_id,
+      branch_id: branchId,
+      source_receipt_id: original.worker_receipt.receipt_id,
+      reason_code: "source_summary_unpreservable",
+      next_action: next.action,
+    });
+    return next;
   }
 
   private validatePhaseDetails(
     state: string,
-    details: Record<string, JsonValue>
+    details: Record<string, JsonValue>,
+    agent?: string
   ): Record<string, JsonValue> {
     const worker = this.registration.worker;
     if (worker.kind === "catalog-agent") {
-      const phase = worker.phases.get(state);
+      const phase = this.catalogPhase(state, agent);
       if (phase === undefined) {
         throw new Error(`active registration has no catalog phase '${state}'`);
       }
       validateContract(phase.schema, details, `${state} summary`);
       return details;
+    }
+    if (worker.kind === "none") {
+      throw new Error(
+        `deterministic registration '${this.registration.name}' cannot accept worker phase '${state}'`
+      );
     }
     const phase = worker.phases.get(state);
     if (phase === undefined) {
@@ -675,9 +961,20 @@ export class OrchestrationEngine {
         // and performs no second side effect.
         if (this.checkpointer.runExists(request.identity.run_id)) {
           const admitted = this.checkpointer.loadRun(request.identity);
+          if (admitted.admittedInputArtifacts !== undefined)
+            assertAdmittedArtifactInputs(admitted.admittedInputArtifacts, request.input_artifacts);
           const bindingRefusal = this.registrationBindingRefusal(admitted);
           if (bindingRefusal !== undefined) return bindingRefusal;
           if (admitted.terminalDirective !== null) {
+            // A new Define/Plan start replay may not change the invocation assurance
+            // policy just because the consumer has already completed. Historical
+            // terminals without an assurance ref retain their existing reader path.
+            if (
+              preparedStart !== undefined &&
+              (this.registration.name === "define" || this.registration.name === "plan") &&
+              admitted.selectedArtifacts.some((ref) => ref.kind === "composition-assurance")
+            )
+              this.materializeStart(preparedStart);
             return this.currentDirective(admitted);
           }
           if (admitted.stateId !== "intake") {
@@ -713,7 +1010,7 @@ export class OrchestrationEngine {
           preparedStart === undefined ? [] : [...this.materializeStart(preparedStart)];
         const initialRefs = [
           ...(preparedStart?.input_artifacts?.artifacts.map((binding) => binding.ref) ??
-            request.input_artifacts?.artifacts.map((binding) => binding.ref) ??
+            nativeStartRequest(request).input_artifacts?.artifacts.map((binding) => binding.ref) ??
             []),
           ...materializedRefs,
         ];
@@ -727,6 +1024,8 @@ export class OrchestrationEngine {
           projectRoot: this.projectRoot,
           trustProfile: request.trust_profile,
           maxSteps: this.maxSteps,
+          maxIterations: this.maxIterations,
+          sealCorrectionLimit: this.registration.seal_policy?.correction_limit,
           registrationContractBinding: {
             schema_version: 1,
             registration_name: this.registration.name,
@@ -734,6 +1033,10 @@ export class OrchestrationEngine {
             registration_sha256: this.runtimeRegistrationSha256,
           },
           ...(uniqueInitialRefs.length === 0 ? {} : { initialArtifacts: uniqueInitialRefs }),
+          ...(request.input_artifacts === undefined ||
+          this.registration.contextual_inputs === undefined
+            ? {}
+            : { admittedInputArtifacts: request.input_artifacts }),
         });
         const operationGroup = hasExternalStartOperationGroup(this.playbook)
           ? this.playbook.externalStartOperationGroup(context)
@@ -779,49 +1082,14 @@ export class OrchestrationEngine {
         return this.status(request.identity);
       case "recover":
         return this.recover(request.identity, dispatch);
-      case "respond": {
-        const context = this.checkpointer.loadRun(request.identity);
-        const bindingRefusal = this.registrationBindingRefusal(context);
-        if (bindingRefusal !== undefined) return bindingRefusal;
-        if (hasGenericResponsePolicy(this.playbook)) {
-          this.playbook.assertGenericResponseAllowed(context);
-        }
-        const pending = context.pendingDirective;
-        if (
-          context.status !== "awaiting_user" ||
-          pending?.action !== "await_user" ||
-          pending.gate_id !== request.gate_id
-        ) {
-          throw new Error(
-            `run '${request.identity.run_id}' is not awaiting gate '${request.gate_id}'`
-          );
-        }
-        if (pending.challenge !== request.challenge) {
-          throw new Error(`challenge mismatch for gate '${request.gate_id}'`);
-        }
-        const candidate = this.playbook.resume(context, request.response);
-        const next = this.admitTerminal(context, candidate);
-        this.checkpointer.saveGateResponse(
-          context,
-          request.gate_id,
-          request.challenge,
-          request.response,
-          "user_gate_answered",
-          {
-            ...metadata(request.identity),
-            gate_id: request.gate_id,
-            response_sha256: sha256(canonicalJson(request.response)),
-            state_id: context.stateId,
-          }
-        );
-        return next;
-      }
+      case "respond":
+        return this.respondUserGate(request);
       case "cancel": {
         const context = this.checkpointer.loadRun(request.identity);
         const bindingRefusal = this.registrationBindingRefusal(context);
         if (bindingRefusal !== undefined) return bindingRefusal;
         if (context.terminalDirective !== null) {
-          return context.terminalDirective;
+          return this.currentDirective(context);
         }
         const reason = request.reason ?? "cancelled by caller";
         this.liveness.cancelOpenWorkers(context.identity.run_id);
@@ -836,6 +1104,444 @@ export class OrchestrationEngine {
         return next;
       }
     }
+  }
+
+  private respondUserGate(
+    request: Extract<import("./contracts.js").OrchestrationRequest, { action: "respond" }>,
+    mediatedCall?: ChildWorkflowCallRecord
+  ): Directive {
+    const context = this.checkpointer.loadRun(request.identity);
+    const bindingRefusal = this.registrationBindingRefusal(context);
+    if (bindingRefusal !== undefined) return bindingRefusal;
+    const linkedCall = this.checkpointer.childWorkflowCallForChild(request.identity.run_id);
+    if (
+      linkedCall !== undefined &&
+      (mediatedCall === undefined || canonicalJson(linkedCall) !== canonicalJson(mediatedCall))
+    )
+      throw new Error("child user replies require exact parent mediation");
+    const committedGate = this.checkpointer.gateResponseBinding(
+      request.identity.run_id,
+      request.gate_id
+    );
+    if (committedGate?.status === "answered") {
+      if (request.gate_id.startsWith("child-gate-"))
+        throw new Error("projected child reply was already answered");
+      if (
+        committedGate.challenge !== request.challenge ||
+        committedGate.response_digest !== sha256(canonicalJson(request.response))
+      ) {
+        throw new Error(`gate '${request.gate_id}' was already answered differently`);
+      }
+      if (context.terminalDirective !== null) return this.currentDirective(context);
+      if (context.pendingDirective !== null) return context.pendingDirective;
+      return this.status(request.identity);
+    }
+    if (
+      context.pendingDirective?.action === "await_user" &&
+      context.pendingDirective.child_workflow !== undefined
+    ) {
+      const pending = context.pendingDirective;
+      if (
+        pending.child_workflow?.schema_version !== 2 ||
+        context.status !== "awaiting_user" ||
+        pending.gate_id !== request.gate_id ||
+        pending.challenge !== request.challenge
+      )
+        throw new Error("projected child gate challenge/version mismatch");
+      const response = validateProjectedChildResponse(request.response, pending);
+      const call = this.checkpointer.childWorkflowCall(response.projection.call_id);
+      if (
+        call === undefined ||
+        call.lifecycle !== "waiting_user" ||
+        call.parent_registration_sha256 !== this.runtimeRegistrationSha256
+      )
+        throw new Error("projected child call or registration mismatch");
+      const childGate = this.checkpointer.loadRun(call.child_identity).pendingDirective;
+      if (
+        childGate?.action !== "await_user" ||
+        canonicalJson(projectChildGate(call, childGate)) !== canonicalJson(pending)
+      )
+        throw new Error("projected child gate is no longer current");
+      const store = this.artifactStore;
+      if (store === undefined) throw new Error("projected child reply requires artifact custody");
+      const artifactMetadata = {
+        schema_version: 2 as const,
+        run_id: context.identity.run_id,
+        phase: context.stateId,
+        branch_id: null,
+        kind: "child-gate-response",
+        operation_id: `child-response:${pending.gate_id}`,
+        version: 1,
+        producer: "host:child-workflow-owner",
+        media_type: "application/json",
+        content_schema: { schema_id: "penny.projected-child-response.v1", schema_version: 1 },
+        parent_ref: null,
+        upstream_refs: [call.request_ref],
+      };
+      const content = canonicalJson(response);
+      const ref =
+        store.refFor(
+          artifactMetadata.run_id,
+          artifactMetadata.phase,
+          null,
+          artifactMetadata.kind,
+          artifactMetadata.operation_id,
+          1
+        ) ?? store.persist({ metadata: artifactMetadata, content });
+      if (
+        store.readById(ref.artifact_id).toString("utf8") !== content ||
+        canonicalJson(store.metadata(ref)) !== canonicalJson(artifactMetadata)
+      )
+        throw new Error("projected reply artifact conflicts with exact custody");
+      context.selectedArtifacts.push(ref);
+      context.pendingDirective = call.directive;
+      context.status = "running";
+      this.checkpointer.saveGateResponse(
+        context,
+        request.gate_id,
+        request.challenge,
+        request.response,
+        "child_workflow_reply_staged",
+        {
+          ...metadata(context.identity),
+          call_id: call.call_id,
+          response_artifact_id: ref.artifact_id,
+        },
+        "full",
+        call.call_id
+      );
+      return call.directive;
+    }
+    if (hasGenericResponsePolicy(this.playbook)) {
+      this.playbook.assertGenericResponseAllowed(context);
+    }
+    const pending = context.pendingDirective;
+    if (
+      context.status !== "awaiting_user" ||
+      pending?.action !== "await_user" ||
+      pending.gate_id !== request.gate_id
+    ) {
+      throw new Error(`run '${request.identity.run_id}' is not awaiting gate '${request.gate_id}'`);
+    }
+    if (pending.challenge !== request.challenge) {
+      throw new Error(`challenge mismatch for gate '${request.gate_id}'`);
+    }
+    // The pending gate is the authority for this choice: resume may change state or
+    // clear the directive, so resolve the storage policy before calling it.
+    const responseStorage = hasGenericGateResponseStorage(this.playbook)
+      ? this.playbook.genericGateResponseStorage(context)
+      : "full";
+    if (responseStorage !== "full" && responseStorage !== "digest-only") {
+      throw new Error("invalid generic gate response storage mode");
+    }
+    const sourceSnapshotSha256 = sha256(canonicalJson(context.snapshot()));
+    const candidate = this.playbook.resume(context, request.response);
+    recordVideogenGateAnswer(context, pending, request.response, this.artifactStore);
+    const next = this.admitTerminal(context, candidate);
+    this.checkpointer.saveGateResponse(
+      context,
+      request.gate_id,
+      request.challenge,
+      request.response,
+      "user_gate_answered",
+      {
+        ...metadata(request.identity),
+        gate_id: request.gate_id,
+        response_sha256: sha256(canonicalJson(request.response)),
+        state_id: context.stateId,
+      },
+      responseStorage,
+      undefined,
+      sourceSnapshotSha256
+    );
+    return next;
+  }
+
+  /** Exact child gate delivery only after the parent response transaction has committed. */
+  respondProjectedChildGate(record: ChildWorkflowCallRecord, responseRef: ArtifactRef): Directive {
+    const parent = this.checkpointer.loadRun(record.parent_identity);
+    if (
+      parent.terminalDirective !== null ||
+      canonicalJson(parent.pendingDirective) !== canonicalJson(record.directive) ||
+      !parent.selectedArtifacts.some((ref) => canonicalJson(ref) === canonicalJson(responseRef))
+    )
+      throw new Error("parent-mediated child reply lost its parent fence");
+    const store = this.artifactStore;
+    if (
+      store === undefined ||
+      responseRef.kind !== "child-gate-response" ||
+      responseRef.producer !== "host:child-workflow-owner"
+    )
+      throw new Error("child reply has no exact owner custody");
+    const parsed: unknown = JSON.parse(store.readById(responseRef.artifact_id).toString("utf8"));
+    // Rebuild the original gate from the durable response and exact call, never caller attributes.
+    const response = validateContract(
+      ProjectedChildResponseV1Schema,
+      parsed,
+      "ProjectedChildResponseV1"
+    );
+    const projection = response.projection;
+    const binding = this.checkpointer.gateResponseBinding(
+      record.parent_identity.run_id,
+      responseRef.operation_id.slice("child-response:".length)
+    );
+    if (
+      responseRef.run_id !== record.parent_identity.run_id ||
+      responseRef.phase !== record.parent_state_id ||
+      responseRef.content_schema?.schema_id !== "penny.projected-child-response.v1" ||
+      responseRef.content_schema.schema_version !== 1 ||
+      canonicalJson(parsed) !== store.readById(responseRef.artifact_id).toString("utf8") ||
+      projection.call_id !== record.call_id ||
+      projection.child_run_id !== record.child_identity.run_id ||
+      projection.invocation_sha256 !== record.directive_sha256 ||
+      projection.parent_registration_sha256 !== record.parent_registration_sha256 ||
+      projection.child_registration_sha256 !== this.runtimeRegistrationSha256 ||
+      binding?.status !== "answered" ||
+      binding.response_digest !== sha256(canonicalJson(response))
+    )
+      throw new Error("child reply lacks a committed exact parent gate response");
+    const childBinding = this.checkpointer.gateResponseBinding(
+      record.child_identity.run_id,
+      projection.child_gate_id
+    );
+    if (childBinding?.status !== "answered") {
+      const childGate = this.checkpointer.loadRun(record.child_identity).pendingDirective;
+      if (
+        childGate?.action !== "await_user" ||
+        canonicalJson(projectChildGate(record, childGate).child_workflow) !==
+          canonicalJson(projection) ||
+        projectChildGate(record, childGate).payload_digest !== response.payload_digest
+      )
+        throw new Error("projected child gate changed before committed reply delivery");
+    }
+    // After a child-reply commit crash, respondUserGate verifies the exact answered
+    // challenge/reply receipt instead of requiring the now-consumed child gate again.
+    return this.respondUserGate(
+      {
+        schema_version: 2,
+        action: "respond",
+        identity: record.child_identity,
+        gate_id: projection.child_gate_id,
+        challenge: projection.child_challenge,
+        response: response.reply,
+      },
+      record
+    );
+  }
+
+  /**
+   * Prepare the parent mutation that consumes one exact settled host-operation result. The
+   * checkpointer commits this context and the journal's consumed marker in one transaction.
+   */
+  prepareHostOperationContinuation(input: {
+    readonly record: HostOperationCallRecordV1;
+  }): PreparedHostOperationContinuationV1 {
+    const record = input.record;
+    if (
+      record.lifecycle !== "settled" ||
+      record.platform_result_ref === null ||
+      record.host_receipt_ref === null ||
+      record.disposition === null
+    ) {
+      throw new CheckpointIdentityError("host operation is not durably settled for consumption");
+    }
+    const context = this.checkpointer.loadRun(record.identity);
+    const sourceSnapshotSha256 = sha256(canonicalJson(context.snapshot()));
+    const bindingRefusal = this.registrationBindingRefusal(context);
+    if (bindingRefusal !== undefined) {
+      throw new CheckpointIdentityError(
+        "host-operation parent registration is no longer eligible for consumption"
+      );
+    }
+    if (
+      context.status !== "running" ||
+      context.stateId !== record.state_id ||
+      canonicalJson(context.pendingDirective) !== canonicalJson(record.directive) ||
+      record.registration_sha256 !== this.runtimeRegistrationSha256
+    ) {
+      throw new CheckpointIdentityError(
+        "host-operation result does not match the parent's exact pending directive"
+      );
+    }
+    const declaration = this.registration.host_operations?.declarations.find(
+      (candidate) => candidate.operation_kind === record.operation_kind
+    );
+    if (declaration === undefined) {
+      throw new CheckpointIdentityError("settled host operation is no longer registered");
+    }
+    const artifactReader = this.artifactReader;
+    if (artifactReader === undefined) {
+      throw new CheckpointIdentityError(
+        "host-operation consumption requires exact artifact read custody"
+      );
+    }
+    const exactBytes = (ref: ArtifactRef): Buffer => {
+      const stored = artifactReader.refById(ref.artifact_id);
+      if (stored === undefined || canonicalJson(stored) !== canonicalJson(ref)) {
+        throw new CheckpointIdentityError(
+          `host-operation artifact '${ref.artifact_id}' differs from exact custody`
+        );
+      }
+      const bytes = artifactReader.readById(ref.artifact_id);
+      if (bytes.byteLength !== ref.byte_length || sha256(bytes) !== ref.content_digest) {
+        throw new CheckpointIdentityError(
+          `host-operation artifact '${ref.artifact_id}' failed exact-byte verification`
+        );
+      }
+      return bytes;
+    };
+    verifyHostEffectBinding(artifactReader, record.project_id, record.directive);
+    if (
+      declaration.receipt_citing_result !== undefined &&
+      record.operation_result_ref !== null &&
+      record.result_wrapper?.ref == null
+    )
+      throw new CheckpointIdentityError("host operation lacks its post-receipt result wrapper");
+    if (
+      declaration.receipt_citing_result !== undefined &&
+      record.operation_result_ref !== null &&
+      record.result_wrapper?.ref == null
+    )
+      throw new CheckpointIdentityError("host-operation requires its receipt-citing wrapper");
+    verifyHostResultWrapper(artifactReader, record);
+    const resultBytes = exactBytes(record.platform_result_ref);
+    const receiptBytes = exactBytes(record.host_receipt_ref);
+    let resultJson: unknown;
+    let receiptJson: unknown;
+    try {
+      resultJson = JSON.parse(resultBytes.toString("utf8"));
+      receiptJson = JSON.parse(receiptBytes.toString("utf8"));
+    } catch {
+      throw new CheckpointIdentityError("host-operation result or receipt is not JSON");
+    }
+    const platformResult = validateHostOperationResult(resultJson);
+    const hostReceipt = validateHostOperationReceipt(receiptJson);
+    if (
+      platformResult.operation_record_id !== record.operation_record_id ||
+      hostReceipt.operation_record_id !== record.operation_record_id ||
+      canonicalJson(platformResult.identity) !== canonicalJson(record.identity) ||
+      canonicalJson(hostReceipt.identity) !== canonicalJson(record.identity) ||
+      platformResult.state_id !== record.state_id ||
+      hostReceipt.state_id !== record.state_id ||
+      platformResult.attempt !== record.attempt ||
+      hostReceipt.attempt !== record.attempt ||
+      platformResult.operation_id !== record.operation_id ||
+      hostReceipt.operation_id !== record.operation_id ||
+      platformResult.operation_kind !== record.operation_kind ||
+      hostReceipt.operation_kind !== record.operation_kind ||
+      platformResult.registration_sha256 !== record.registration_sha256 ||
+      hostReceipt.registration_sha256 !== record.registration_sha256 ||
+      platformResult.request_sha256 !== record.request_sha256 ||
+      hostReceipt.request_sha256 !== record.request_sha256 ||
+      canonicalJson(platformResult.lease) !== canonicalJson(record.lease) ||
+      canonicalJson(platformResult.disposition) !== canonicalJson(record.disposition) ||
+      canonicalJson(hostReceipt.disposition) !== canonicalJson(record.disposition) ||
+      canonicalJson(platformResult.operation_result_ref) !==
+        canonicalJson(record.operation_result_ref) ||
+      canonicalJson(platformResult.output_artifacts) !== canonicalJson(record.output_artifacts) ||
+      hostReceipt.lease_disposition_receipt_id !== record.lease_disposition_receipt_id
+    ) {
+      throw new CheckpointIdentityError(
+        "host-operation platform result or receipt diverges from the settled journal"
+      );
+    }
+    if (
+      record.operation_result_ref !== null &&
+      (record.operation_result_ref.kind !== declaration.result.artifact_kind ||
+        record.operation_result_ref.content_schema?.schema_id !== declaration.result.schema_id ||
+        record.operation_result_ref.content_schema.schema_version !==
+          declaration.result.schema_version_required)
+    ) {
+      throw new CheckpointIdentityError(
+        "host-operation specific result violates the registered result contract"
+      );
+    }
+    const registeredOutputContracts = declaration.output_contracts ?? [];
+    for (const output of record.output_artifacts) {
+      if (
+        !registeredOutputContracts.some(
+          (contract) =>
+            output.kind === contract.artifact_kind &&
+            output.content_schema?.schema_id === contract.schema_id &&
+            output.content_schema.schema_version === contract.schema_version_required
+        )
+      ) {
+        throw new CheckpointIdentityError(
+          "host-operation output violates the registered output contracts"
+        );
+      }
+    }
+    const operationArtifacts = [
+      ...(record.operation_result_ref === null ? [] : [record.operation_result_ref]),
+      ...record.output_artifacts,
+    ];
+    const operationOutputBytes = operationArtifacts.reduce(
+      (sum, artifact) => sum + exactBytes(artifact).byteLength,
+      0
+    );
+    if (
+      operationArtifacts.length > declaration.max_output_artifacts ||
+      operationOutputBytes > declaration.max_output_bytes
+    ) {
+      throw new CheckpointIdentityError("host-operation output bounds are invalid");
+    }
+    const expectedReceiptId = `hop_receipt_${sha256(
+      canonicalJson({
+        operation_record_id: record.operation_record_id,
+        disposition_receipt_id: record.lease_disposition_receipt_id,
+      })
+    )}`;
+    if (
+      hostReceipt.receipt_id !== expectedReceiptId ||
+      hostReceipt.started_at !== record.started_at ||
+      hostReceipt.progress_event_count !== record.progress_event_count ||
+      hostReceipt.poll_count !== (record.fetched?.poll_count ?? 0) ||
+      hostReceipt.request_bytes !== record.request_ref.byte_length ||
+      hostReceipt.output_artifact_count !== operationArtifacts.length ||
+      hostReceipt.output_bytes !== operationOutputBytes ||
+      hostReceipt.result_sha256 !== (record.operation_result_ref?.content_digest ?? null) ||
+      hostReceipt.remote_correlation_sha256 !== record.remote_correlation_sha256
+    ) {
+      throw new CheckpointIdentityError(
+        "host-operation receipt counters or correlation evidence diverge from the settled journal"
+      );
+    }
+    const add = (artifact: ArtifactRef): void => {
+      const selected = context.selectedArtifacts.find(
+        (candidate) => candidate.artifact_id === artifact.artifact_id
+      );
+      if (selected !== undefined) {
+        if (canonicalJson(selected) !== canonicalJson(artifact)) {
+          throw new CheckpointIdentityError(
+            `host-operation artifact '${artifact.artifact_id}' conflicts with parent evidence`
+          );
+        }
+        return;
+      }
+      context.selectedArtifacts.push(structuredClone(artifact));
+    };
+    for (const artifact of operationArtifacts) add(artifact);
+    if (record.result_wrapper?.ref !== undefined && record.result_wrapper.ref !== null)
+      add(record.result_wrapper.ref);
+    add(record.platform_result_ref);
+    add(record.host_receipt_ref);
+    context.pendingDirective = null;
+    context.pendingBranches = [];
+    const callerCancelled =
+      record.disposition.outcome === "cancelled" ||
+      (record.disposition.outcome === "remote_unknown" &&
+        record.disposition.reason_code.startsWith("cancelled_"));
+    const candidate = callerCancelled
+      ? this.playbook.cancel(context, "host operation cancelled by caller")
+      : this.playbook.dispatch(context);
+    if (isHostContinuation(candidate)) {
+      throw new Error("host-operation continuation cannot begin an uncommitted host continuation");
+    }
+    return {
+      source_snapshot_sha256: sourceSnapshotSha256,
+      context,
+      next: this.admitTerminal(context, validateDirective(candidate)),
+    };
   }
 
   /**
@@ -891,8 +1597,14 @@ export class OrchestrationEngine {
     readonly record: ChildWorkflowCallRecord;
     readonly outputArtifact: ArtifactRef | null;
     readonly resultArtifact: ArtifactRef;
-  }): { readonly context: RunContext; readonly next: Directive } {
+    readonly importedArtifacts?: readonly ArtifactRef[];
+  }): {
+    readonly context: RunContext;
+    readonly next: Directive;
+    readonly source_snapshot_sha256: string;
+  } {
     const context = this.checkpointer.loadRun(input.record.parent_identity);
+    const sourceSnapshotSha256 = sha256(canonicalJson(context.snapshot()));
     const bindingRefusal = this.registrationBindingRefusal(context);
     if (bindingRefusal !== undefined) {
       throw new Error(
@@ -903,6 +1615,7 @@ export class OrchestrationEngine {
     }
     const pending = context.pendingDirective;
     if (
+      context.terminalDirective !== null ||
       pending?.action !== "invoke_child_workflow" ||
       canonicalJson(pending) !== canonicalJson(input.record.directive)
     ) {
@@ -925,6 +1638,7 @@ export class OrchestrationEngine {
       context.selectedArtifacts.push(structuredClone(artifact));
     };
     if (input.outputArtifact !== null) add(input.outputArtifact);
+    for (const artifact of input.importedArtifacts ?? []) add(artifact);
     add(input.resultArtifact);
     context.pendingDirective = null;
     context.pendingBranches = [];
@@ -932,7 +1646,11 @@ export class OrchestrationEngine {
     if (isHostContinuation(outcome)) {
       throw new Error("child-workflow continuation cannot begin an uncommitted host continuation");
     }
-    return { context, next: this.admitTerminal(context, outcome) };
+    return {
+      source_snapshot_sha256: sourceSnapshotSha256,
+      context,
+      next: this.admitTerminal(context, outcome),
+    };
   }
 
   /** Fail closed when child execution was explicitly disabled or no owner was installed. */
@@ -970,15 +1688,51 @@ export class OrchestrationEngine {
     return terminal;
   }
 
+  /** Fail closed when a registered host operation has no installed runtime owner. */
+  refuseHostOperationDispatch(
+    directive: Extract<Directive, { action: "invoke_host_operation" }>
+  ): Directive {
+    const context = this.checkpointer.loadRun(directive.identity);
+    const bindingRefusal = this.registrationBindingRefusal(context);
+    if (bindingRefusal !== undefined) return bindingRefusal;
+    if (canonicalJson(context.pendingDirective) !== canonicalJson(directive)) {
+      throw new CheckpointIdentityError(
+        "host-operation refusal does not match the exact pending directive"
+      );
+    }
+    const terminal = validateDirective({
+      schema_version: 2,
+      action: "error",
+      identity: context.identity,
+      status: "error",
+      met: false,
+      result: { code: "HOST_OPERATION_OWNER_UNAVAILABLE" },
+      artifacts: context.selectedArtifacts,
+      unresolved: ["No host-operation execution owner is installed for this service."],
+    });
+    context.status = "error";
+    context.met = false;
+    context.pendingDirective = terminal;
+    context.terminalDirective = terminal;
+    this.checkpointer.saveRun(context, "host_operation_refused", {
+      ...metadata(context.identity),
+      operation_id: directive.operation_id,
+      operation_kind: directive.operation_kind,
+      code: "HOST_OPERATION_OWNER_UNAVAILABLE",
+    });
+    return terminal;
+  }
+
   /**
    * Re-check the execution-owner setting at the last engine boundary before a
-   * worker, fan-out branch, or child workflow can leave the engine package.
+   * worker, fan-out branch, child workflow, or host operation can leave the engine package.
    */
   authorizeDispatch(candidate: Directive): Directive {
     if (
       candidate.action !== "invoke_agent" &&
       candidate.action !== "invoke_agents_parallel" &&
-      candidate.action !== "invoke_child_workflow"
+      candidate.action !== "invoke_child_workflow" &&
+      candidate.action !== "invoke_host_operation"
     ) {
       return candidate;
     }
@@ -1009,7 +1763,7 @@ export class OrchestrationEngine {
     const ordered = [...results].sort((left, right) => {
       const malformed = (result: PhaseResult): number => {
         try {
-          this.validatePhaseDetails(result.state_id, result.details);
+          this.validatePhaseDetails(result.state_id, result.details, result.agent);
           return 0;
         } catch (error) {
           return error instanceof ContractValidationError ? 1 : 0;
@@ -1358,13 +2112,26 @@ export class OrchestrationEngine {
   private routeTypedRepair(
     context: RunContext,
     state: string,
-    details: Record<string, JsonValue>
+    details: Record<string, JsonValue>,
+    receiptOutputs: readonly ArtifactRef[],
+    rejectedSchema = false
   ): RoutedRepairV1 | null {
+    if (
+      this.registration.repair_progress_policy === "exact_fingerprint_v1" &&
+      (typeof this.playbook.evaluateRepair !== "function" ||
+        typeof this.playbook.repairProgressFingerprint !== "function" ||
+        typeof this.playbook.terminalizeRepairStall !== "function")
+    )
+      return {
+        next: this.repairRefusal(context, "repair_progress_capability_missing", receiptOutputs),
+      };
     if (!hasStateAwareRepair(this.playbook)) return null;
-    const candidate = this.playbook.evaluateRepair(context, state, details);
+    const candidate = rejectedSchema
+      ? (this.playbook.evaluateRejectedSummary?.(context, state, details) ?? null)
+      : this.playbook.evaluateRepair(context, state, details);
     if (candidate === null) return null;
-    const evaluation: EvaluationResultV2 = validateContract(
-      EvaluationResultV2Schema,
+    const evaluation: EvaluationResult = validateContract(
+      EvaluationResultSchema,
       candidate,
       `repair evaluation for '${state}'`
     );
@@ -1381,7 +2148,117 @@ export class OrchestrationEngine {
     const usedBefore =
       this.playbook.repairBudgetUsed?.(context, state, evaluation) ?? context.iteration;
     const limit = context.maxIterations;
-    const admitted = usedBefore + 1 <= limit - route.budget.reserved_attempts;
+    let progress: FeedbackRouteEvidenceV1["repair_progress_v1"];
+    let progressDisposition: "stalled" | "progress_invalid" | undefined;
+    if (this.registration.repair_progress_policy === "exact_fingerprint_v1") {
+      // One branch is scoped by its source ref, never by completion order or receipt ID.
+      // Multiple outputs describe a fan aggregate, whose logical branch is null.
+      const branchId = receiptOutputs.length === 1 ? (receiptOutputs[0]?.branch_id ?? null) : null;
+      try {
+        if (
+          typeof this.playbook.repairProgressFingerprint !== "function" ||
+          typeof this.playbook.terminalizeRepairStall !== "function"
+        )
+          throw new Error("missing paired repair progress capabilities");
+        const fingerprint = this.playbook.repairProgressFingerprint(context, state, details);
+        if (
+          fingerprint !== null &&
+          (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(fingerprint))
+        )
+          throw new Error("invalid repair progress fingerprint");
+        progress = { branch_id: branchId, fingerprint };
+        if (
+          fingerprint !== null &&
+          this.checkpointer.events(context.identity.run_id).some((event) => {
+            const value = event.payload.feedback_route_evidence_v1;
+            if (value === undefined) return false;
+            const prior = validateContract(
+              FeedbackRouteEvidenceV1Schema,
+              value,
+              "durable repair route"
+            );
+            return (
+              prior.disposition === "repair" &&
+              prior.origin_state === state &&
+              prior.repair_progress_v1?.branch_id === branchId &&
+              prior.repair_progress_v1.fingerprint === fingerprint
+            );
+          })
+        )
+          progressDisposition = "stalled";
+      } catch {
+        progressDisposition = "progress_invalid";
+      }
+      if (progressDisposition !== undefined) {
+        let next: Directive;
+        if (
+          progressDisposition === "stalled" &&
+          typeof this.playbook.terminalizeRepairStall === "function"
+        ) {
+          const partials = [...context.selectedArtifacts];
+          try {
+            const candidate = validateDirective(
+              this.playbook.terminalizeRepairStall(context, state, evaluation)
+            );
+            if (
+              candidate.action !== "incomplete" ||
+              candidate.status !== "incomplete" ||
+              candidate.met !== false
+            )
+              throw new Error("repair stall terminal must be incomplete");
+            next = directive({
+              ...candidate,
+              artifacts: [
+                ...new Map(
+                  [...partials, ...candidate.artifacts].map((ref) => [ref.artifact_id, ref])
+                ).values(),
+              ],
+              result: {
+                ...candidate.result,
+                repair_stall: {
+                  origin_state: state,
+                  feedback_kind: evaluation.kind,
+                  feedback_report_refs: receiptOutputs,
+                },
+              },
+            });
+            context.status = "incomplete";
+            context.met = false;
+            context.pendingDirective = next;
+            context.terminalDirective = next;
+          } catch {
+            progressDisposition = "progress_invalid";
+            next = this.repairRefusal(context, "repair_progress_invalid", receiptOutputs);
+          }
+        } else next = this.repairRefusal(context, "repair_progress_invalid", receiptOutputs);
+        // Stall terminalization is not a repair charge or an exhaustion/reset route.
+        context.iteration = usedBefore;
+        return {
+          next,
+          evidence: validateContract(
+            FeedbackRouteEvidenceV1Schema,
+            {
+              schema_version: 1,
+              origin_state: state,
+              feedback_kind: evaluation.kind,
+              detail_sha256: sha256(evaluation.detail),
+              strategy_delta_sha256: sha256(evaluation.strategy_delta),
+              disposition: progressDisposition,
+              target_state: state,
+              ...(progress === undefined ? {} : { repair_progress_v1: progress }),
+              budget: {
+                counter: "iteration",
+                used_before: usedBefore,
+                limit,
+                used_after: usedBefore,
+              },
+            },
+            "repair stall route evidence"
+          ),
+        };
+      }
+    }
+    const admitted = limit === null || usedBefore + 1 <= limit - route.budget.reserved_attempts;
     const disposition = admitted ? "repair" : "exhausted";
     const usedAfter = admitted ? usedBefore + 1 : usedBefore;
     context.iteration = usedAfter;
@@ -1414,9 +2291,46 @@ export class OrchestrationEngine {
     }
 
     const targetState = admitted ? route.repair.target_state : route.on_exhaustion.target_state;
-    let next: PlaybookStepOutcomeV1;
+    let next: PlaybookStepOutcome;
     if (!admitted && hasRepairExhaustion(this.playbook)) {
       next = this.playbook.terminalizeRepairExhaustion(context, state, evaluation);
+      // Selected artifacts include earlier attempts. Bind only this accepted receipt's output(s).
+      if ("result" in next && next.action !== "complete" && next.met === false) {
+        if (
+          context.pendingDirective === null ||
+          context.terminalDirective === null ||
+          canonicalJson(context.pendingDirective) !== canonicalJson(next) ||
+          canonicalJson(context.terminalDirective) !== canonicalJson(next)
+        ) {
+          throw new Error(
+            "repair exhaustion terminal does not match pending and terminal directives"
+          );
+        }
+        const feedbackReports = receiptOutputs.filter(
+          (ref) =>
+            ref.run_id === context.identity.run_id &&
+            ref.phase === state &&
+            ref.kind !== "routing-metadata" &&
+            context.selectedArtifacts.some(
+              (selected) => canonicalJson(selected) === canonicalJson(ref)
+            )
+        );
+        const decorated = validateDirective({
+          ...next,
+          result: {
+            ...next.result,
+            repair_diagnostics: {
+              origin_state: state,
+              feedback_kind: evaluation.kind,
+              budget: { used: usedBefore, limit },
+              feedback_report_refs: feedbackReports,
+            },
+          },
+        });
+        context.pendingDirective = decorated;
+        context.terminalDirective = decorated;
+        next = decorated;
+      }
     } else {
       if (!admitted && route.on_exhaustion.reset_counter) context.iteration = 0;
       context.transition(targetState);
@@ -1434,6 +2348,7 @@ export class OrchestrationEngine {
         detail_sha256: sha256(evaluation.detail),
         strategy_delta_sha256: sha256(evaluation.strategy_delta),
         disposition,
+        ...(progress === undefined ? {} : { repair_progress_v1: progress }),
         target_state: targetState,
         budget: {
           counter: "iteration",
@@ -1480,7 +2395,7 @@ export class OrchestrationEngine {
     if (pending === null) {
       throw new Error(`run '${identity.run_id}' has no pending directive`);
     }
-    let outcome: PlaybookStepOutcomeV1;
+    let outcome: PlaybookStepOutcome;
     let routeEvidence: FeedbackRouteEvidenceV1 | undefined;
     let branchId = "";
     if (pending.action === "invoke_agent") {
@@ -1502,15 +2417,27 @@ export class OrchestrationEngine {
         null
       );
       this.captureArtifact(context, result.output_artifact);
+      let rejected: RoutedRepairV1 | null = null;
       try {
-        this.validatePhaseDetails(context.stateId, result.details);
+        this.validatePhaseDetails(context.stateId, result.details, result.agent);
       } catch (error) {
         if (error instanceof ContractValidationError) {
-          return this.reissueMalformed(context, result, branchId, error);
-        }
-        throw error;
+          if (!this.sourceSummaryPreserved(result)) {
+            return this.refuseSourceSummary(context, result, result, branchId);
+          }
+          rejected = this.routeTypedRepair(
+            context,
+            result.state_id,
+            result.details,
+            [result.output_artifact],
+            true
+          );
+          if (rejected === null) return this.reissueMalformed(context, result, branchId, error);
+        } else throw error;
       }
-      const routed = this.routeTypedRepair(context, result.state_id, result.details);
+      const routed =
+        rejected ??
+        this.routeTypedRepair(context, result.state_id, result.details, [result.output_artifact]);
       if (routed === null) {
         outcome = this.playbook.acceptSummary(context, result.details, result.confidence);
       } else {
@@ -1543,7 +2470,7 @@ export class OrchestrationEngine {
       this.captureArtifact(context, result.output_artifact);
       let details: Record<string, JsonValue>;
       try {
-        details = this.validatePhaseDetails(assignment.state_id, result.details);
+        details = this.validatePhaseDetails(assignment.state_id, result.details, assignment.agent);
       } catch (error) {
         if (error instanceof ContractValidationError) {
           return this.reissueMalformed(context, result, branchId, error);
@@ -1591,7 +2518,12 @@ export class OrchestrationEngine {
           completed.map((candidate) => candidate.result ?? {})
         );
         const confidences = completed.map((candidate) => candidate.confidence ?? "UNCERTAIN");
-        const routed = this.routeTypedRepair(context, pending.state_id, aggregate);
+        const routed = this.routeTypedRepair(
+          context,
+          pending.state_id,
+          aggregate,
+          completed.flatMap((branch) => (branch.artifact ? [branch.artifact] : []))
+        );
         if (routed === null) {
           outcome = this.playbook.acceptSummary(context, aggregate, weakestConfidence(confidences));
         } else {
@@ -1630,6 +2562,9 @@ export class OrchestrationEngine {
     branchId: string,
     error: ContractValidationError
   ): Directive {
+    if (!this.sourceSummaryPreserved(result)) {
+      return this.refuseSourceSummary(context, result, result, branchId);
+    }
     const normalizedBranchId = branchId.length > 0 ? branchId : null;
     const digest = malformedErrorDigest({
       kind: "malformed_result",
@@ -1661,6 +2596,7 @@ export class OrchestrationEngine {
     } else {
       next = this.livenessTerminal(context, "routing_repair_binding_invalid");
     }
+    this.playbook.bindDispatch?.(context, next);
     this.checkpointer.saveWithReceipt(context, result, branchId, "phase_result_malformed", {
       ...metadata(context.identity),
       state_id: result.state_id,
@@ -1688,9 +2624,12 @@ export class OrchestrationEngine {
       repair.action !== "invoke_agent" ||
       repair.execution_purpose !== "routing_repair" ||
       repair.routing_repair_binding?.source_branch_id !== branchId ||
-      repair.input_artifacts.artifacts.length !== 1 ||
-      canonicalJson(repair.input_artifacts.artifacts[0]?.ref ?? null) !==
-        canonicalJson(repair.routing_repair_binding.source_artifact_ref)
+      repair.input_artifacts.artifacts.filter((input) => input.designation !== "context").length !==
+        1 ||
+      canonicalJson(
+        repair.input_artifacts.artifacts.find((input) => input.designation !== "context")?.ref ??
+          null
+      ) !== canonicalJson(repair.routing_repair_binding.source_artifact_ref)
     ) {
       throw new Error("parallel routing repair must bind one exact pending source branch");
     }
@@ -1723,6 +2662,53 @@ export class OrchestrationEngine {
     if (next.action !== "invoke_agents_parallel") {
       throw new Error("parallel routing repair did not produce a parallel directive");
     }
+    return next;
+  }
+
+  /** Retry metadata only, retaining the original semantic source and signed receipt binding. */
+  private retryRoutingRepair(
+    context: RunContext,
+    result: PhaseResult,
+    branchId: string | null
+  ): Directive {
+    const pending = context.pendingDirective;
+    const assignment =
+      pending?.action === "invoke_agent"
+        ? pending
+        : pending?.action === "invoke_agents_parallel"
+          ? pending.branches.find((branch) => branch.branch_id === branchId)
+          : undefined;
+    if (
+      assignment?.execution_purpose !== "routing_repair" ||
+      assignment.routing_repair_binding === undefined
+    ) {
+      return this.livenessTerminal(context, "routing_repair_binding_invalid");
+    }
+    if (context.maxSteps !== null && context.stepCount >= context.maxSteps) {
+      throw new Error(`run exceeded max_steps=${context.maxSteps}`);
+    }
+    context.previousState = context.stateId;
+    context.stepCount += 1;
+    const output = {
+      ...assignment.output_artifact,
+      version: result.output_artifact.version + 1,
+      parent_ref: result.output_artifact,
+    };
+    const next =
+      pending?.action === "invoke_agent"
+        ? directive({ ...pending, attempt: context.stepCount, output_artifact: output })
+        : pending?.action === "invoke_agents_parallel"
+          ? directive({
+              ...pending,
+              branches: pending.branches.map((branch) =>
+                branch.branch_id === branchId
+                  ? { ...branch, attempt: context.stepCount, output_artifact: output }
+                  : branch
+              ),
+            })
+          : this.livenessTerminal(context, "routing_repair_binding_invalid");
+    context.pendingDirective = next;
+    this.playbook.bindDispatch?.(context, next);
     return next;
   }
 
@@ -1766,9 +2752,12 @@ export class OrchestrationEngine {
       return this.persistInvalidParallelRepair(context, repairResult, branchId);
     }
 
+    if (!this.sourceSummaryPreserved(original, repairResult)) {
+      return this.refuseSourceSummary(context, original, repairResult, branchId);
+    }
     let details: Record<string, JsonValue>;
     try {
-      details = this.validatePhaseDetails(original.state_id, repairResult.details);
+      details = this.validatePhaseDetails(original.state_id, repairResult.details, original.agent);
     } catch (error) {
       if (!(error instanceof ContractValidationError)) throw error;
       const digest = malformedErrorDigest({
@@ -1783,8 +2772,10 @@ export class OrchestrationEngine {
         branchId,
         digest,
       });
-      const reason = charged ?? "malformed_result_budget_exhausted";
-      const terminal = this.livenessTerminal(context, reason);
+      const terminal =
+        charged === null
+          ? this.retryRoutingRepair(context, repairResult, original.branch_id ?? null)
+          : this.livenessTerminal(context, charged);
       this.checkpointer.saveWithReceipt(
         context,
         repairResult,
@@ -1795,8 +2786,13 @@ export class OrchestrationEngine {
           state_id: original.state_id,
           branch_id: branchId,
           malformed_digest: digest,
-          terminal_reason: reason,
-          liveness: this.snapshotWithReason(context.identity.run_id, reason),
+          ...(charged === null
+            ? {}
+            : {
+                terminal_reason: charged,
+                liveness: this.snapshotWithReason(context.identity.run_id, charged),
+              }),
+          next_action: terminal.action,
         }
       );
       return terminal;
@@ -1849,7 +2845,12 @@ export class OrchestrationEngine {
     const aggregate = this.playbook.aggregateBranches(
       context.pendingBranches.map((candidate) => candidate.result ?? {})
     );
-    const routed = this.routeTypedRepair(context, pending.state_id, aggregate);
+    const routed = this.routeTypedRepair(
+      context,
+      pending.state_id,
+      aggregate,
+      context.pendingBranches.flatMap((branch) => (branch.artifact ? [branch.artifact] : []))
+    );
     const outcome =
       routed === null
         ? this.playbook.acceptSummary(
@@ -1914,9 +2915,12 @@ export class OrchestrationEngine {
     ) {
       return this.persistInvalidRepair(context, repairResult);
     }
+    if (!this.sourceSummaryPreserved(original, repairResult)) {
+      return this.refuseSourceSummary(context, original, repairResult, "");
+    }
     let details: Record<string, JsonValue>;
     try {
-      details = this.validatePhaseDetails(original.state_id, repairResult.details);
+      details = this.validatePhaseDetails(original.state_id, repairResult.details, original.agent);
     } catch (error) {
       if (!(error instanceof ContractValidationError)) throw error;
       const digest = malformedErrorDigest({
@@ -1931,15 +2935,22 @@ export class OrchestrationEngine {
         branchId: original.branch_id ?? null,
         digest,
       });
-      const reason = charged ?? "malformed_result_budget_exhausted";
-      const terminal = this.livenessTerminal(context, reason);
+      const terminal =
+        charged === null
+          ? this.retryRoutingRepair(context, repairResult, original.branch_id ?? null)
+          : this.livenessTerminal(context, charged);
       this.checkpointer.saveWithReceipt(context, repairResult, "", "routing_repair_malformed", {
         ...metadata(context.identity),
         state_id: original.state_id,
         branch_id: original.branch_id ?? "",
         malformed_digest: digest,
-        terminal_reason: reason,
-        liveness: this.snapshotWithReason(context.identity.run_id, reason),
+        ...(charged === null
+          ? {}
+          : {
+              terminal_reason: charged,
+              liveness: this.snapshotWithReason(context.identity.run_id, charged),
+            }),
+        next_action: terminal.action,
       });
       return terminal;
     }
@@ -1948,10 +2959,12 @@ export class OrchestrationEngine {
       confidence: repairResult.confidence,
       details,
     };
-    let outcome: PlaybookStepOutcomeV1;
+    let outcome: PlaybookStepOutcome;
     let routeEvidence: FeedbackRouteEvidenceV1 | undefined;
     if (binding.source_branch_id === null) {
-      const routed = this.routeTypedRepair(context, original.state_id, details);
+      const routed = this.routeTypedRepair(context, original.state_id, details, [
+        original.output_artifact,
+      ]);
       if (routed === null) {
         outcome = this.playbook.acceptSummary(context, details, repairResult.confidence);
       } else {
@@ -1982,7 +2995,12 @@ export class OrchestrationEngine {
       const aggregate = this.playbook.aggregateBranches(
         context.pendingBranches.map((candidate) => candidate.result ?? {})
       );
-      const routed = this.routeTypedRepair(context, original.state_id, aggregate);
+      const routed = this.routeTypedRepair(
+        context,
+        original.state_id,
+        aggregate,
+        context.pendingBranches.flatMap((branch) => (branch.artifact ? [branch.artifact] : []))
+      );
       if (routed === null) {
         outcome = this.playbook.acceptSummary(
           context,
@@ -2081,6 +3099,33 @@ export class OrchestrationEngine {
     const ended = Date.parse(receipt.ended_at);
     if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) {
       throw new Error("worker receipt timestamps are invalid");
+    }
+    const worker = this.registration.worker;
+    if (worker.kind === "catalog-agent") {
+      const direct = worker.phases.get(result.state_id);
+      const aliases = [...worker.phases.values()].filter(
+        (phase) => phase.directive_state_id === result.state_id && phase.agent === result.agent
+      );
+      const phase =
+        direct?.agent === result.agent ? direct : aliases.length === 1 ? aliases[0] : undefined;
+      const requiredModel = phase?.required_model;
+      if (requiredModel !== undefined) {
+        validateRequiredModelIdentity(requiredModel, "receipt required model");
+        if (
+          receipt.requested_model === undefined ||
+          canonicalJson(receipt.requested_model) !== canonicalJson(requiredModel) ||
+          receipt.observed_model === undefined
+        ) {
+          throw new Error(
+            "worker receipt lacks exact requested and observed model identity evidence"
+          );
+        }
+        assertResolvedModelIdentity(
+          requiredModel,
+          receipt.observed_model,
+          "receipt observed model"
+        );
+      }
     }
   }
 
@@ -2264,6 +3309,9 @@ export class OrchestrationEngine {
   }
 
   private registrationBindingRefusal(context: RunContext): Directive | undefined {
+    // Completed terminals are immutable historical facts. Replay their exact stored bytes even
+    // after a registration change; only active/interrupted work requires the current binding.
+    if (context.terminalDirective !== null) return undefined;
     const binding = context.registrationContractBinding;
     // Runs created before immutable binding was introduced remain readable legacy state.
     // Every new run records both current contract and runtime registration digests.
@@ -2278,6 +3326,11 @@ export class OrchestrationEngine {
       // Runtime registration mutation or corruption is a closed mismatch, never an unchecked throw.
     }
     const code =
+      (this.registration.seal_policy !== undefined &&
+        this.registration.seal_policy.correction_limit !== null &&
+        context.sealCorrectionLimit === undefined) ||
+      (context.sealCorrectionLimit !== undefined &&
+        context.sealCorrectionLimit !== this.registration.seal_policy?.correction_limit) ||
       binding.registration_name !== this.registration.name ||
       binding.contract_sha256 !== activeContractSha256 ||
       binding.registration_sha256 !== activeRegistrationSha256
@@ -2363,13 +3416,36 @@ export class OrchestrationEngine {
         checkpointExists: true,
       });
     }
+    if (
+      context.pendingDirective?.action === "await_user" &&
+      context.pendingDirective.child_workflow !== undefined
+    )
+      return this.currentDirective(context);
     const interruptionReason = this.liveness.recoverOpenWorkers(context.identity.run_id);
     if (interruptionReason !== null) return this.exhaust(identity, interruptionReason);
     this.bindLivenessIfRequired(context);
     if (hasHostContinuation(this.playbook) && this.playbook.needsHostContinuation(context)) {
       return this.advanceHost(context);
     }
-    return this.currentDirective(context);
+    const beforeRebind = canonicalJson(context.snapshot());
+    const recovered = this.currentDirective(context);
+    if (context.terminalDirective !== null) {
+      const terminal = this.admitTerminal(context, recovered);
+      this.checkpointer.saveRun(context, "recovery_terminalized", {
+        ...metadata(context.identity),
+        state_id: context.stateId,
+        next_action: terminal.action,
+      });
+      return terminal;
+    }
+    if (canonicalJson(context.snapshot()) !== beforeRebind) {
+      this.checkpointer.saveRun(context, "recovery_rebound", {
+        ...metadata(context.identity),
+        state_id: context.stateId,
+        next_action: recovered.action,
+      });
+    }
+    return recovered;
   }
 
   private pausedDirectiveForContext(
@@ -2492,6 +3568,15 @@ export class OrchestrationEngine {
     next: Directive,
     pendingPhaseResult?: PhaseResult
   ): Directive {
+    if (
+      this.registration.worker.kind === "none" &&
+      (next.action === "invoke_agent" || next.action === "invoke_agents_parallel")
+    ) {
+      throw new Error(
+        `deterministic registration '${this.registration.name}' cannot emit worker directives`
+      );
+    }
+    this.playbook.bindDispatch?.(context, next);
     const candidate = this.requiresLivenessPolicy(context)
       ? this.attachLiveness(context, next, this.liveness.snapshot(context.identity.run_id))
       : next;
@@ -2503,6 +3588,7 @@ export class OrchestrationEngine {
       candidate,
       ...(this.artifactReader !== undefined ? { artifactReader: this.artifactReader } : {}),
       projectRoot: this.projectRoot,
+      verifyExecutionReceipt: (receipt) => this.receiptAuthority.verify(receipt),
       ...(pendingPhaseResult !== undefined ? { pendingPhaseResult } : {}),
     });
   }
@@ -2565,12 +3651,36 @@ export class OrchestrationEngine {
     if (context.pendingDirective === null) {
       throw new Error(`checkpoint '${context.identity.run_id}' has no recoverable directive`);
     }
+    // Host-owned projected gates are not playbook state and must survive rebind/restart byte-for-byte.
+    if (
+      context.pendingDirective.action === "await_user" &&
+      context.pendingDirective.child_workflow !== undefined
+    ) {
+      const gate = context.pendingDirective;
+      if (gate.child_workflow?.schema_version !== 2)
+        throw new Error("unsupported projected child gate version");
+      const record = this.checkpointer.childWorkflowCall(gate.child_workflow.call_id);
+      const childGate =
+        record === undefined
+          ? undefined
+          : this.checkpointer.loadRun(record.child_identity).pendingDirective;
+      if (
+        record === undefined ||
+        record.lifecycle !== "waiting_user" ||
+        childGate?.action !== "await_user" ||
+        canonicalJson(projectChildGate(record, childGate)) !== canonicalJson(gate)
+      )
+        throw new Error("projected child wait lost its durable call or exact gate");
+      return gate;
+    }
     // Re-bind the output artifact spec to the current ledger top so a directive
     // saved across a crash window is never replayed with a stale version.
     const rebound = this.playbook.rebindPendingDirective(context);
     if (rebound === null) {
       throw new Error(`checkpoint '${context.identity.run_id}' has no recoverable directive`);
     }
+    context.pendingDirective = rebound;
+    this.playbook.bindDispatch?.(context, rebound);
     return rebound;
   }
 }

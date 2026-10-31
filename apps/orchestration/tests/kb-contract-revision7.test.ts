@@ -51,7 +51,7 @@ import {
   sha256Hex,
   validateKbContract,
   type KnowledgeBaseRequest,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 
 const ZERO = "0".repeat(64);
 const ONE = "1".repeat(64);

@@ -35,6 +35,7 @@ import { Type, type Static } from "typebox";
 import {
   consumeTrustedQuestionnaireTransport,
   resolveTrustedQuestionnaireTransport,
+  revokeTrustedQuestionnaireTransport,
   signTrustedHumanEvent,
   type TrustedQuestionnaireBinding,
 } from "../skill/execution-receipts.js";
@@ -56,6 +57,7 @@ interface QuestionnaireResult {
   answers: Answer[];
   cancelled: boolean;
   trustedHumanEvents?: Record<string, unknown>[];
+  trustedCompletion?: { text: string };
 }
 
 type DisplayOption = QuestionOption & { isOther?: boolean; isSelected?: boolean };
@@ -620,7 +622,8 @@ export default function questionnaire(pi: ExtensionAPI): void {
     ].join("\n"),
     parameters: QuestionnaireParams,
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
       const hasQuestions = Array.isArray(params.questions);
       const capability =
         typeof params.trustedTransportCapability === "string"
@@ -661,7 +664,7 @@ export default function questionnaire(pi: ExtensionAPI): void {
       }));
 
       // ── Non-interactive mode (print/json/subagent) ──
-      if (!ctx.hasUI) {
+      if (!ctx.hasUI || (capability !== undefined && ctx.mode === "rpc")) {
         const lines: string[] = ["## Questionnaire — User Input Needed", ""];
         const answers: Answer[] = [];
 
@@ -703,11 +706,19 @@ export default function questionnaire(pi: ExtensionAPI): void {
       }
 
       // ── Interactive mode (TUI) ──
-      const result = await ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
-        return createQuestionnaireUI(questions, tui, theme, done);
-      });
+      let result: QuestionnaireResult;
+      try {
+        result = await ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
+          return createQuestionnaireUI(questions, tui, theme, done);
+        });
+        signal?.throwIfAborted();
+      } catch (error) {
+        if (capability) revokeTrustedQuestionnaireTransport(capability);
+        throw error;
+      }
 
       if (result.cancelled) {
+        if (capability) revokeTrustedQuestionnaireTransport(capability);
         return {
           content: [{ type: "text", text: "User cancelled the questionnaire" }],
           details: result,
@@ -731,6 +742,14 @@ export default function questionnaire(pi: ExtensionAPI): void {
             response: answer.value,
           })
         );
+        if (consumed.completion) {
+          try {
+            result.trustedCompletion = await consumed.completion.complete(trustedHumanEvents);
+          } catch (error) {
+            consumed.completion.revoke();
+            throw error;
+          }
+        }
       }
       result.trustedHumanEvents = trustedHumanEvents;
 
@@ -753,7 +772,14 @@ export default function questionnaire(pi: ExtensionAPI): void {
         (event) => `TRUSTED_HUMAN_EVENT:${JSON.stringify(event)}`
       );
       return {
-        content: [{ type: "text", text: [...answerLines, ...trustedMarkers].join("\n") }],
+        content: [
+          {
+            type: "text",
+            text: [...answerLines, ...trustedMarkers, result.trustedCompletion?.text ?? ""].join(
+              "\n"
+            ),
+          },
+        ],
         details: result,
       };
     },
@@ -805,6 +831,7 @@ export default function questionnaire(pi: ExtensionAPI): void {
         const display = a.index ? `${a.index}. ${a.label}` : a.label;
         return `${theme.fg("success", "✓ ")}${theme.fg("accent", a.id)}: ${display}`;
       });
+      if (details.trustedCompletion) lines.push(details.trustedCompletion.text);
       return new Text(lines.join("\n"), 0, 0);
     },
   });

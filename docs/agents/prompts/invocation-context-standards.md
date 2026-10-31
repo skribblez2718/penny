@@ -13,12 +13,12 @@ phase subset.
 - output/routing contract for cognitive stages;
 - clarification text when resuming.
 
-IDs may come from any run/session/agent/branch. Owner code performs exact manifest lookup
-and digest/length verification before model use. Task text may name IDs but never carries
-predecessor payload bytes as transport.
+For substantial delegated work, apply the [Bounded Work task contract](../agents/bounded-work.md#task-contract): identify one outcome, sufficient inputs and satisfied prerequisites, change boundaries, outputs and acceptance evidence, and a conservative context-fit assessment. Supply these through the active interface, not invented tool parameters or SUMMARY fields. Keep straightforward work direct; not every invocation needs a task graph.
 
-Workers call `artifact_read` for each needed ID and repeat with `next_range` until
-complete. Model text cannot list, search, guess, mint, or authorize artifacts.
+IDs may come from any run/session/agent/branch. Task text names exact IDs, never predecessor
+payload bytes. [Invocation](../agents/invocation.md#task-contract) owns preflight, full
+UTF-8 range reads through `next_range`, `missing_input:`, and capture/readback. Model text
+cannot list, search, guess, mint, or authorize artifacts.
 
 ## Forbidden patterns
 
@@ -30,20 +30,19 @@ complete. Model text cannot list, search, guess, mint, or authorize artifacts.
 - dynamic variables in static Domain Guidance;
 - runtime-, task-, input-, model-, liveness-, service-, or trust-selected tools.
 
-If a required predecessor ID/path is absent, return `missing_input:` rather than searching
-memory, `/tmp`, the repository, or historical artifacts.
+Required predecessors must be supplied, not discovered through memory, `/tmp`, repository,
+or historical-artifact search; apply Invocation's `missing_input:` outcome.
 
 ## Continuation and compaction
 
-Reads use explicit UTF-8 byte ranges. `next_range` is non-expiring. After compaction,
-prose is the primary orientation; `[RESUME-REFS v2]` carries only exact code-proven
-current-session refs or one handoff-index ID. Never replace missing refs with semantic
-search.
+Keep exact IDs/paths in continuation context. [Invocation recovery](../agents/invocation.md#recovery-and-compaction)
+owns the non-expiring range continuation and `[RESUME-REFS v2]`/handoff-index rules; prose
+or semantic search must not reconstruct missing refs.
 
 ## Verification
 
-- [ ] Goal/constraints are explicit.
-- [ ] Inputs are unique exact IDs from owner/runtime metadata.
-- [ ] All inputs preflight before model usage.
-- [ ] No predecessor payload or semantic pointer enters task text.
-- [ ] Complete output is persisted/re-read before routing.
+- [ ] Goal/constraints and routing identity are explicit where needed.
+- [ ] `input_artifacts` is a unique exact-ID set from owner/runtime metadata.
+- [ ] No predecessor payload, semantic pointer, or tool-selection directive enters task text.
+- [ ] [Invocation handoff checks](../agents/invocation.md#verification) cover preflight,
+      complete reads, missing inputs, and persistence/readback before routing.

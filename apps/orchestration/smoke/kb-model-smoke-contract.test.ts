@@ -6,9 +6,9 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { jcsCanonicalize } from "../src/kb/approval-receipts.js";
-import { sha256Hex } from "../src/kb/contracts.js";
-import { KB_PHASE_TOOL_MATRIX } from "../src/kb/session-tools.js";
+import { jcsCanonicalize } from "../dist/kb/approval-receipts.js";
+import { sha256Hex } from "../dist/kb/contracts.js";
+import { KB_PHASE_TOOL_MATRIX } from "../dist/kb/session-tools.js";
 import {
   G8_SMOKE_MANIFEST_PATH,
   G8_SMOKE_RESULT_FILENAME,

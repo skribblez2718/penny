@@ -30,8 +30,3 @@ An action is susceptible to brute force, enumeration, scraping, spam, replay, di
 
 - [Resource limits](resource-limits.md) owns technical budgets.
 - [Authentication](authentication.md), [API security](api-security.md), and [logging and monitoring](logging-monitoring.md) own adjacent controls.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

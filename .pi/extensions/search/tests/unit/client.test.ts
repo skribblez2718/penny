@@ -476,6 +476,32 @@ describe("webFetch", () => {
     expect(requestJson(captured.init)).toEqual({ url: "https://example.com" });
   });
 
+  it("renews transport inactivity on response chunks beyond the former total timeout", async () => {
+    const chunks = ['{"title":"Page",', '"content":"Body",', '"links":[]', "}"];
+    const encoder = new TextEncoder();
+    let index = 0;
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 30));
+            const chunk = chunks[index];
+            if (chunk === undefined) {
+              controller.close();
+              return;
+            }
+            controller.enqueue(encoder.encode(chunk));
+            index += 1;
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+
+    await expect(
+      webFetch("https://example.com", { ...CONFIG, timeoutMs: 60 }, undefined, fetchImpl)
+    ).resolves.toEqual({ title: "Page", content: "Body", links: [] });
+  });
+
   it("normalizes missing and wrong-type fields", async () => {
     for (const body of [{}, { title: 1, content: false, links: "not-an-array" }]) {
       const fetchImpl: FetchLike = async () => jsonResponse(body);
@@ -561,7 +587,7 @@ describe("webFetch", () => {
     expect(error.message).toMatch(/connection refused/);
   });
 
-  it("distinguishes caller cancellation from provider timeout", async () => {
+  it("distinguishes caller cancellation from provider inactivity", async () => {
     const controller = new AbortController();
     controller.abort();
     const cancelledFetch: FetchLike = async () => {
@@ -584,6 +610,6 @@ describe("webFetch", () => {
       webFetch("https://example.com", CONFIG, undefined, timedOutFetch)
     );
     expect(timedOut.reason).toBe("timeout");
-    expect(timedOut.message).toMatch(/timed out/);
+    expect(timedOut.message).toMatch(/inactive/);
   });
 });

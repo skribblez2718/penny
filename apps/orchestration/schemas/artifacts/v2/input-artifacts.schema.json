@@ -3,21 +3,142 @@
   "$id": "urn:penny:orchestration:artifacts:input-artifacts:2",
   "title": "Exact cross-run input artifacts v2",
   "type": "object",
-  "additionalProperties": false,
   "required": ["schema_version", "artifacts"],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": {
+      "type": "number",
+      "const": 2
+    },
     "artifacts": {
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
         "required": ["slot", "ref"],
         "properties": {
-          "slot": { "type": "string", "minLength": 1 },
-          "ref": { "$ref": "urn:penny:orchestration:artifacts:artifact-ref:2" }
-        }
+          "slot": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "designation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "binding"
+              },
+              {
+                "type": "string",
+                "const": "context"
+              }
+            ]
+          },
+          "ref": {
+            "type": "object",
+            "required": [
+              "schema_version",
+              "artifact_id",
+              "run_id",
+              "phase",
+              "branch_id",
+              "kind",
+              "operation_id",
+              "version",
+              "producer",
+              "media_type",
+              "byte_length",
+              "content_digest",
+              "store_ref"
+            ],
+            "properties": {
+              "schema_version": {
+                "type": "number",
+                "const": 2
+              },
+              "artifact_id": {
+                "type": "string",
+                "pattern": "^art_[a-f0-9]{64}$"
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "phase": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "branch_id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "operation_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "producer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "media_type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "content_schema": {
+                "type": "object",
+                "required": ["schema_id", "schema_version"],
+                "properties": {
+                  "schema_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^penny\\.[a-z0-9-]+\\.v[1-9][0-9]*$"
+                  },
+                  "schema_version": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "byte_length": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "content_digest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "store_ref": {
+                "type": "string",
+                "pattern": "^artifact://sha256/[a-f0-9]{64}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
       }
     }
-  }
+  },
+  "additionalProperties": false
 }

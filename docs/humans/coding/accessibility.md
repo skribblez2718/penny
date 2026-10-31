@@ -39,7 +39,7 @@ interface must be **POUR**:
 | **Robust**         | It keeps working across browsers and assistive technology. | Valid semantic markup, correct name/role/value for every control, status messages announced without stealing focus.                                 |
 
 **Level AA** is the middle conformance tier and the one nearly everyone means by "accessible." **WCAG
-2.2** (the current version) adds several criteria Penny specifically watches for: interactive targets
+2.2** adds several criteria Penny specifically watches for: interactive targets
 at least 24×24 pixels, focus that isn't hidden behind sticky headers, single-pointer alternatives to
 dragging, consistent placement of help, not re-asking for information already given, and not gating
 login behind a puzzle with no alternative.
@@ -51,14 +51,33 @@ Accessibility is treated like any other quality gate — it must pass before wor
 1. **Semantic HTML first.** The right native element (`button`, `a`, `nav`, `main`, headings, `label`)
    is accessible for free; custom `div`-based widgets are only used when nothing native fits, and then
    they get full keyboard and ARIA support.
-2. **Two-theme discipline.** Roughly half of accessibility checks depend on color, so contrast is
-   verified in **both** light and dark themes — a token that passes in one can fail in the other.
-3. **Automated + manual verification.** An automated pass (axe) catches the mechanical failures, but it
-   only finds a third or so of real issues. So interactive work also gets a **keyboard-only**
-   walkthrough and a **screen-reader** smoke test before it ships.
+2. **Two-theme discipline.** Contrast is verified in **both** light and dark themes, plus any
+   additional supported themes. This is a stricter project policy, not a WCAG requirement to
+   implement dark mode. A missing theme, single-theme constraint, or fixed-medium output needs an
+   explicit project-owner applicability decision, not silent omission of checks.
+3. **Automated + manual verification.** An automated pass (axe or equivalent) is necessary but does
+   not establish conformance. Interactive work also gets a **keyboard-only** walkthrough and a
+   **screen-reader** smoke test before it ships.
 
 Automated tools are necessary but never sufficient: a page can pass axe and still be unusable with a
 keyboard. That is why the manual checks are part of the standard, not an optional extra.
+
+## WCAG and project policy
+
+W3C distinguishes [2.4.7 Focus Visible, AA](https://www.w3.org/WAI/WCAG22/Understanding/focus-visible.html)
+from [2.4.11 Focus Not Obscured (Minimum), AA](https://www.w3.org/WAI/WCAG22/Understanding/focus-not-obscured-minimum.html).
+[1.4.11 Non-text Contrast, AA](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html)
+addresses adjacent-color contrast for required component/state information and meaningful graphics.
+[2.4.13 Focus Appearance, AAA](https://www.w3.org/WAI/WCAG22/Understanding/focus-appearance.html)
+adds indicator area and focused/unfocused same-pixel contrast requirements; it is not the AA floor.
+
+Penny also requires exactly one H1 per page/view and no skipped heading levels; these are stricter
+project structure policies, not literal WCAG requirements. No merge with a known A/AA violation,
+regardless of severity label. An agent cannot approve its own exception. Only beyond-AA project
+rules can receive an explicitly approved deviation, with the rule, rationale, residual risk,
+compensating control, verification gap, accountable approving owner, and removal condition recorded.
+Review/diagnosis reports available evidence and gaps; planning identifies required checks without
+claiming they ran.
 
 ## Where the Details Live
 

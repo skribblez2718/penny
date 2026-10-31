@@ -20,7 +20,7 @@ import {
   initializePennyState,
   loadRuntimeConfig,
   type ArtifactRef,
-} from "@penny/orchestration/source";
+} from "@penny/orchestration";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import compactionExtension from "../../index.js";
 import type { CheckpointReadResult } from "../../checkpointer.js";
@@ -144,6 +144,7 @@ function skillResult(
     session_id: sessionId,
     skill_name: skill,
     state: success ? "complete" : "error",
+    requires_approval: false,
     steps_total: 1,
     agents_invoked: ["fixture-agent"],
     errors: success ? [] : ["skill failed"],

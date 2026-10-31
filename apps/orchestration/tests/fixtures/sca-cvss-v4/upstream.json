@@ -1,0 +1,37 @@
+{
+  "repository": "https://github.com/FIRSTdotorg/cvss-v4-calculator",
+  "commit": "c5b0d409ae9f57c44264c6ce5f27d89298e1d32a",
+  "retrieved": "2026-10-16",
+  "files": [
+    {
+      "path": "cvss_score.js",
+      "sha256": "453ce6767b5c3939b51d1f21315f2649e47b5abeca674be287e94b524472a1bc",
+      "byte_length": 16097
+    },
+    {
+      "path": "cvss_lookup.js",
+      "sha256": "d533fe625d95e15b7b488a4bf93dab5f7df16b7e38b0c8ee01281d7b31a8165e",
+      "byte_length": 4638
+    },
+    {
+      "path": "max_composed.js",
+      "sha256": "be707cc82c17993a04a84e47b1a8aaa1d0d212b56852254659ce77fd7d959f63",
+      "byte_length": 968
+    },
+    {
+      "path": "max_severity.js",
+      "sha256": "f838ecb41bfd5114456e7fa7df8a8449ca2735c176867886fa34bd011dee0b24",
+      "byte_length": 371
+    },
+    {
+      "path": "metrics.js",
+      "sha256": "99ee2643587071bf744cd090c4bb2db58d523ed0276efd809871b00a12985a4c",
+      "byte_length": 1263
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "5d672639189da9bda914dd8c847069cc6959135000b17c45262bb742e5d3b392",
+      "byte_length": 1307
+    }
+  ]
+}

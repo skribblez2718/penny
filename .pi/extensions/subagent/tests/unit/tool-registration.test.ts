@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Type } from "typebox";
-
-import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi, createTestToolInfos } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 
 // Mock external dependencies so index.ts can load in the test environment
 vi.mock("@earendil-works/pi-ai", () => ({
@@ -64,20 +63,7 @@ function createMockPi(providerNames?: string[]) {
       }
       registeredTool = definition;
     },
-    getAllTools: providerNames
-      ? () =>
-          providerNames.map((name) => ({
-            name,
-            description: "provider fixture",
-            parameters: Type.Object({}),
-            sourceInfo: {
-              path: `/fixture/${name}`,
-              source: "subagent-test",
-              scope: "project",
-              origin: "top-level",
-            },
-          }))
-      : undefined,
+    getAllTools: providerNames ? () => createTestToolInfos(providerNames) : undefined,
   });
 }
 
@@ -159,7 +145,7 @@ describe("subagent tool registration", () => {
     expect(result.content[0].text).toContain("artifact_read");
   });
 
-  it("agent parameter schema references discovered agent names", async () => {
+  it("agent parameters accept current names without a registration-time enum", async () => {
     const mod = await import("../../index.js");
     const pi = createMockPi();
     mod.default(pi);
@@ -168,12 +154,9 @@ describe("subagent tool registration", () => {
     const agentProp = properties["agent"];
     expect(agentProp).toBeDefined();
 
-    // StringEnum produces an anyOf array of const schemas in our mock.
-    // Verify the real agent names appear in the schema.
-    const schemaText = JSON.stringify(agentProp);
-    expect(schemaText).toContain("echo");
-    expect(schemaText).toContain("skribble");
-    expect(schemaText).toContain("piper");
+    expect(object(agentProp)).toMatchObject({ type: "string", minLength: 1 });
+    expect(object(agentProp)["anyOf"]).toBeUndefined();
+    expect(subagentTool().description).toContain("echo:");
     expect(object(properties["input_artifacts"])["maxItems"]).toBeUndefined();
     expect(schemaProperties(object(properties["tasks"])["items"])).toHaveProperty(
       "input_artifacts"
@@ -195,7 +178,7 @@ describe("subagent tool registration with empty agent discovery", () => {
     registeredTool = undefined;
   });
 
-  it("falls back to safe enum when no agents are discovered", async () => {
+  it("allows later discovery without a placeholder name when initially empty", async () => {
     // Mock the sole local discovery module to return an empty catalog.
     vi.doMock("../../agents.js", async () => {
       const actual = await vi.importActual<typeof import("../../agents.js")>("../../agents.js");
@@ -214,8 +197,8 @@ describe("subagent tool registration with empty agent discovery", () => {
     expect(subagentTool().description).toContain("Available agents: none discovered.");
 
     const agentProp = schemaProperties(subagentTool().parameters)["agent"];
-    const schemaText = JSON.stringify(agentProp);
-    expect(schemaText).toContain("no-agents-found");
+    expect(object(agentProp)).toMatchObject({ type: "string", minLength: 1 });
+    expect(JSON.stringify(agentProp)).not.toContain("no-agents-found");
 
     vi.doUnmock("../../agents.js");
   });

@@ -23,7 +23,7 @@ import {
   evaluateParentDelivery,
   mintParentDeliveryGrant,
   validateQueryRequest,
-} from "../src/kb/parent-delivery.js";
+} from "../dist/kb/parent-delivery.js";
 import {
   defaultDenyPolicy,
   canonicalJson,
@@ -33,8 +33,8 @@ import {
   type ParentDeliveryGrant,
   type ParentDeliveryGrantFile,
   type QueryKbRequest,
-} from "../src/kb/contracts.js";
-import { KbSessionProfileGrantStore } from "../src/kb/profile-grants.js";
+} from "../dist/kb/contracts.js";
+import { KbSessionProfileGrantStore } from "../dist/kb/profile-grants.js";
 import { crashAuthorityTransaction, runAuthorityRace } from "./fixtures/authority-race-harness.js";
 
 const PROFILE = "kbp_parent_grant";

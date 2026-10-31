@@ -2,30 +2,19 @@
 
 ## Why profiles exist
 
-A Role Definition that declares itself read-only in prose while holding form-fill,
-file-upload, and arbitrary-execution tools has two different guarantees, and only
-the weaker one is real. The frontmatter `tools:` list is the maximum ordinary catalog control plane:
-`.pi/agents/*.md` → `agents.ts` → `agent-runner.ts` → `pi --tools <allowlist>`.
-Direct/parallel/chain invocation uses that list exactly. Prose does not narrow it.
-
-Tool profiles make the intended maximum authority **declared and machine-checked** instead
-of implied. Each agent declares `authority:` and `tool_profiles:`; the expansion of those
-profiles must equal its `tools:` list exactly. A fixed TypeScript orchestration phase subset
-is registration metadata, not a profile or agent-definition change.
+Profiles declare and statically check the intended maximum catalog authority. Each agent's
+`authority:` and `tool_profiles:` must expand to its YAML `tools:` list exactly. Prose does
+not narrow the tool surface or prove that permitted tools cannot cause side effects.
 
 ## Rules
 
 1. **Profiles statically lint the YAML maximum.** Their expansion must equal `tools:`.
-   Direct/parallel/chain catalog invocation and orchestration phases without a registered
-   subset activate that exact list.
-2. **The one narrowing exception is registration-bound, not profile-driven.** A TypeScript
-   orchestration catalog-worker phase may bind one explicit non-empty duplicate-free strict
-   YAML subset into the canonical runtime-registration digest and worker invocation metadata.
-   Task text, trust profiles, runtime conditions, inputs, and optional-service state cannot
-   select it. It never mutates the role's `authority`, `tool_profiles`, or YAML metadata.
+2. **Runtime selection has a separate owner.** For phase selection or runtime-tool changes,
+   apply the [binding runtime rule](discovery-and-tools.md#binding-runtime-rule), including
+   the guarded zero-tool exception. Static profile edits only change the YAML maximum;
+   phase selection does not mutate profiles or agent metadata.
 3. **Rungs are strictly additive.** Each rung contains every tool of the rung below it
-   plus a bounded, named increment. Restoring one rung is a one-line edit, which is
-   what makes the reduction safe to attempt.
+   plus a bounded, named increment.
 4. **`browser.execute` is granted to no agent.** Any future grant requires an explicit,
    dated, recorded exception.
 5. **No agent whose `authority` is `read` or `inspect` may hold a browser rung above
@@ -56,24 +45,26 @@ is registration metadata, not a profile or agent-definition change.
 
 #### Flat profiles
 
-| Profile           | Tools                                                                                                                                                                                                                | Count |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
-| `shell.unbounded` | `bash`                                                                                                                                                                                                               |     1 |
-| `web.search`      | `web_search`, `web_fetch`                                                                                                                                                                                            |     2 |
-| `web.transcript`  | `youtube_transcript`                                                                                                                                                                                                 |     1 |
-| `docgen`          | `word_generate`, `powerpoint_generate`                                                                                                                                                                               |     2 |
-| `artifact`        | `artifact_read`                                                                                                                                                                                                      |     1 |
-| `memory.read`     | `memory_search`, `memory_smart_search`, `memory_get_drawer`, `memory_list_drawers`, `memory_get_taxonomy`, `memory_check_duplicate`, `memory_kg_query`, `memory_kg_timeline`, `memory_kg_stats`, `memory_diary_read` |    10 |
+| Profile                | Tools                                                                                                                                                                                                                | Count |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
+| `shell.unbounded`      | `bash`                                                                                                                                                                                                               |     1 |
+| `web.search`           | `web_search`, `web_fetch`                                                                                                                                                                                            |     2 |
+| `web.transcript`       | `youtube_transcript`                                                                                                                                                                                                 |     1 |
+| `docgen`               | `word_generate`, `powerpoint_generate`                                                                                                                                                                               |     2 |
+| `artifact`             | `artifact_read`                                                                                                                                                                                                      |     1 |
+| `sca.source_query`     | `sca_source_query`                                                                                                                                                                                                   |     1 |
+| `sca.graph_query`      | `sca_graph_query`                                                                                                                                                                                                    |     1 |
+| `sca.application_test` | `sca_application_test`                                                                                                                                                                                               |     1 |
+| `memory.read`          | `memory_search`, `memory_smart_search`, `memory_get_drawer`, `memory_list_drawers`, `memory_get_taxonomy`, `memory_check_duplicate`, `memory_kg_query`, `memory_kg_timeline`, `memory_kg_stats`, `memory_diary_read` |    10 |
 
 <!-- END GENERATED -->
 
 ### Why `browser.reveal` is its own rung
 
-Clicking a tab, opening an accordion, or hovering to expose a menu is required to
-_observe_ state that is present but not yet rendered. That is categorically different
-from submitting a form or uploading a file. Collapsing `reveal` into `observe` would
-break read-only inspection of real applications; collapsing it into `interact` would
-hand mutation authority to every role that needs to read a tabbed page.
+Clicking tabs, opening accordions, and hovering can expose content needed for inspection
+without granting the dedicated fill/upload/evaluate interfaces. This rung describes intended
+use, not a read-only browser guarantee: clicks and keys can also submit forms or mutate
+remote state. Inspect the target and obtain any required authorization before acting.
 
 ### Why the shell profile is named `shell.unbounded`
 
@@ -86,18 +77,19 @@ keeps the gap visible in the metadata instead of disguising it behind a calm lab
 
 <!-- BEGIN GENERATED: per-agent assignment -->
 
-| Agent      | Authority | Profiles                                                                                                             | Tools |
-| ---------- | --------- | -------------------------------------------------------------------------------------------------------------------- | ----: |
-| `annie`    | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `browser.observe`, `artifact`, `memory.read`                  |    44 |
-| `carren`   | `read`    | `filesystem.observe`, `shell.unbounded`, `artifact`, `memory.read`                                                   |    16 |
-| `demetri`  | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                                     |    18 |
-| `echo`     | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `web.transcript`, `browser.reveal`, `artifact`, `memory.read` |    49 |
-| `ida`      | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                                     |    18 |
-| `piper`    | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                                     |    18 |
-| `skribble` | `write`   | `filesystem.write`, `shell.unbounded`, `web.search`, `docgen`, `artifact`, `memory.read`                             |    22 |
-| `synthia`  | `read`    | `filesystem.read`, `shell.unbounded`, `artifact`, `memory.read`                                                      |    13 |
-| `tabitha`  | `read`    | `filesystem.observe`, `shell.unbounded`, `artifact`, `memory.read`                                                   |    16 |
-| `vera`     | `inspect` | `filesystem.observe`, `shell.unbounded`, `web.search`, `web.transcript`, `browser.reveal`, `artifact`, `memory.read` |    49 |
+| Agent      | Authority | Profiles                                                                                                                                                        | Tools |
+| ---------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
+| `annie`    | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `browser.observe`, `artifact`, `memory.read`, `sca.source_query`, `sca.graph_query`                      |    46 |
+| `carren`   | `read`    | `filesystem.observe`, `shell.unbounded`, `artifact`, `memory.read`                                                                                              |    16 |
+| `demetri`  | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`, `sca.graph_query`, `sca.application_test`                                     |    20 |
+| `echo`     | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `web.transcript`, `browser.reveal`, `artifact`, `memory.read`, `sca.source_query`, `sca.graph_query`     |    51 |
+| `ida`      | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                                                                                |    18 |
+| `piper`    | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`, `sca.graph_query`, `sca.application_test`                                     |    20 |
+| `rhea`     | `read`    | `filesystem.observe`, `artifact`                                                                                                                                |     5 |
+| `skribble` | `write`   | `filesystem.write`, `shell.unbounded`, `web.search`, `docgen`, `artifact`, `memory.read`, `sca.source_query`, `sca.graph_query`                                 |    24 |
+| `synthia`  | `read`    | `filesystem.read`, `shell.unbounded`, `artifact`, `memory.read`, `sca.source_query`, `sca.graph_query`                                                          |    15 |
+| `tabitha`  | `read`    | `filesystem.observe`, `shell.unbounded`, `artifact`, `memory.read`                                                                                              |    16 |
+| `vera`     | `inspect` | `filesystem.observe`, `shell.unbounded`, `web.search`, `web.transcript`, `browser.reveal`, `artifact`, `memory.read`, `sca.graph_query`, `sca.application_test` |    51 |
 
 <!-- END GENERATED -->
 
@@ -108,23 +100,22 @@ purpose here.
 
 ## What this does NOT guarantee
 
-**Browser authority is structural. Filesystem and shell authority are not.**
+**An unavailable tool interface is not proof that an action is impossible.**
 
-All ten YAML maxima include `bash`. Under an ordinary exact-YAML invocation, a role declaring
-`authority: read` is:
+The `read`/`inspect` browser ceiling excludes dedicated fill, upload, and arbitrary
+Playwright/Node execution tools. It does not structurally prevent form submission:
+`playwright_click` invokes the selected locator without a submit guard, and keys can trigger
+state changes. The role's no-mutation rule and approval requirements still apply.
+See `.pi/extensions/playwright/tools/click.ts` for the click implementation.
 
-- structurally prevented from browser-based form submission, file upload, and arbitrary
-  Playwright/Node execution;
-- **still capable of arbitrary filesystem and process mutation through `bash`**, including
-  writing files, deleting them, installing packages, and reaching the network.
+A role holding `shell.unbounded` remains capable of arbitrary filesystem/process mutation
+through `bash`, including writes, deletion, package installation, and network access. Consult
+the generated assignments above rather than assuming every role has shell access.
 
-A registration-bound phase subset that omits `bash` removes it from that session's
-model-visible call surface. It does **not** create OS/process sandboxing, reduce the Pi process's
-host permissions, or stop provider extension code from loading. No document may turn either
-profile linting or a phase subset into a broader isolation claim. Closing the ordinary `bash`
-gap is tracked separately and is out of scope for the profile ladder; candidate approaches are
-a command-allowlisted shell wrapper, dropping `bash` from roles that only need
-`read`/`grep`/`find`/`ls`, or container isolation.
+A registration-bound subset omitting `bash` removes that model-visible interface only.
+Neither profile linting nor phase selection creates OS/process sandboxing, reduces Pi's host
+permissions, or prevents provider extension code from loading. Use external isolation for
+untrusted/unattended execution; closing the shell gap is outside the profile ladder.
 
 ## Verification
 

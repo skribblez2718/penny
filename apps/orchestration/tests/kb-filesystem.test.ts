@@ -20,7 +20,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { KbCoreReadError, readContainedKbFile } from "../src/kb/core-read.js";
+import { KbCoreReadError, readContainedKbFile } from "../dist/kb/core-read.js";
 
 import {
   canonicalJson,
@@ -33,7 +33,7 @@ import {
   type KbManifest,
   type PageRevisionFrontmatter,
   type SourceRecord,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 import {
   KbFilesystemError,
   conflictPath,
@@ -58,7 +58,7 @@ import {
   writePolicy,
   writeSourceObject,
   writeSourceRecord,
-} from "../src/kb/filesystem.js";
+} from "../dist/kb/filesystem.js";
 
 const dirs: string[] = [];
 function tmpRoot(): string {

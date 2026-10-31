@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { type CurrentArtifactRef } from "../src/contracts.js";
-import { canonicalJson, sha256 } from "../src/canonical-json.js";
+import { type CurrentArtifactRef } from "../dist/contracts.js";
+import { canonicalJson, sha256 } from "../dist/canonical-json.js";
 import {
   SCA_BROKER_CONTRACT_LIMITS_V1,
   SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1,
+  SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2,
   SCA_BROKER_SCHEMA_MANIFEST_SHA256,
+  SCA_BROKER_SCHEMA_MANIFEST_SHA256_V1,
   SCA_MODEL_TOOL_ROSTER,
   SCA_TOOL_OPERATION_MAP,
   ScaBrokerExecuteRequestV1Schema,
   classifyScaBrokerIdempotency,
+  classifyScaBrokerJobProgressV1,
   scaBrokerExecuteRequestSha256,
   scaBrokerSchemaSha256,
   validateScaBrokerCancelRequestV1,
@@ -17,20 +20,26 @@ import {
   validateScaBrokerCapabilityRequestV1,
   validateScaBrokerCapabilityResultV1,
   validateScaBrokerExecuteAcceptedResultV1,
+  validateScaBrokerExecuteAcceptedResultV2,
   validateScaBrokerExecuteRequestV1,
   validateScaBrokerPollRequestV1,
+  validateScaBrokerJobProgressV1,
+  validateScaBrokerPollResult,
   validateScaBrokerPollResultV1,
+  validateScaBrokerPollResultV2,
   validateScaBrokerReceiptV1,
   validateScaBrokerSchemaDigestManifestV1,
+  validateScaBrokerSchemaDigestManifestV2,
   validateScaBrokerTypedErrorV1,
   type ScaBrokerCancelRequestV1,
   type ScaBrokerCancelResultV1,
   type ScaBrokerExecuteRequestV1,
+  type ScaBrokerJobProgressV1,
   type ScaBrokerPollRequestV1,
   type ScaBrokerReceiptV1,
   type ScaBrokerTerminalStatus,
   type ScaBrokerTypedErrorV1,
-} from "../src/sca/broker-contracts.js";
+} from "../dist/sca/broker-contracts.js";
 
 const RUN_ID = "run-sca-broker-001";
 const NOW = "2026-09-16T12:00:00.000Z";
@@ -178,6 +187,36 @@ function pollRequest(request: ScaBrokerExecuteRequestV1): ScaBrokerPollRequestV1
     requested_at: NOW,
     deadline_at: DEADLINE,
     poll_timeout_ms: 30_000,
+  };
+}
+
+function jobProgress(
+  request: ScaBrokerExecuteRequestV1,
+  overrides: Partial<
+    Pick<
+      ScaBrokerJobProgressV1,
+      "sequence" | "phase" | "work_units" | "output_bytes" | "result_items"
+    >
+  > = {}
+): ScaBrokerJobProgressV1 {
+  return {
+    schema_id: "penny.sca-broker-job-progress.v1",
+    schema_version: 1,
+    tenant_id: request.tenant_id,
+    project_id: request.project_id,
+    run_id: request.run_id,
+    job_id: request.job_id,
+    attempt: request.attempt,
+    idempotency_key: request.idempotency_key,
+    tool_name: request.tool_name,
+    operation: request.operation,
+    request_sha256: scaBrokerExecuteRequestSha256(request),
+    sequence: 0,
+    phase: "accepted",
+    work_units: 0,
+    output_bytes: 0,
+    result_items: 0,
+    ...overrides,
   };
 }
 
@@ -407,6 +446,162 @@ describe("S-03-T1 SCA broker TypeBox v1 contract", () => {
       };
       expect(validateScaBrokerExecuteAcceptedResultV1(accepted, request)).toEqual(accepted);
     }
+  });
+
+  it("validates current job-bound monotonic progress and substantive advances", () => {
+    const execute = sourceRequest();
+    const poll = pollRequest(execute);
+    const baseline = jobProgress(execute);
+    const accepted = {
+      schema_id: "penny.sca-broker-execute-accepted-result.v2",
+      schema_version: 2,
+      tenant_id: execute.tenant_id,
+      project_id: execute.project_id,
+      run_id: execute.run_id,
+      job_id: execute.job_id,
+      attempt: execute.attempt,
+      idempotency_key: execute.idempotency_key,
+      tool_name: execute.tool_name,
+      operation: execute.operation,
+      status: "accepted",
+      request_sha256: poll.request_sha256,
+      accepted_at: NOW,
+      progress: baseline,
+    };
+    expect(validateScaBrokerExecuteAcceptedResultV2(accepted, execute)).toEqual(accepted);
+
+    const started = jobProgress(execute, { sequence: 1, phase: "executing" });
+    const running = {
+      schema_id: "penny.sca-broker-poll-result.v2",
+      schema_version: 2,
+      tenant_id: execute.tenant_id,
+      project_id: execute.project_id,
+      run_id: execute.run_id,
+      job_id: execute.job_id,
+      attempt: execute.attempt,
+      idempotency_key: execute.idempotency_key,
+      tool_name: execute.tool_name,
+      operation: execute.operation,
+      request_sha256: poll.request_sha256,
+      status: "running",
+      progress: started,
+      partial: false,
+      truncated: false,
+      output_refs: [],
+      result_item_count: 0,
+      failure: null,
+      receipt: null,
+      observed_at: NOW,
+    };
+    expect(validateScaBrokerPollResultV2(running, poll, execute)).toEqual(running);
+    expect(classifyScaBrokerJobProgressV1(baseline, started)).toBe("advanced");
+    expect(classifyScaBrokerJobProgressV1(started, structuredClone(started))).toBe("unchanged");
+
+    const worked = jobProgress(execute, {
+      sequence: 2,
+      phase: "executing",
+      work_units: 1,
+    });
+    expect(classifyScaBrokerJobProgressV1(started, worked)).toBe("advanced");
+    const output = jobProgress(execute, {
+      sequence: 3,
+      phase: "materializing_output",
+      work_units: 1,
+      output_bytes: 128,
+      result_items: 1,
+    });
+    expect(classifyScaBrokerJobProgressV1(worked, output)).toBe("advanced");
+  });
+
+  it("fails closed on regressed, misbound, or status-incoherent progress", () => {
+    const execute = sourceRequest();
+    const poll = pollRequest(execute);
+    const started = jobProgress(execute, { sequence: 1, phase: "executing" });
+    const worked = jobProgress(execute, {
+      sequence: 2,
+      phase: "executing",
+      work_units: 1,
+    });
+    expect(() => classifyScaBrokerJobProgressV1(worked, started)).toThrow(/sequence regressed/u);
+    expect(() => classifyScaBrokerJobProgressV1(worked, { ...worked, work_units: 2 })).toThrow(
+      /unchanged sequence/u
+    );
+    expect(() =>
+      validateScaBrokerJobProgressV1(
+        { ...started, job_id: "job-other" },
+        { ...execute, request_sha256: poll.request_sha256 }
+      )
+    ).toThrow(/bindings must match/u);
+
+    const baseResult = {
+      schema_id: "penny.sca-broker-poll-result.v2",
+      schema_version: 2,
+      tenant_id: execute.tenant_id,
+      project_id: execute.project_id,
+      run_id: execute.run_id,
+      job_id: execute.job_id,
+      attempt: execute.attempt,
+      idempotency_key: execute.idempotency_key,
+      tool_name: execute.tool_name,
+      operation: execute.operation,
+      request_sha256: poll.request_sha256,
+      status: "running",
+      progress: jobProgress(execute),
+      partial: false,
+      truncated: false,
+      output_refs: [],
+      result_item_count: 0,
+      failure: null,
+      receipt: null,
+      observed_at: NOW,
+    };
+    expect(() => validateScaBrokerPollResultV2(baseResult, poll, execute)).toThrow(
+      /running status requires/u
+    );
+    expect(() =>
+      validateScaBrokerPollResultV2(
+        { ...baseResult, status: "accepted", progress: started },
+        poll,
+        execute
+      )
+    ).toThrow(/accepted status requires/u);
+  });
+
+  it("keeps legacy missing-progress responses explicit without treating them as current", () => {
+    const execute = sourceRequest();
+    const poll = pollRequest(execute);
+    const legacy = {
+      schema_id: "penny.sca-broker-poll-result.v1",
+      schema_version: 1,
+      tenant_id: execute.tenant_id,
+      project_id: execute.project_id,
+      run_id: execute.run_id,
+      job_id: execute.job_id,
+      attempt: execute.attempt,
+      idempotency_key: execute.idempotency_key,
+      tool_name: execute.tool_name,
+      operation: execute.operation,
+      request_sha256: poll.request_sha256,
+      status: "running",
+      partial: false,
+      truncated: false,
+      output_refs: [],
+      result_item_count: 0,
+      failure: null,
+      receipt: null,
+      observed_at: NOW,
+    };
+    expect(validateScaBrokerPollResult(legacy, poll, execute)).toEqual(legacy);
+    expect(() =>
+      validateScaBrokerPollResultV1({ ...legacy, progress: jobProgress(execute) }, poll, execute)
+    ).toThrow(/schema validation/u);
+    expect(() =>
+      validateScaBrokerPollResultV2(
+        { ...legacy, schema_id: "penny.sca-broker-poll-result.v2", schema_version: 2 },
+        poll,
+        execute
+      )
+    ).toThrow(/schema validation/u);
   });
 
   it("round-trips poll, receipt, and cancel families without treating cancel ack as terminal", () => {
@@ -957,17 +1152,17 @@ describe("S-03-T1 SCA broker TypeBox v1 contract", () => {
     );
   });
 
-  it("rejects a receipt whose terminal_at is after the execute deadline", () => {
+  it("accepts productive work that terminalizes after the execute admission deadline", () => {
     const request = sourceRequest();
     const receipt = terminalReceipt({
       request,
       acceptedAt: TERMINAL_AT,
       terminalAt: "2026-09-16T12:05:00.000000001Z",
     });
-    expectTerminalRoutesToReject(request, receipt, /terminal_at exceeds the execute deadline/u);
+    expect(validateScaBrokerReceiptV1(receipt, request)).toEqual(receipt);
   });
 
-  it("rejects an accepted_at-to-terminal duration beyond timeout_ms", () => {
+  it("treats timeout_ms as renewable inactivity rather than total accepted duration", () => {
     const request = {
       ...sourceRequest(),
       limits: {
@@ -979,11 +1174,7 @@ describe("S-03-T1 SCA broker TypeBox v1 contract", () => {
       request,
       terminalAt: "2026-09-16T12:00:01.000000001Z",
     });
-    expectTerminalRoutesToReject(
-      request,
-      receipt,
-      /accepted_at-to-terminal duration exceeds limits\.timeout_ms/u
-    );
+    expect(validateScaBrokerReceiptV1(receipt, request)).toEqual(receipt);
   });
 
   it("rejects total declared output_ref bytes over max_output_bytes", () => {
@@ -1218,21 +1409,27 @@ describe("S-03-T1 SCA broker TypeBox v1 contract", () => {
     );
   });
 
-  it("publishes one deterministic digest manifest for both future consumers", () => {
+  it("publishes a current v2 digest manifest while preserving the exact legacy v1 lock", () => {
     expect(validateScaBrokerSchemaDigestManifestV1(SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1)).toEqual(
       SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1
     );
-    expect(SCA_BROKER_SCHEMA_MANIFEST_SHA256).toBe(
+    expect(SCA_BROKER_SCHEMA_MANIFEST_SHA256_V1).toBe(
       "a96a2e8371d0d5b123be7ef4fb725a5cf29264034030c2cef7b5bf96ea18b715"
     );
-    expect(SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1.consumers).toEqual([
+    expect(validateScaBrokerSchemaDigestManifestV2(SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2)).toEqual(
+      SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2
+    );
+    expect(SCA_BROKER_SCHEMA_MANIFEST_SHA256).toBe(
+      "33958bee2a6f0f0c2bb7f17429b8d9f1278871a757b47f42b584bee196eab696"
+    );
+    expect(SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2.consumers).toEqual([
       expect.objectContaining({
         module_path: "apps/sca-service/src/contracts.ts",
-        integration: "generated_digest_lock_v1",
+        integration: "generated_digest_lock_v2",
       }),
       expect.objectContaining({
         module_path: ".pi/extensions/sca/src/contracts.ts",
-        integration: "generated_digest_lock_v1",
+        integration: "generated_digest_lock_v2",
       }),
     ]);
     expect(
@@ -1243,10 +1440,10 @@ describe("S-03-T1 SCA broker TypeBox v1 contract", () => {
     ).not.toBe(scaBrokerSchemaSha256(ScaBrokerExecuteRequestV1Schema));
 
     const changedManifest = {
-      ...SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1,
+      ...SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2,
       manifest_sha256: "f".repeat(64),
     };
-    expect(() => validateScaBrokerSchemaDigestManifestV1(changedManifest)).toThrow(
+    expect(() => validateScaBrokerSchemaDigestManifestV2(changedManifest)).toThrow(
       /manifest_sha256/u
     );
   });

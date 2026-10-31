@@ -212,7 +212,7 @@ describe("in-process Word generation", () => {
     expect(fs.readdirSync(directory).filter((name) => name.endsWith(".tmp.docx"))).toEqual([]);
   });
 
-  it("respects cancellation and timeout without publishing a target", async () => {
+  it("respects explicit cancellation and ignores legacy elapsed-time ceilings", async () => {
     const cancelledDir = temporaryDirectory();
     const cancelledOutput = path.join(cancelledDir, "cancelled.docx");
     const cancelledSpec = buildSpec(
@@ -229,20 +229,22 @@ describe("in-process Word generation", () => {
     expect(fs.existsSync(cancelledOutput)).toBe(false);
     expect(fs.readdirSync(cancelledDir).filter((name) => name.endsWith(".tmp.docx"))).toEqual([]);
 
-    const timeoutDir = temporaryDirectory();
-    const timeoutOutput = path.join(timeoutDir, "timeout.docx");
-    const timeoutSpec = buildSpec(
-      { markdown: "# Slow", title_mode: "none", output_path: timeoutOutput },
+    const delayedDir = temporaryDirectory();
+    const delayedOutput = path.join(delayedDir, "delayed.docx");
+    const delayedSpec = buildSpec(
+      { markdown: "# Slow", title_mode: "none", output_path: delayedOutput },
       getProjectRoot()
     );
     await expect(
-      runGenerator(timeoutSpec, undefined, {
-        hooks: { before_render: (signal) => waitForAbort(signal) },
-        timeoutMs: 50,
+      runGenerator(delayedSpec, undefined, {
+        hooks: {
+          before_render: async () => await new Promise<void>((resolve) => setTimeout(resolve, 75)),
+        },
+        timeoutMs: 10,
       })
-    ).rejects.toThrow(/timed out after 50ms/);
-    expect(fs.existsSync(timeoutOutput)).toBe(false);
-    expect(fs.readdirSync(timeoutDir).filter((name) => name.endsWith(".tmp.docx"))).toEqual([]);
+    ).resolves.toMatchObject({ cancelled: false });
+    expect(fs.existsSync(delayedOutput)).toBe(true);
+    expect(fs.readdirSync(delayedDir).filter((name) => name.endsWith(".tmp.docx"))).toEqual([]);
   });
 
   it("implements soft-break, hard-break, HTML br, and hyperlink break semantics", async () => {

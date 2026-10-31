@@ -3,24 +3,24 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { canonicalJson, sha256 } from "../src/canonical-json.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { canonicalJson, sha256 } from "../dist/canonical-json.js";
 import {
   ChildWorkflowCallConflictError,
   Checkpointer,
   ORCHESTRATION_DATABASE_SCHEMA_VERSION,
-} from "../src/checkpointer.js";
-import { ChildWorkflowStateOwner } from "../src/child-workflows/owner.js";
+} from "../dist/checkpointer.js";
+import { ChildWorkflowStateOwner } from "../dist/child-workflows/owner.js";
 import {
   ChildWorkflowArtifactCustody,
   createReservedChildWorkflowCallRecord,
   decodeChildWorkflowCallRecord,
   decodeStoredChildWorkflowCallRow,
   encodeChildWorkflowCallRecord,
-} from "../src/child-workflows/storage.js";
-import { RunContext } from "../src/context.js";
+} from "../dist/child-workflows/storage.js";
+import { RunContext } from "../dist/context.js";
 import type {
   ArtifactRef,
   ChildWorkflowBudgetAllocationV1,
@@ -29,7 +29,7 @@ import type {
   OutputArtifactMetadata,
   RegistrationContractBindingV1,
   RunIdentity,
-} from "../src/contracts.js";
+} from "../dist/contracts.js";
 import {
   parseJson,
   requireNumber,
@@ -54,7 +54,7 @@ interface Fixture {
   readonly requestRef: ArtifactRef;
   readonly inputRef: ArtifactRef;
   readonly directive: InvokeChildWorkflowDirective;
-  readonly record: import("../src/child-workflows/contracts.js").ChildWorkflowCallRecordV1;
+  readonly record: import("../dist/child-workflows/contracts.js").ChildWorkflowCallRecordV1;
 }
 
 function temporaryRoot(label: string): string {
@@ -95,6 +95,7 @@ function downgradeChildCallTableToV11(db: import("node:sqlite").DatabaseSync): v
     );
     INSERT INTO child_workflow_calls SELECT * FROM child_workflow_calls_v12;
     DROP TABLE child_workflow_calls_v12;
+    DROP TABLE host_operation_calls;
     CREATE INDEX idx_child_workflow_calls_parent_lifecycle
       ON child_workflow_calls(parent_run_id, lifecycle);
     PRAGMA user_version=11;
@@ -314,37 +315,17 @@ interface ReservationWorkerResult {
   readonly stderr: string;
 }
 
-function buildReservationWorker(root: string): string {
-  const outputPath = path.join(root, "child-workflow-reservation-worker.mjs");
-  const built = spawnSync(
-    "bun",
-    [
-      "build",
-      RESERVATION_WORKER_PATH,
-      "--bundle",
-      "--target=node",
-      "--format=esm",
-      "--outfile",
-      outputPath,
-    ],
-    { cwd: process.cwd(), encoding: "utf8" }
-  );
-  if (built.status !== 0) {
-    throw new Error(`failed to bundle reservation worker: ${built.stderr}`);
-  }
-  return outputPath;
-}
-
 function startReservationWorker(input: {
   readonly fixture: Fixture;
-  readonly workerPath: string;
   readonly readyPath: string;
   readonly releasePath: string;
 }): Promise<ReservationWorkerResult> {
+  // Node strips only the fixture types; dist stays native ESM at its original URLs,
+  // preserving shipping-generation guards instead of bundling a second runtime.
   const child = spawn(
     process.execPath,
     [
-      input.workerPath,
+      RESERVATION_WORKER_PATH,
       input.fixture.databasePath,
       path.join(input.fixture.root, "artifacts"),
       PROJECT_ID,
@@ -390,6 +371,7 @@ async function waitForPaths(paths: readonly string[], timeoutMs = 20_000): Promi
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -454,16 +436,13 @@ describe("CW-03 child-workflow reservation and recovery", () => {
     const firstReady = path.join(fixture.root, "first.ready");
     const secondReady = path.join(fixture.root, "second.ready");
     const releasePath = path.join(fixture.root, "release");
-    const workerPath = buildReservationWorker(fixture.root);
     const first = startReservationWorker({
       fixture,
-      workerPath,
       readyPath: firstReady,
       releasePath,
     });
     const second = startReservationWorker({
       fixture,
-      workerPath,
       readyPath: secondReady,
       releasePath,
     });
@@ -546,6 +525,45 @@ describe("CW-03 child-workflow reservation and recovery", () => {
         record: changed,
         childContext: childContext(changed, fixture.root),
       })
+    ).toThrow(ChildWorkflowCallConflictError);
+    expect(callCount(fixture.databasePath)).toBe(1);
+    expect(childRunCount(fixture.databasePath)).toBe(1);
+    fixture.artifacts.close();
+    fixture.checkpointer.close();
+  });
+
+  it("never adopts a changed versioned request policy at an existing logical call", () => {
+    const fixture = makeFixture("policy-operand");
+    expect(
+      fixture.owner.reserve({
+        record: fixture.record,
+        childContext: childContext(fixture.record, fixture.root),
+      }).kind
+    ).toBe("created");
+    const native: unknown = JSON.parse(fixture.artifacts.read(fixture.requestRef).toString("utf8"));
+    const original = requireRecord(native, "child request");
+    const alternate = persistArtifact(
+      fixture.artifacts,
+      {
+        ...fixture.artifacts.metadata(fixture.requestRef),
+        operation_id: "child-request-call-a-policy-variant",
+      },
+      {
+        ...original,
+        invocation_policy: { schema_version: 2, specification_assurance: "reviewed_definition" },
+      }
+    );
+    const changedDirective = { ...fixture.directive, request_ref: alternate };
+    const changed = createReservedChildWorkflowCallRecord({
+      directive: changedDirective,
+      parent_visit_sequence: 1,
+      parent_visit_offset: 0,
+      parent_registration_sha256: PARENT_REGISTRATION_SHA256,
+      child_registration_sha256: CHILD_REGISTRATION_SHA256,
+      timestamp: CREATED_AT,
+    });
+    expect(() =>
+      fixture.owner.reserve({ record: changed, childContext: childContext(changed, fixture.root) })
     ).toThrow(ChildWorkflowCallConflictError);
     expect(callCount(fixture.databasePath)).toBe(1);
     expect(childRunCount(fixture.databasePath)).toBe(1);
@@ -852,6 +870,100 @@ describe("CW-03 child-workflow reservation and recovery", () => {
 });
 
 describe("CW-03 child-workflow retention linkage", () => {
+  it("plans linked cohorts without a writer reservation and deletes an exact abandoned cohort parent-first", () => {
+    const fixture = makeFixture("retention-abandoned", 0);
+    fixture.owner.reserve({
+      record: fixture.record,
+      childContext: childContext(fixture.record, fixture.root),
+    });
+    const child = fixture.checkpointer.loadRun(fixture.record.child_identity);
+    child.status = "error";
+    child.terminalDirective = {
+      schema_version: 2,
+      action: "error",
+      identity: child.identity,
+      status: "error",
+      met: false,
+      result: {},
+      artifacts: [],
+      unresolved: ["storage fixture"],
+    };
+    fixture.checkpointer.saveRun(child, "fixture_child_terminal", {});
+    const running = encodeChildWorkflowCallRecord({
+      ...fixture.record,
+      lifecycle: "running",
+      updated_at: "2026-09-10T12:01:00.000Z",
+    }).record;
+    fixture.owner.transition({ call_id: running.call_id, from: "reserved", next: running });
+    const failed = encodeChildWorkflowCallRecord({
+      ...running,
+      lifecycle: "failed",
+      terminal_action: "error",
+      terminal_sha256: sha256(canonicalJson(child.terminalDirective)),
+      usage: {
+        schema_version: 1,
+        model_turns: 0,
+        tool_calls: 0,
+        external_calls: 0,
+        active_wall_clock_ms: 0,
+        steps: 0,
+        output_bytes: 0,
+        unknown_usage: false,
+      },
+      updated_at: "2026-09-10T12:02:00.000Z",
+    }).record;
+    fixture.owner.transition({ call_id: failed.call_id, from: "running", next: failed });
+    const rival = database(fixture.databasePath);
+    const fromCheckpoint = RunContext.fromCheckpoint;
+    const hydration = vi
+      .spyOn(RunContext, "fromCheckpoint")
+      .mockImplementation((value, options) => {
+        // Every runtime hydration during linkage validation must occur in the read phase.
+        // A competing connection can reserve the writer right here, without a timing oracle.
+        rival.exec("BEGIN IMMEDIATE");
+        rival.exec("ROLLBACK");
+        return fromCheckpoint(value, options);
+      });
+    const history = vi.spyOn(fixture.checkpointer, "events").mockImplementation(() => {
+      throw new Error("linked retention must not replay full event history");
+    });
+    try {
+      expect(fixture.checkpointer.pruneTerminalRuns()).toEqual([]);
+      expect(hydration).toHaveBeenCalled();
+      expect(history).not.toHaveBeenCalled();
+      hydration.mockRestore();
+      const parent = fixture.checkpointer.loadRun(fixture.record.parent_identity);
+      parent.status = "cancelled";
+      parent.pendingDirective = null;
+      parent.terminalDirective = {
+        schema_version: 2,
+        action: "cancelled",
+        identity: parent.identity,
+        status: "cancelled",
+        met: false,
+        result: {},
+        artifacts: [],
+        unresolved: ["storage fixture"],
+      };
+      history.mockRestore();
+      fixture.checkpointer.saveRun(parent, "fixture_parent_cancelled", {});
+      expect(fixture.checkpointer.pruneTerminalRuns()).toEqual([
+        parent.identity.run_id,
+        child.identity.run_id,
+      ]);
+      expect(fixture.checkpointer.childWorkflowCall(failed.call_id)).toBeUndefined();
+      expect(fixture.checkpointer.hasRunById(parent.identity.run_id)).toBe(false);
+      expect(fixture.checkpointer.hasRunById(child.identity.run_id)).toBe(false);
+      expect(fixture.artifacts.read(fixture.inputRef).toString("utf8")).toBe(
+        canonicalJson({ fixture: true })
+      );
+    } finally {
+      rival.close();
+      fixture.artifacts.close();
+      fixture.checkpointer.close();
+    }
+  });
+
   it("pins a terminal child call and run while its parent remains live", () => {
     const fixture = makeFixture("retention-linkage", 0);
     fixture.owner.reserve({
@@ -907,13 +1019,15 @@ describe("CW-03 child-workflow retention linkage", () => {
 });
 
 describe("CW-03 schema-version boundary", () => {
-  it("provisions v12 and explicitly upgrades v10 without synthesizing child linkage", () => {
+  it("provisions v13 and explicitly upgrades v10 without synthesizing child linkage", () => {
     const root = temporaryRoot("schema-upgrade");
     const file = path.join(root, "orchestration.db");
     Checkpointer.provision(file, undefined, { projectId: PROJECT_ID }).close();
     const downgrade = database(file);
     try {
-      downgrade.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+      downgrade.exec(
+        "DROP TABLE host_operation_calls; DROP TABLE child_workflow_calls; PRAGMA user_version=10;"
+      );
     } finally {
       downgrade.close();
     }
@@ -970,7 +1084,7 @@ describe("CW-03 schema-version boundary", () => {
     Checkpointer.provision(newer, undefined, { projectId: PROJECT_ID }).close();
     const newerDb = database(newer);
     try {
-      newerDb.exec("PRAGMA user_version=13;");
+      newerDb.exec("PRAGMA user_version=14;");
     } finally {
       newerDb.close();
     }
@@ -1067,7 +1181,7 @@ describe("CW-03 schema-version boundary", () => {
     const incompatibleLegacyDb = database(incompatibleLegacy);
     try {
       incompatibleLegacyDb.exec(
-        "DROP TABLE child_workflow_calls; CREATE INDEX unexpected_runs_index ON runs(status); PRAGMA user_version=10;"
+        "DROP TABLE host_operation_calls; DROP TABLE child_workflow_calls; CREATE INDEX unexpected_runs_index ON runs(status); PRAGMA user_version=10;"
       );
     } finally {
       incompatibleLegacyDb.close();
@@ -1094,7 +1208,7 @@ describe("CW-03 schema-version boundary", () => {
         newerVersion.prepare("PRAGMA user_version").get(),
         "retained newer version"
       );
-      expect(requireNumber(row["user_version"], "retained newer user_version")).toBe(13);
+      expect(requireNumber(row["user_version"], "retained newer user_version")).toBe(14);
     } finally {
       newerVersion.close();
     }

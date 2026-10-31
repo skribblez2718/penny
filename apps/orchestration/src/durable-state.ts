@@ -1,11 +1,16 @@
 import path from "node:path";
 
 import { Type, type Static } from "typebox";
+import { Compile } from "typebox/compile";
+import { Value } from "typebox/value";
 
 import {
   ArtifactRefSchema,
+  InputArtifactsSchema,
   DirectiveSchema,
   JsonValueSchema,
+  LivenessPolicySchema,
+  type LivenessPolicy,
   RegistrationContractBindingV1Schema,
   RunIdentitySchema,
   RunStatusSchema,
@@ -25,7 +30,7 @@ export type JsonObject = Static<typeof JsonObjectSchema>;
 export const ResearchDataSchema = Type.Object({
   mode: Type.String(),
   max_sub_queries: Type.Integer(),
-  max_research_rounds: Type.Integer(),
+  max_research_rounds: Type.Union([Type.Integer(), Type.Null()]),
   critique_passes: Type.Integer(),
   research_round: Type.Integer(),
   report_format: Type.String(),
@@ -163,11 +168,29 @@ export type PlaybookDurableState =
   | KnowledgeBasePlaybookState
   | UnsupportedPlaybookState;
 
+/** Read-only compatibility for the retired candidate label in existing checkpoints.
+ * It is retained as historical metadata, not release or execution authority. The
+ * active RegistrationContractBindingV1Schema stays closed and never emits it.
+ */
+const CheckpointRegistrationBindingSchema = Type.Union([
+  RegistrationContractBindingV1Schema,
+  Type.Object(
+    {
+      ...RegistrationContractBindingV1Schema.properties,
+      release_status: Type.Literal("candidate"),
+    },
+    { additionalProperties: false }
+  ),
+]);
+
 export const RunContextSnapshotSchema = Type.Object(
   {
     schema_version: Type.Literal(2),
     completion_protocol_version: Type.Optional(Type.Literal(1)),
-    registration_contract_binding: Type.Optional(RegistrationContractBindingV1Schema),
+    registration_contract_binding: Type.Optional(CheckpointRegistrationBindingSchema),
+    seal_correction_limit: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER - 1 }), Type.Null()])
+    ),
     identity: RunIdentitySchema,
     goal: Type.String(),
     constraints: JsonObjectSchema,
@@ -177,15 +200,22 @@ export const RunContextSnapshotSchema = Type.Object(
     state_id: Type.String(),
     previous_state: Type.Union([Type.String(), Type.Null()]),
     step_count: Type.Integer({ minimum: 0 }),
-    max_steps: Type.Integer({ minimum: 1 }),
+    max_steps: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
     iteration: Type.Integer({ minimum: 0 }),
-    max_iterations: Type.Integer({ minimum: 1 }),
+    max_iterations: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
     iteration_history: Type.Array(Type.Array(Type.String())),
     clarification_text: Type.String(),
     met: Type.Boolean(),
     research: ResearchDataSchema,
     playbook_data: Type.Optional(JsonObjectSchema),
     selected_artifacts: Type.Array(ArtifactRefSchema),
+    admitted_input_artifacts: Type.Optional(InputArtifactsSchema),
     pending_directive: Type.Union([DirectiveSchema, Type.Null()]),
     pending_branches: Type.Array(PendingBranchSchema),
     terminal_directive: Type.Union([DirectiveSchema, Type.Null()]),
@@ -193,6 +223,10 @@ export const RunContextSnapshotSchema = Type.Object(
   { additionalProperties: false }
 );
 export type RunContextSnapshot = Static<typeof RunContextSnapshotSchema>;
+
+// Compile an isolated schema clone: the compiler may annotate its input, while the exported
+// schema must retain the existing interpreted validation diagnostics used on the failure path.
+const RunContextSnapshotValidator = Compile(Value.Clone(RunContextSnapshotSchema));
 
 export type DecodedRunContextState = Omit<RunContextSnapshot, "playbook_data"> & {
   readonly playbook_state: PlaybookDurableState;
@@ -232,7 +266,9 @@ const RUN_CONTEXT_REQUIRED_KEYS = [
 const RUN_CONTEXT_OPTIONAL_KEYS = [
   "completion_protocol_version",
   "registration_contract_binding",
+  "seal_correction_limit",
   "playbook_data",
+  "admitted_input_artifacts",
 ] as const;
 
 const KB_DURABLE_PROJECTION_KEYS = [
@@ -263,10 +299,32 @@ const KB_DURABLE_PROJECTION_KEYS = [
 const KB_DURABLE_PROJECTION_OPTIONAL_KEYS = [
   "completion_protocol_version",
   "registration_contract_binding",
+  "seal_correction_limit",
 ] as const;
 
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Refusal only: retained event bytes and checkpoint state must not be upgraded in place. */
+export class RetiredLivenessPolicyError extends Error {
+  readonly code = "RETIRED_LIVENESS_POLICY";
+  readonly checkpointUnchanged = true;
+
+  constructor() {
+    super(
+      "retired liveness policy format: runtime execution refused; retained checkpoint unchanged"
+    );
+    this.name = "RetiredLivenessPolicyError";
+  }
+}
+
+/** Current execution codec, deliberately separate from historical artifact verification schemas. */
+export function decodeCurrentLivenessPolicy(value: unknown): LivenessPolicy {
+  if (isUnknownRecord(value) && (value.schema_version === 1 || value.schema_version === 2)) {
+    throw new RetiredLivenessPolicyError();
+  }
+  return validateContract(LivenessPolicySchema, value, "current liveness policy");
 }
 
 function sortedKeys(value: object): string[] {
@@ -328,12 +386,18 @@ function validateSnapshotWire(value: unknown): RunContextSnapshot {
     ["max_iterations", 1],
   ] as const) {
     const numeric = value[name];
+    if ((name === "max_steps" || name === "max_iterations") && numeric === null) continue;
     if (!Number.isSafeInteger(numeric) || typeof numeric !== "number" || numeric < minimum) {
       throw new Error(`checkpoint ${name} is invalid`);
     }
   }
 
-  const snapshot = validateContract(RunContextSnapshotSchema, value, "checkpoint context");
+  if (!RunContextSnapshotValidator.Check(value)) {
+    // Preserve existing diagnostics, but reject even if compiler/interpreter semantics diverge.
+    validateContract(RunContextSnapshotSchema, value, "checkpoint context");
+    throw new Error("checkpoint context failed compiled schema validation");
+  }
+  const snapshot = value;
   if (snapshot.goal.trim().length === 0) {
     throw new Error("checkpoint goal must be non-empty");
   }

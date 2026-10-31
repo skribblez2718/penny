@@ -4,6 +4,12 @@ A human-readable guide to writing clean, maintainable, and secure Python code.
 
 ## Project Toolchain
 
+The commands and TypeScript-only orchestration rule below apply to Penny-owned code.
+Caller-owned Python uses its own toolchain and architecture; the type, validation, and
+test principles transfer without imposing Penny's root commands. Implementation runs
+applicable gates; review/diagnosis assesses evidence and gaps; planning identifies
+required evidence without claiming it exists.
+
 Penny requires Python 3.12 or newer. `uv` owns the Python environment and
 `uv.lock`; use frozen syncs for setup and checks. Black formats Python, Flake8
 lints it, mypy checks typed production code, and pytest runs Python tests.
@@ -281,7 +287,7 @@ bun run py:typecheck       # mypy production-code gate
 ```
 
 Black and Flake8 both use a 100-character line limit. Mypy targets Python 3.12
-and currently excludes tests, which remain governed by pytest plus the
+and excludes tests, which remain governed by pytest plus the
 repository's test-discovery and compliance checks. Ruff is not part of Penny's
 configured Python toolchain.
 

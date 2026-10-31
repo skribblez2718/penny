@@ -4,7 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import playwrightExtension from "../../index.js";
 import { BrowserManager, BrowserPolicyViolationError } from "../../browser.js";
-import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 import { runWithAdmittedRegisteredBrowserPolicy } from "../helpers/registered-browser-policy.js";
 
 const browserTestsEnabled = process.env.PENNY_PLAYWRIGHT_BROWSER_TESTS === "1";

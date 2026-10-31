@@ -1,19 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../../orchestration/src/canonical-json.js";
-import { type CurrentArtifactRef } from "../../orchestration/src/contracts.js";
+import { canonicalJson, sha256 } from "../../orchestration/dist/canonical-json.js";
+import { type CurrentArtifactRef } from "../../orchestration/dist/contracts.js";
 import {
   SCA_ADAPTER_REGISTRY,
+  SCA_BROKER_CONTRACT_LIMITS_V1,
   SCA_BROKER_SCHEMA_MANIFEST_SHA256,
   SCA_SERVICE_BROKER_MANIFEST_SHA256,
   SCA_SERVICE_IPC_PROTOCOL,
   createScaRouter,
   scaBrokerExecuteRequestSha256,
   validateScaBrokerCapabilityResultV1,
+  type ScaAdapterRegistry,
   type ScaBrokerCapabilityRequestV1,
   type ScaBrokerExecuteRequestV1,
   type ScaBrokerOperationKind,
   type ScaBrokerToolName,
+  type ScaOperationAdapter,
 } from "../src/index.js";
 
 const TOKEN = "router-test-token-000000000000000000000000";
@@ -152,6 +155,49 @@ function cancelRequest(request: ScaBrokerExecuteRequestV1) {
   };
 }
 
+function availableAdapter(): ScaOperationAdapter {
+  return {
+    async capability(request) {
+      return {
+        schema_id: "penny.sca-broker-capability-result.v1",
+        schema_version: 1,
+        request_id: request.request_id,
+        tenant_id: request.tenant_id,
+        project_id: request.project_id,
+        run_id: request.run_id,
+        tool_name: request.tool_name,
+        operation: request.operation,
+        status: "available",
+        limits: {
+          max_request_bytes: SCA_BROKER_CONTRACT_LIMITS_V1.max_request_bytes,
+          max_input_refs: SCA_BROKER_CONTRACT_LIMITS_V1.max_input_refs,
+          max_output_refs: SCA_BROKER_CONTRACT_LIMITS_V1.max_output_refs,
+          max_selectors: SCA_BROKER_CONTRACT_LIMITS_V1.max_selectors,
+          max_parameters: SCA_BROKER_CONTRACT_LIMITS_V1.max_parameters,
+          max_timeout_ms: SCA_BROKER_CONTRACT_LIMITS_V1.max_timeout_ms,
+          max_output_bytes: SCA_BROKER_CONTRACT_LIMITS_V1.max_output_bytes,
+          max_result_items: SCA_BROKER_CONTRACT_LIMITS_V1.max_result_items,
+        },
+        error: null,
+        observed_at: NOW.toISOString(),
+      };
+    },
+    async run(_request, context) {
+      const output = artifactRef("sca-source-results", "router-output");
+      context.reportWorkMilestone();
+      context.reportPersistedOutput(output.byte_length, 1);
+      return {
+        terminal_status: "succeeded",
+        partial: false,
+        truncated: false,
+        output_refs: [output],
+        result_item_count: 1,
+        failure: null,
+      };
+    },
+  };
+}
+
 describe("SCA service contract boundary", () => {
   it("pins the accepted S-03-T1 digest and exposes only immutable unavailable adapters", () => {
     expect(SCA_SERVICE_BROKER_MANIFEST_SHA256).toBe(SCA_BROKER_SCHEMA_MANIFEST_SHA256);
@@ -212,6 +258,53 @@ describe("SCA service contract boundary", () => {
       expect(response).not.toHaveProperty("result");
       expect(JSON.stringify(response)).not.toMatch(/accepted|success|output/);
     }
+  });
+
+  it("produces current progress from broker-owned execution and output milestones", async () => {
+    const adapter = availableAdapter();
+    const adapters: ScaAdapterRegistry = {
+      source_query: adapter,
+      graph_query: null,
+      application_test: null,
+    };
+    const activeRouter = createScaRouter({
+      authenticationToken: TOKEN,
+      now: () => NOW,
+      adapters,
+    });
+    const execute = executeRequest();
+    const accepted = await activeRouter.route(frame("execute", execute));
+    expect(accepted).toMatchObject({
+      ok: true,
+      action: "execute",
+      result: {
+        schema_id: "penny.sca-broker-execute-accepted-result.v2",
+        status: "accepted",
+        progress: { sequence: 0, phase: "accepted" },
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    const polled = await activeRouter.route(frame("poll", pollRequest(execute)));
+    expect(polled).toMatchObject({
+      ok: true,
+      action: "poll",
+      result: {
+        schema_id: "penny.sca-broker-poll-result.v2",
+        status: "succeeded",
+        progress: {
+          sequence: 3,
+          phase: "materializing_output",
+          work_units: 1,
+          output_bytes: 128,
+          result_items: 1,
+        },
+      },
+    });
+    if (!polled.ok || polled.action !== "poll") throw new Error("unexpected poll response");
+    expect(polled.result.progress).not.toHaveProperty("observed_at");
+    await activeRouter.shutdown(20);
   });
 
   it("rejects missing and incorrect authentication before routing", async () => {

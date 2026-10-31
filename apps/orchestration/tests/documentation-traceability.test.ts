@@ -43,7 +43,7 @@ describe("P3 research documentation truthfulness oracle", () => {
     }
   });
 
-  it("states the active semantic core, P3 graph, ordered topology, and verified PG4 gate", () => {
+  it("states the active semantic core, P3 graph, and ordered topology", () => {
     for (const relative of [
       ".pi/skills/research/SKILL.md",
       ".pi/skills/research/README.md",
@@ -57,9 +57,6 @@ describe("P3 research documentation truthfulness oracle", () => {
       expect(document, relative).toMatch(
         /P3[\s\S]{0,120}(activates|topology|graph)|activated P3/iu
       );
-      expect(document, relative).toMatch(
-        /live-model PG4[\s\S]{0,120}passed[\s\S]{0,120}p4-qr-live-20260827-009/iu
-      );
     }
     const flow = text(".pi/skills/research/resources/flow.html");
     expect(flow).toContain("apps/orchestration/src/playbooks/research.ts");
@@ -69,6 +66,57 @@ describe("P3 research documentation truthfulness oracle", () => {
     expect(flow).toContain('{"from":"sealing_core","to":"validating"');
     expect(flow).not.toContain("report_writing");
     expect(flow).toContain('{"from":"validating","to":"critiquing_report"');
+  });
+
+  it("keeps one historical qualification owner with precise scoped consumer references", () => {
+    const reference = readFileSync(REFERENCE, "utf8");
+    const sections = reference.split(/^## Qualification evidence$/mu);
+    expect(sections).toHaveLength(2);
+    const remainder = sections[1];
+    if (remainder === undefined) throw new Error("qualification evidence section is absent");
+    const qualification = remainder.split(/^## /mu)[0];
+    if (qualification === undefined) throw new Error("qualification evidence body is absent");
+
+    expect(qualification).toMatch(
+      /As recorded, the historical live-model PG4[\s\S]{0,120}passed[\s\S]{0,120}p4-qr-live-20260827-009/iu
+    );
+    expect(reference.match(/p4-qr-live-20260827-009/gu)).toHaveLength(1);
+    expect(reference.replace(qualification, "")).not.toMatch(/live-model PG4[\s\S]{0,120}passed/iu);
+    expect(qualification).toContain("ignored local PG4 verification bundle");
+    expect(qualification).toContain("not supplied or reproduced here");
+    expect(qualification).toContain("not a clean-checkout prerequisite");
+    expect(qualification).toContain("without independently verifying or disproving it");
+    expect(qualification).toContain(
+      "not fresh or current qualification of current code, prompts, or documentation"
+    );
+    expect(qualification).toContain("current seven-skill seal/assurance changes");
+    expect(qualification).toContain("No new live run or repeated cohort");
+    expect(qualification).toContain("Deterministic PG3 and offline test conformance");
+    expect(qualification).toContain("not live-model reliability or golden-template certification");
+    expect(qualification).toContain("not independent live-pass evidence");
+    expect(qualification).toContain("Gate 2 remains `not_run`");
+
+    const livenessClaim = reference.split("\n").find((line) => line.startsWith("| `RSC-005` |"));
+    if (livenessClaim === undefined) throw new Error("RSC-005 is absent");
+    expect(livenessClaim).toContain("[Qualification evidence](#qualification-evidence)");
+    expect(livenessClaim).not.toContain("ignored local PG4 verification bundle");
+
+    const consumers: Readonly<Record<string, string>> = {
+      ".pi/skills/research/SKILL.md": "resources/reference.md#qualification-evidence",
+      ".pi/skills/research/README.md": "resources/reference.md#qualification-evidence",
+      ".pi/skills/research/resources/research-frontier-evaluation.md":
+        "reference.md#qualification-evidence",
+      "docs/agents/capabilities/research-skill/research-skill.md":
+        "../../../../.pi/skills/research/resources/reference.md#qualification-evidence",
+    };
+    for (const [relative, target] of Object.entries(consumers)) {
+      const document = text(relative);
+      expect(document, relative).toContain(`](${target})`);
+      expect(document, relative).toContain("not fresh or current qualification");
+      expect(document, relative).not.toContain("p4-qr-live-20260827-009");
+      expect(document, relative).not.toMatch(/live-model PG4[\s\S]{0,120}passed/iu);
+      expect(document, relative).not.toMatch(/^## Qualification evidence$/mu);
+    }
   });
 
   it("does not advertise phantom rigor, Python runtime, or legacy output authority", () => {

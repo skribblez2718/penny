@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import * as path from "path";
-import { initializePennyState } from "@penny/orchestration/source";
+import { initializePennyState } from "@penny/orchestration";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@earendil-works/pi-coding-agent", () => ({

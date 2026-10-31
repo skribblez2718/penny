@@ -4,13 +4,16 @@ import { canonicalJson, sha256 } from "../canonical-json.js";
 import { ContractValidationError, validateContract } from "../contracts.js";
 import type { AgentInvocation } from "../model-client.js";
 import { OpaqueIdSchema, assertOpaqueId } from "../skill-contracts/common.js";
+import {
+  SCA_MODEL_ALIAS,
+  SCA_MODEL_ID,
+  SCA_MODEL_OVERRIDE,
+  SCA_MODEL_PROVIDER,
+} from "./model-identity.js";
+
+export { SCA_MODEL_ALIAS, SCA_MODEL_ID, SCA_MODEL_OVERRIDE, SCA_MODEL_PROVIDER };
 
 const MAX_MODEL_POLICY_BYTES = 32_768;
-
-export const SCA_MODEL_ALIAS = "deepseek-flash" as const;
-export const SCA_MODEL_PROVIDER = "ollama" as const;
-export const SCA_MODEL_ID = "deepseek-v4.1-flash:cloud" as const;
-export const SCA_MODEL_OVERRIDE = `${SCA_MODEL_PROVIDER}/${SCA_MODEL_ID}` as const;
 
 const SCA_ALLOWED_MODEL_DATA_CLASSES = [
   "content_free_run_metadata",

@@ -47,6 +47,8 @@ exclude = '''
     \.git
     | \.hg
     | \.megg
+    | \.penny
+    | \.mempalace
     | \.mypy_cache
     | \.tox
     | \.venv
@@ -54,9 +56,11 @@ exclude = '''
     | buck-out
     | build
     | dist
+    | out
     | node_modules
     | audits
     | backups
+    | evals
     | ideas
     | plans
     | research
@@ -86,7 +90,10 @@ exclude = [
     "backups/",     # Operator-private rollback snapshots are not project source.
     "ideas/",       # Gitignored exploratory work is not project source.
     ".*/tests/",    # Pytest remains its own gate while legacy test helpers are typed incrementally.
-    "\\.mempalace/",
+    # Runtime/private state and generated copies are not authoritative Python source.
+    "(^|/)(\\.penny|\\.mempalace)(/|$)",
+    "(^|/)(build|dist|out|_build|buck-out)/",
+    "(^|/)(plans|research|evals)/",
 ]
 
 [tool.pytest.ini_options]

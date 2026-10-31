@@ -5,7 +5,7 @@
  * methods on it. That left no seam between "the orchestration engine" and "its only
  * tenant": a second playbook could only duplicate the loop or leak research semantics.
  *
- * This module defines what every playbook must provide (`PlaybookCoreV1`) and what some
+ * This module defines what every playbook must provide (`PlaybookCore`) and what some
  * playbooks may additionally provide (capability interfaces). The engine dispatches by
  * **capability, not by name** — it never tests `playbook === "research"`.
  *
@@ -22,7 +22,7 @@ import type {
   CompletionProductEvidence,
   Confidence,
   Directive,
-  EvaluationResultV2,
+  EvaluationResult,
   JsonValue,
   LivenessSnapshotV1,
   LivenessTerminalReason,
@@ -38,7 +38,7 @@ import type { Checkpointer, ReserveOperationEventGroupInput } from "../checkpoin
  * Signatures are taken verbatim from the live research playbook so that W1 is a pure
  * interface extraction with no behavioural change.
  */
-export interface PlaybookCoreV1 {
+export interface PlaybookCore {
   /** First directive for a new run. */
   initialize(context: RunContext): Directive;
   /** Next directive for the current state. */
@@ -52,7 +52,7 @@ export interface PlaybookCoreV1 {
     context: RunContext,
     details: Record<string, JsonValue>,
     confidence: Confidence
-  ): PlaybookStepOutcomeV1;
+  ): PlaybookStepOutcome;
   /** Re-derive a pending directive after restart. `null` when nothing is pending. */
   rebindPendingDirective(context: RunContext): Directive | null;
 }
@@ -97,7 +97,7 @@ export interface HostContinuationRequestV1 {
   readonly kind: "host_continuation";
 }
 
-export type PlaybookStepOutcomeV1 = Directive | HostContinuationRequestV1;
+export type PlaybookStepOutcome = Directive | HostContinuationRequestV1;
 
 export interface HostContinuationStepV1 {
   readonly event_type: string;
@@ -118,27 +118,57 @@ export function hostContinuation(): HostContinuationRequestV1 {
 }
 
 export function isHostContinuation(
-  outcome: PlaybookStepOutcomeV1
+  outcome: PlaybookStepOutcome
 ): outcome is HostContinuationRequestV1 {
   return !("action" in outcome) && outcome.kind === "host_continuation";
 }
 
 export interface StateAwareRepairCapabilityV1 {
+  /** Optional known-stage semantic revision after exact capture/receipt verification but rejected
+   * phase schema. Null preserves P1.2 routing-only correction. Never accepts invalid details. */
+  evaluateRejectedSummary?(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>
+  ): EvaluationResult | null;
   /** `null` when the structurally valid result needs no typed repair. */
   evaluateRepair(
     context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResultV2 | null;
+  ): EvaluationResult | null;
   /** Optional domain-data bookkeeping; engine control fields remain immutable. */
-  repairBudgetUsed?(context: RunContext, state: string, evaluation: EvaluationResultV2): number;
+  repairBudgetUsed?(context: RunContext, state: string, evaluation: EvaluationResult): number;
   applyRepairBookkeeping?(
     context: RunContext,
     state: string,
     details: Record<string, JsonValue>,
-    evaluation: EvaluationResultV2,
+    evaluation: EvaluationResult,
     disposition: "repair" | "exhausted"
   ): void;
+}
+
+/** Paired opt-in capabilities, bound by registration.repair_progress_policy.
+ * Called before corrective dispatch/bookkeeping/budget charge. Fingerprints are host-derived
+ * SHA-256 of the exact relevant semantic candidate plus failed structured check details.
+ * Exclude strategy prose, timestamps, receipt/revision IDs and transport-only changes.
+ * Null means measurement unavailable, not stagnation; changed hashes are only potentially
+ * new evidence. No semantic-equivalence/paraphrase detection is promised.
+ * The engine namespaces durable history by run + origin phase + logical branch (null for
+ * a fan aggregate). Neither method may dispatch effects; terminalization must return an
+ * honest incomplete/met:false, preserving best partials and current feedback reports.
+ */
+export interface RepairProgressCapabilityV1 {
+  repairProgressFingerprint(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>
+  ): string | null;
+  terminalizeRepairStall(
+    context: RunContext,
+    state: string,
+    evaluation: EvaluationResult
+  ): Directive;
 }
 
 /** Optional honest terminalization for a registered repair route's exhausted successor. */
@@ -146,12 +176,19 @@ export interface RepairExhaustionCapabilityV1 {
   terminalizeRepairExhaustion(
     context: RunContext,
     state: string,
-    evaluation: EvaluationResultV2
+    evaluation: EvaluationResult
   ): Directive;
 }
 
 export interface GenericResponsePolicyCapabilityV1 {
   assertGenericResponseAllowed(context: RunContext): void;
+}
+
+export type GenericGateResponseStorageModeV1 = "full" | "digest-only";
+
+/** Optional storage policy for the exact pending generic user gate. Evaluated before resume. */
+export interface GenericGateResponseStorageCapabilityV1 {
+  genericGateResponseStorage(context: RunContext): GenericGateResponseStorageModeV1;
 }
 
 export interface ExternalStartOperationGroupCapabilityV1 {
@@ -180,15 +217,24 @@ export interface ReviewInvalidationCapabilityV1 {
   invalidateReview(run: RunContext, reason: string): Directive;
 }
 
+/** Optional host-only capture after shared input enrichment, before dispatch checkpointing.
+ * Must not change the directive or add model operands. Recovery captures explicit output rebinds. */
+export interface DispatchBindingCapabilityV1 {
+  bindDispatch(context: RunContext, directive: Directive): void;
+}
+
 /** A playbook plus whatever optional capabilities it happens to implement. */
-export type PlaybookV1 = PlaybookCoreV1 &
+export type Playbook = PlaybookCore &
+  Partial<DispatchBindingCapabilityV1> &
   Partial<FanAggregateCapabilityV1> &
   Partial<RoutingRepairCapabilityV1> &
   Partial<LivenessTerminalCapabilityV1> &
   Partial<StateAwareRepairCapabilityV1> &
   Partial<RepairExhaustionCapabilityV1> &
+  Partial<RepairProgressCapabilityV1> &
   Partial<HostContinuationCapabilityV1> &
   Partial<GenericResponsePolicyCapabilityV1> &
+  Partial<GenericGateResponseStorageCapabilityV1> &
   Partial<ExternalStartOperationGroupCapabilityV1> &
   Partial<HostReviewedGateValidationCapabilityV1> &
   Partial<ApprovedPromotionCompletionCapabilityV1> &
@@ -201,38 +247,38 @@ export type PlaybookV1 = PlaybookCoreV1 &
  * "are you research?". Adding a playbook must never require an engine change.
  */
 export function hasFanAggregate(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & FanAggregateCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & FanAggregateCapabilityV1 {
   return typeof playbook.aggregateBranches === "function";
 }
 
 export function hasRoutingRepair(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & RoutingRepairCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & RoutingRepairCapabilityV1 {
   return typeof playbook.routingRepair === "function";
 }
 
 export function hasLivenessTerminal(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & LivenessTerminalCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & LivenessTerminalCapabilityV1 {
   return typeof playbook.terminalizeLiveness === "function";
 }
 
 export function hasStateAwareRepair(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & StateAwareRepairCapabilityV1 {
+  playbook: Playbook
+): playbook is Playbook & StateAwareRepairCapabilityV1 {
   return typeof playbook.evaluateRepair === "function";
 }
 
 export function hasRepairExhaustion(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & RepairExhaustionCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & RepairExhaustionCapabilityV1 {
   return typeof playbook.terminalizeRepairExhaustion === "function";
 }
 
 export function hasHostContinuation(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & HostContinuationCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & HostContinuationCapabilityV1 {
   return (
     typeof playbook.needsHostContinuation === "function" &&
     typeof playbook.continueHost === "function"
@@ -240,32 +286,38 @@ export function hasHostContinuation(
 }
 
 export function hasGenericResponsePolicy(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & GenericResponsePolicyCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & GenericResponsePolicyCapabilityV1 {
   return typeof playbook.assertGenericResponseAllowed === "function";
 }
 
+export function hasGenericGateResponseStorage(
+  playbook: Playbook
+): playbook is PlaybookCore & GenericGateResponseStorageCapabilityV1 {
+  return typeof playbook.genericGateResponseStorage === "function";
+}
+
 export function hasExternalStartOperationGroup(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & ExternalStartOperationGroupCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & ExternalStartOperationGroupCapabilityV1 {
   return typeof playbook.externalStartOperationGroup === "function";
 }
 
 export function hasHostReviewedGateValidation(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & HostReviewedGateValidationCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & HostReviewedGateValidationCapabilityV1 {
   return typeof playbook.validateHostReviewedGate === "function";
 }
 
 export function hasApprovedPromotionCompletion(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & ApprovedPromotionCompletionCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & ApprovedPromotionCompletionCapabilityV1 {
   return typeof playbook.completeApprovedPromotion === "function";
 }
 
 export function hasReviewInvalidation(
-  playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & ReviewInvalidationCapabilityV1 {
+  playbook: Playbook
+): playbook is PlaybookCore & ReviewInvalidationCapabilityV1 {
   return typeof playbook.invalidateReview === "function";
 }
 
@@ -279,6 +331,8 @@ export interface CompletionReceiptPredicateInputV1 {
   readonly artifactReader?: ArtifactReader;
   readonly projectRoot: string;
   readonly pendingPhaseResult?: PhaseResult;
+  /** Verify-only host authority for reloaded evidence. No signing/key access is delegated. */
+  readonly verifyExecutionReceipt?: import("../receipts.js").ExecutionReceiptVerifier;
 }
 
 export interface CompletionReceiptPredicateResultV1 {

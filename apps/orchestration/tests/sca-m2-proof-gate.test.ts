@@ -1,27 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../src/canonical-json.js";
-import type { ArtifactRef } from "../src/contracts.js";
-import { buildScaModelRegistryV1 } from "../src/sca/agent-models.js";
+import { canonicalJson, sha256 } from "../dist/canonical-json.js";
+import type { ArtifactRef } from "../dist/contracts.js";
+import { buildScaModelRegistryV1 } from "../dist/sca/agent-models.js";
 import {
   buildScaDeepAnalysisPlanV1,
   scaDiscoveredCandidateId,
   sealScaCandidateAnalysisResultV1,
   type ScaCandidateAnalysisResultV1,
   type ScaDeepAnalysisPlanV1,
-} from "../src/sca/deep-analysis-contracts.js";
+} from "../dist/sca/deep-analysis-contracts.js";
 import {
   ScaM2ProofError,
   buildScaM2ManifestV1,
   validateScaM2ManifestV1,
-} from "../src/sca/m2-proof-gate.js";
+} from "../dist/sca/m2-proof-gate.js";
 import {
   SCA_R1_M1_REQUIRED_ANALYZERS,
   buildScaM1ManifestV1,
   type ScaM1ManifestV1,
   type ScaStaticAnalyzerRunInputV1,
   type ScaStaticObservationInputV1,
-} from "../src/sca/static-normalization.js";
+} from "../dist/sca/static-normalization.js";
 
 const RUN_ID = "run-sca-m2-fixture";
 const SNAPSHOT = "a".repeat(64);

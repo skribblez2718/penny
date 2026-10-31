@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { ContractValidationError } from "../dist/contracts.js";
+import { validateFindingRecord } from "../dist/sca/contracts.js";
 import {
   CLAIM_TRANSITIONS,
   FINDING_TRANSITIONS,
@@ -7,9 +9,19 @@ import {
   transitionClaimRecord,
   transitionFindingRecord,
   transitionTaskRecord,
-} from "../src/sca/lifecycle.js";
+} from "../dist/sca/lifecycle.js";
 import { requireValue } from "./helpers/narrowing.js";
 import { createValidScaDomainFixture } from "./helpers/sca-domain-fixtures.js";
+
+function schemaIssues(validate: () => unknown): readonly string[] {
+  try {
+    validate();
+  } catch (error) {
+    if (error instanceof ContractValidationError) return error.issues;
+    throw error;
+  }
+  throw new Error("expected malformed SCA input to fail schema validation");
+}
 
 describe("S-01 append-only lifecycle transitions", () => {
   it("accepts pending/active, draft/asserted, and candidate/investigating/terminal histories", () => {
@@ -157,8 +169,26 @@ describe("S-01 append-only lifecycle transitions", () => {
     expect(() => transitionClaimRecord(claimV1, { ...claimV2, evidence_ids: [] })).toThrow(
       /append-only/u
     );
-    expect(() => transitionFindingRecord(findingV1, { ...findingV2, claim_ids: [] })).toThrow(
-      /fewer than|append-only/u
+    expect(
+      schemaIssues(() => transitionFindingRecord(findingV1, { ...findingV2, claim_ids: [] }))
+    ).toContain("/claim_ids: minItems constraint failed");
+  });
+
+  it("rejects schema-valid nonempty finding claim contractions at append-only comparison", () => {
+    using fixture = createValidScaDomainFixture();
+    const findingV1 = requireValue(fixture.bundle.findings[0], "finding v1");
+    const findingV2 = requireValue(fixture.bundle.findings[1], "finding v2");
+    const previous = validateFindingRecord({
+      ...findingV1,
+      claim_ids: [...findingV1.claim_ids, "claim-secondary"],
+    });
+    const contracted = validateFindingRecord(findingV2);
+    expect(previous.claim_ids).toHaveLength(2);
+    expect(contracted.claim_ids).toHaveLength(1);
+    const retained = validateFindingRecord({ ...contracted, claim_ids: previous.claim_ids });
+    expect(transitionFindingRecord(previous, retained)).toEqual(retained);
+    expect(() => transitionFindingRecord(previous, contracted)).toThrow(
+      "SCA finding transition claim_ids failed validation: reference list must be append-only and retain its original order"
     );
   });
 });

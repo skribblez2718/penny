@@ -6,14 +6,11 @@ import {
   ArtifactStore,
   initializePennyState,
   resolvePennyRuntimeState,
-} from "@penny/orchestration/source";
+} from "@penny/orchestration";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  createTestExtensionApi,
-  createTestToolInfos,
-  isRecord,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi, createTestToolInfos } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 import {
   persistArtifactOutput,
   readArtifactById,

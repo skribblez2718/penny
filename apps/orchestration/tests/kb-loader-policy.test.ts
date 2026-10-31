@@ -9,7 +9,6 @@ import {
   SessionManager,
   createAgentSession,
   type AgentSessionEvent,
-  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -19,15 +18,15 @@ import {
   contentFreeSessionTraceRecord,
   createPrivateSessionResourceLoader,
   type AgentSessionSpecV1,
-} from "../src/model-client.js";
-import { sha256Hex, type ArtifactKind } from "../src/kb/contracts.js";
+} from "../dist/model-client.js";
+import { sha256Hex, type ArtifactKind } from "../dist/kb/contracts.js";
 import {
   KB_PHASE_TOOL_MATRIX,
   kbSessionSpec,
   type KbPhaseInvocation,
   type KbPhaseState,
-} from "../src/kb/session-tools.js";
-import type { ArtifactHandle, StageRunArtifactInput } from "../src/kb/run-artifacts.js";
+} from "../dist/kb/session-tools.js";
+import type { ArtifactHandle, StageRunArtifactInput } from "../dist/kb/run-artifacts.js";
 
 const roots: string[] = [];
 function temporary(label: string): string {
@@ -130,6 +129,10 @@ function spec(state: KbPhaseState): AgentSessionSpecV1 {
   });
 }
 
+type UnusedToolContext = Parameters<
+  NonNullable<AgentSessionSpecV1["customTools"]>[number]["execute"]
+>[4];
+
 const unusedContextHost = new Proxy(
   {},
   {
@@ -140,11 +143,11 @@ const unusedContextHost = new Proxy(
 );
 
 // Purpose-built KB tools must remain context-free at this test seam.
-// Test-host exception rule: DOUBLE_ASSERTION. Rationale: Pi requires a complete ExtensionContext argument although these context-free KB tools do not read it.
-// Removal condition: Remove when Pi makes ExtensionContext optional for context-free tools or exports a supported test factory.
+// Test-host exception rule: DOUBLE_ASSERTION. Rationale: Pi requires a complete tool-execution context although these context-free KB tools do not read it.
+// Removal condition: Remove when Pi makes the tool-execution context optional for context-free tools or exports a supported test factory.
 // Focused test: apps/orchestration/tests/kb-loader-policy.test.ts#terminates on typed submit without host-context reads and rejects duplicate/body metadata
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Pi requires the complete host type at this guarded partial test seam.
-const UNUSED_EXTENSION_CONTEXT = unusedContextHost as unknown as ExtensionContext;
+const UNUSED_EXTENSION_CONTEXT = unusedContextHost as unknown as UnusedToolContext;
 
 describe("KB §5.8 purpose-built session", () => {
   it("uses noTools=all and the exact per-phase custom-tool matrix", () => {
@@ -384,7 +387,7 @@ describe("KB §5.8 purpose-built session", () => {
 
   it("refuses to replace a real catalog agent's YAML surface with a KB private matrix", async () => {
     const posture = spec("query");
-    const { PiAgentClient } = await import("../src/model-client.js");
+    const { PiAgentClient } = await import("../dist/model-client.js");
     const client = new PiAgentClient();
     await expect(
       client.runAgent({

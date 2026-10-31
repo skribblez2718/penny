@@ -10,9 +10,10 @@ import {
   DEFAULT_MAX_LINES,
 } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
-import { resolvePennyProjectState } from "@penny/orchestration/source";
+import { resolvePennyProjectState } from "@penny/orchestration";
 
 import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
+import { fetchTextWithInactivity } from "./inactivity-fetch.js";
 import {
   ObservabilityServiceStarter,
   observabilityServiceAlive,
@@ -77,23 +78,28 @@ async function observabilityFetch(
   const key = apiKey();
   if (key) headers.authorization = `Bearer ${key}`;
   if (options.body !== undefined) headers["content-type"] = "application/json";
-  let response: Response;
+  let result: Awaited<ReturnType<typeof fetchTextWithInactivity>>;
   try {
-    response = await fetch(`${base}${pathname}`, {
-      method: options.method ?? "GET",
-      headers,
-      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-      signal: AbortSignal.timeout(10_000),
-    });
+    result = await fetchTextWithInactivity(
+      `${base}${pathname}`,
+      {
+        method: options.method ?? "GET",
+        headers,
+        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+      },
+      10_000
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`observability service unavailable at ${base}: ${message}`);
   }
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`observability service returned ${response.status}: ${text.slice(0, 200)}`);
+  if (!result.response.ok) {
+    throw new Error(
+      `observability service returned ${result.response.status}: ${result.text.slice(0, 200)}`
+    );
   }
-  return response.json();
+  const payload: unknown = JSON.parse(result.text);
+  return payload;
 }
 
 async function serviceAlive(): Promise<boolean> {

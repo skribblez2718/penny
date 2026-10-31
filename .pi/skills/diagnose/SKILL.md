@@ -8,6 +8,12 @@ metadata:
     subagents: [annie, ida, demetri, vera]
 ---
 
+## Liveness
+
+Derive values from actual operator policy, not test constants or model guesses. Do not invent finite step, agent-call, phase-cycle, semantic-repair or correction-attempt caps.
+
+Ordinary permitted work has no fixed wall-clock deadline at any layer. Productive execution may continue indefinitely while trusted activity or durable convergence renews its inactivity lease. A stall ends on inactivity expiry; explicit cancellation, errors, actual operator limits, and independent input/output/resource/containment limits remain enforceable.
+
 ## When to Use
 
 - Diagnose a supplied symptom set against supplied observations and environment facts.
@@ -229,11 +235,11 @@ Vera returns only PASS or one closed gap kind and repair owner. Engine-owned rou
 
 The host canonicalizes and persists `DiagnosisRequestV1`. Ordinary workflow phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by caller/task, and within the analysis-only phase consequence boundary; they cannot enlarge the closed supplied-evidence boundary, execute tests or probes, begin remediation, or mutate anything.
 
-The request contains observations directly; Diagnose V1 accepts no caller artifact inputs and performs no external acquisition. Request, decomposition, hypotheses, draft, report, receipt, integrity, envelope, and feedback IDs are exact transport lineage, not independent semantic evidence. Normal permitted work has no model-turn, phase-admission, tool-call, external-call, or total elapsed-work quota; calibrated renewable inactivity leases stop stalled workers, independent host-operation deadlines remain an upper bound, and routing-only repair remains separately count-bounded. Neither permits external acquisition or action beyond the request boundary.
+The request contains observations directly; Diagnose V1 accepts no caller artifact inputs and performs no external acquisition. Request, decomposition, hypotheses, draft, report, receipt, integrity, envelope, and feedback IDs are exact transport lineage, not independent semantic evidence. Normal permitted work has no model-turn, phase-admission, tool-call, external-call, or total elapsed-work quota; calibrated renewable inactivity leases stop stalled workers, host operations use independent renewable inactivity leases, and routing-only repair remains separate, governed by actual operator policy and measured-error/inactivity controls. Neither permits external acquisition or action beyond the request boundary.
 
 ## Product and Verification Truth
 
-Demetri emits exactly one closed `DIAGNOSIS_CORE:<json>` line and one adjacent SUMMARY. The host validates request coverage, evidence indexes, hypothesis ranks/statuses, disposition invariants, proposed-check boundaries, and literal `tests_executed:false` and `remediation_started:false`, then seals canonical `DiagnosisV1` bytes with exact request/Annie/Ida/Demetri lineage.
+Demetri emits exactly one closed `DIAGNOSIS_CORE:<json>` line and one adjacent SUMMARY. The host validates request coverage, evidence indexes, hypothesis ranks/statuses, disposition invariants, proposed-check boundaries, and literal `tests_executed:false` and `remediation_started:false`, then seals canonical `DiagnosisV1` bytes with exact request/Annie/Ida/Demetri lineage. Seal corrections follow actual operator policy, with no invented finite allowance when unspecified. Each rejected draft gets its own exact diagnostic before another attempt or honest negative terminal; previous-epoch diagnostics are not current instructions. Product and diagnostic refs use separate draft-addressed version-1 operations. On failure `seal_diagnostics` names the exact rejected draft, not an accepted diagnosis, independently of semantic `repair_diagnostics` or a prior accepted best partial.
 
 Vera independently verifies the current sealed product. The host mints `DiagnosisValidityReceiptV1` only from a signed current-run Vera PASS bound to that exact current subject. It then deterministically validates product integrity and emits `DiagnosisProductEnvelopeV1` before CompletionGate v2 admission. Any revision makes older verification evidence stale.
 

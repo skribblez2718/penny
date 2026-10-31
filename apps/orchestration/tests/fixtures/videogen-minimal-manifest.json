@@ -1,0 +1,259 @@
+{
+  "adapters": [],
+  "artifacts": [
+    {
+      "id": "fixture-1",
+      "kind": "videogen-fixture",
+      "media_type": "application/json",
+      "source": {
+        "json": "isolated fixture, never production qualification"
+      }
+    },
+    {
+      "id": "fixture-3",
+      "kind": "videogen-fixture",
+      "media_type": "application/json",
+      "source": {
+        "json": "fixture license, not clearance"
+      }
+    },
+    {
+      "id": "fixture-5",
+      "kind": "videogen-fixture",
+      "media_type": "application/json",
+      "source": {
+        "json": "fixture journal, not production receipt"
+      }
+    },
+    {
+      "id": "fixture-4",
+      "kind": "videogen-fixture",
+      "media_type": "application/json",
+      "schema_id": "penny.videogen-provenance-binding.v1",
+      "source": {
+        "json": {
+          "producer_receipt_ref": {
+            "$artifact": "fixture-5"
+          },
+          "schema_id": "penny.videogen-provenance-binding.v1",
+          "schema_version": 1,
+          "source_refs": [],
+          "subject_ref": {
+            "$artifact": "fixture-1"
+          }
+        }
+      }
+    },
+    {
+      "id": "fixture-2",
+      "kind": "videogen-fixture",
+      "media_type": "application/json",
+      "schema_id": "penny.videogen-rights-binding.v1",
+      "source": {
+        "json": {
+          "allowed_uses": [
+            "source",
+            "preview",
+            "motion",
+            "edit",
+            "deliver"
+          ],
+          "consent_refs": [],
+          "credits": [
+            "fixture credit"
+          ],
+          "expires_at_utc": "2027-01-01T00:00:00Z",
+          "license_ref": {
+            "$artifact": "fixture-3"
+          },
+          "provenance_ref": {
+            "$artifact": "fixture-4"
+          },
+          "revision": 1,
+          "schema_id": "penny.videogen-rights-binding.v1",
+          "schema_version": 1,
+          "subject_kind": "image",
+          "subject_ref": {
+            "$artifact": "fixture-1"
+          },
+          "territories": [
+            "test-territory"
+          ],
+          "valid_from_utc": "2026-01-01T00:00:00Z"
+        }
+      }
+    }
+  ],
+  "config": {
+    "activation": "enabled",
+    "assets": [
+      {
+        "allowed_change": "none",
+        "asset_id": "image1",
+        "attempt_limit": 1,
+        "consent_ref": {
+          "$artifact": "fixture-1"
+        },
+        "estimated_meters": [
+          {
+            "meter": "attempts",
+            "reserved": 1
+          }
+        ],
+        "input_refs": [
+          {
+            "$artifact": "fixture-1"
+          }
+        ],
+        "preserve_criteria": [
+          "fixture"
+        ],
+        "purpose": "look_test",
+        "rights_ref": {
+          "$artifact": "fixture-2"
+        },
+        "schema_id": "penny.videogen-asset-intent.v1",
+        "schema_version": 1,
+        "source": "supplied"
+      }
+    ],
+    "config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "context": "isolated_fixture",
+    "cross_run_edge_refs": [],
+    "envelope": {
+      "capability_snapshot_ref": {
+        "$artifact": "fixture-1"
+      },
+      "cleanup_policy_ref": {
+        "$artifact": "fixture-1"
+      },
+      "finish_reserve_bytes": 100,
+      "finish_reserve_cost_units": 1,
+      "finish_reserve_steps": 1,
+      "inactivity_policy_ref": {
+        "$artifact": "fixture-1"
+      },
+      "max_active_jobs": 1,
+      "max_attempts": 2,
+      "max_cost_units": 10,
+      "max_frames": 24,
+      "max_output_bytes": 1000000,
+      "max_scenes": 1,
+      "max_shots": 1,
+      "max_source_bytes": 1000000,
+      "max_storage_bytes": 1000000,
+      "private_config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "queue_policy_ref": {
+        "$artifact": "fixture-1"
+      },
+      "rights_scope_ref": {
+        "$artifact": "fixture-1"
+      },
+      "schema_id": "penny.videogen-envelope.v1",
+      "schema_version": 1,
+      "storage_reservation_ref": {
+        "$artifact": "fixture-1"
+      }
+    },
+    "initial_products": [],
+    "limits": {
+      "max_collection_items": 1000,
+      "max_depth": 24,
+      "max_integer": 9007199254740991,
+      "max_json_bytes": 1000000,
+      "max_nodes": 100000,
+      "max_text_bytes": 10000,
+      "schema_id": "penny.videogen-foundation-limits.v1",
+      "schema_version": 1
+    },
+    "model_capability_ref": {
+      "$artifact": "fixture-1"
+    },
+    "optional": {
+      "alternatives": false,
+      "research": false
+    },
+    "rights": [
+      {
+        "revision": 1,
+        "rights_ref": {
+          "$artifact": "fixture-2"
+        },
+        "status": "cleared",
+        "subject_ref": {
+          "$artifact": "fixture-1"
+        }
+      }
+    ],
+    "routes": [
+      {
+        "acceptance_criteria": [
+          "fixture"
+        ],
+        "estimated_meters": [
+          {
+            "meter": "attempts",
+            "reserved": 1
+          }
+        ],
+        "mode": {
+          "expected_output_contract_ref": {
+            "$artifact": "fixture-1"
+          },
+          "mode": "t2v",
+          "profile_snapshot_ref": {
+            "$artifact": "fixture-1"
+          },
+          "prompt_ref": {
+            "$artifact": "fixture-1"
+          },
+          "rights_refs": [
+            {
+              "$artifact": "fixture-2"
+            }
+          ],
+          "settings_ref": {
+            "$artifact": "fixture-1"
+          },
+          "shot_id": "shot1",
+          "target": {
+            "duration": {
+              "denominator": 1,
+              "numerator": 1
+            },
+            "fps": {
+              "denominator": 1,
+              "numerator": 24
+            },
+            "frame_count": 24,
+            "height": 360,
+            "width": 640
+          }
+        },
+        "qualified_profile_snapshot_ref": {
+          "$artifact": "fixture-1"
+        },
+        "required_gate": "G3",
+        "rights_refs": [
+          {
+            "$artifact": "fixture-2"
+          }
+        ],
+        "schema_id": "penny.videogen-shot-route.v1",
+        "schema_version": 1,
+        "shot_id": "shot1",
+        "source_refs": [],
+        "timing_target": {
+          "denominator": 1,
+          "numerator": 1
+        }
+      }
+    ],
+    "schema_id": "penny.videogen-private-config.v1",
+    "schema_version": 1,
+    "territory": "test-territory"
+  },
+  "recipes": [],
+  "schema_id": "penny.videogen-runtime-manifest.v1",
+  "schema_version": 1
+}

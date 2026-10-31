@@ -24,7 +24,7 @@ import {
   validateProduceEvidenceBundle,
   type ArtifactRef,
   type EffectEvidenceGraphV1,
-} from "../src/index.js";
+} from "../dist/index.js";
 
 const RUN_ID = "run-effect-evidence";
 

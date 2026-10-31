@@ -4,22 +4,32 @@
 
 Every code-affecting task: one that creates, modifies, reviews, diagnoses, or recommends executable code, tests, dependencies, schemas or migrations, build/deployment/infrastructure configuration, or data flows that affect executable behavior.
 
+Read this mandatory baseline with every selected security topic guide. If guides are
+supplied to a reader without repository access, include this baseline in that bundle.
+The authoritative component may be a local owner, service, or server; these properties
+do not require introducing a server into a local architecture.
+
 ## Security properties
 
-1. **Authority:** protected subject, action, object, field, tenant, and administrative decisions are server-enforced and default-deny.
+1. **Authority:** protected subject, action, object, field, tenant, and administrative decisions are enforced at the authoritative execution boundary and default-deny. In client/server systems, enforcement remains server-side; client checks cannot grant authority.
 2. **Interpreter separation:** untrusted bytes cannot become executable code, queries, commands, templates, paths, configuration, headers, URLs, or protocol structure without a safe boundary.
-3. **Input and resource boundedness:** external input and work have finite representation, size, complexity, CPU, memory, storage, duration, concurrency, output, fan-out, and downstream-cost limits.
-4. **Identity and state integrity:** identity and session state are server-verifiable, scoped, revocable, and protected; sensitive mutations add origin, replay, and idempotency controls when applicable.
-5. **Egress, client, and origin confinement:** caller-controlled data cannot grant arbitrary server network access; browser and offline state is untrusted; public and privileged surfaces have intentional reachability.
+3. **Input and resource boundedness:** hostile/external input and shared-service work have finite representation, size, complexity, CPU, memory, storage, duration, concurrency, output, fan-out, and downstream-cost limits appropriate to the operation and trust boundary. Productive operator-local model work does not require invented finite step, call, phase-cycle or repair caps; honor actual operator policy and retain cancellation, progress/inactivity and measured-error controls. Input/output/schema/complexity and containment limits remain independent. Bounded, efficient design and worker safeguards do not imply a separate host-wide CPU quota; apply the [resource guidance](resource-limits.md) proportionately.
+4. **Identity and state integrity:** identity and session state are verifiable by the authoritative component, scoped, revocable, and protected; sensitive mutations add origin, replay, and idempotency controls when applicable.
+5. **Egress, client, and origin confinement:** caller-controlled data cannot grant arbitrary network access to an authoritative component; browser and offline state is untrusted; public and privileged surfaces have intentional reachability.
 6. **Secret and supply-chain confinement:** secrets stay out of client artifacts, logs, errors, caches, untrusted workloads, and source control; dependencies and artifacts have reviewed identity, integrity, provenance, and vulnerability status appropriate to risk.
 7. **Browser execution confinement:** dangerous browser sinks, framing, service-worker scope, and caching are intentionally constrained.
 8. **Fail-closed recovery:** malformed, ambiguous, exceptional, partially parsed, or misconfigured behavior cannot silently gain privilege; security events support containment and recovery.
-9. **Evidence-backed completion:** each affected invariant is satisfied with appropriate evidence, explicitly blocks completion, or has an approved exception.
+9. **Evidence-backed completion:** each affected invariant is satisfied with appropriate evidence, explicitly blocks the corresponding completion claim, or has an approved exception.
 
 ## Requirements
 
 - Identify affected trust boundaries and capabilities before implementation: public routes, privileged surfaces, data classes, egress destinations, filesystem/compute capability, dependencies, service-worker scope, and security-header changes.
 - Use task-triggered guides for the affected facets; the baseline does not replace their controls.
+- Apply [proportionality](../../architecture/project-standards.md#proportionality-outcomes-before-mechanisms)
+  to control selection. These properties are required outcomes, not a mandate for every
+  mechanism named in a topic guide. Classify the actual data/code and capability boundary
+  under [Untrusted Execution](untrusted-execution.md#classify-the-execution-surface) before
+  deriving containment requirements; local or trusted labels do not waive affected invariants.
 - An exception must name the invariant, rationale, residual risk, compensating control, verification gap, accountable owner, and removal condition. An agent cannot self-authorize it.
 - Distinguish implementation from review/diagnosis/recommendation: implementations run suitable checks; reviews report available evidence and gaps; plans specify required controls and evidence without claiming they exist.
 
@@ -35,7 +45,7 @@ Every code-affecting task: one that creates, modifies, reviews, diagnoses, or re
 - Map every affected invariant to tests, static analysis, configuration inspection, operational evidence, or a documented verification gap.
 - Run negative/adversarial checks suitable for the trust boundary, not only happy-path tests.
 - Report newly added public routes, administrative surfaces, dependencies, egress destinations, filesystem/compute capability, service-worker scope, security-header changes, and unverified invariants.
-- Do not declare completion while an affected invariant is unresolved without an approved exception.
+- Do not declare the affected scope complete while an applicable invariant is unresolved without an approved exception. Keep [stage-specific evidence claims](security-verification.md#requirements) distinct.
 
 ## Related guidance
 
@@ -45,5 +55,5 @@ Every code-affecting task: one that creates, modifies, reviews, diagnoses, or re
 
 ## Current external references
 
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is the external coverage spine. Record versioned ASVS identifiers only when they materially clarify a selected control.
+- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is the shared external coverage spine for these guides, not a substitute for task-specific design and evidence. Record versioned ASVS identifiers only when they materially clarify a selected control.
 - Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

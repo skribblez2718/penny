@@ -4,9 +4,13 @@ import path from "node:path";
 
 import { Type, type Static } from "typebox";
 
-import { validateContract } from "../../../orchestration/src/contracts.js";
-import { Sha256Schema } from "../../../orchestration/src/skill-contracts/common.js";
-import { runBoundedScaProcess, type ScaProcessResultV1 } from "../process.js";
+import { validateContract } from "../../../orchestration/dist/contracts.js";
+import { Sha256Schema } from "../../../orchestration/dist/skill-contracts/common.js";
+import {
+  directScaProcessRunnerV1,
+  type ScaProcessRunnerV1,
+  type ScaProcessResultV1,
+} from "../process.js";
 
 const MAX_PATH_BYTES = 4_096;
 const MAX_VERSION_BYTES = 256;
@@ -216,9 +220,55 @@ export function semgrepArguments(value: unknown): readonly string[] {
   ];
 }
 
+export function validateScaSemgrepResultV1(
+  value: unknown,
+  requestValue?: unknown
+): ScaSemgrepResultV1 {
+  const result = validateContract(ScaSemgrepResultV1Schema, value, "SCA Semgrep result");
+  if (
+    result.raw_stdout_sha256 !== createHash("sha256").update(result.raw_stdout).digest("hex") ||
+    result.raw_stderr_sha256 !== createHash("sha256").update(result.raw_stderr).digest("hex")
+  ) {
+    throw new ScaSemgrepError("invalid_request", "Semgrep raw stream digest mismatch");
+  }
+  const counts = semgrepCounts(result.raw_stdout);
+  if (
+    counts !== null &&
+    (counts.findings !== result.finding_count || counts.errors !== result.engine_error_count)
+  ) {
+    throw new ScaSemgrepError("invalid_request", "Semgrep raw output count mismatch");
+  }
+  if (
+    (result.error_code === "none") !==
+      (["succeeded", "findings"].includes(result.status) && !result.truncated) ||
+    (result.status === "findings") !== (result.finding_count > 0 && result.error_code === "none")
+  ) {
+    throw new ScaSemgrepError("invalid_request", "Semgrep status contradicts raw semantics");
+  }
+  if (requestValue !== undefined) {
+    const request = validateContract(
+      ScaSemgrepRequestV1Schema,
+      requestValue,
+      "SCA Semgrep request"
+    );
+    if (
+      result.source_snapshot_sha256 !== request.source_snapshot_sha256 ||
+      result.rule_config_sha256 !== request.rule_config_sha256 ||
+      (request.runtime.state === "available" &&
+        (result.tool_version !== request.runtime.tool_version ||
+          result.runtime_identity !== request.runtime.runtime_identity ||
+          result.runtime_sha256 !== request.runtime.runtime_sha256))
+    ) {
+      throw new ScaSemgrepError("invalid_request", "Semgrep result is not request-bound");
+    }
+  }
+  return result;
+}
+
 export async function runScaSemgrepV1(
   value: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  runner: ScaProcessRunnerV1 = directScaProcessRunnerV1
 ): Promise<ScaSemgrepResultV1> {
   let request: ScaSemgrepRequestV1;
   try {
@@ -246,13 +296,13 @@ export async function runScaSemgrepV1(
     return unavailableResult(request, "rule_config_drift");
   }
 
-  const processResult = await runBoundedScaProcess(
+  const processResult = await runner.run(
     {
       schema_id: "penny.sca-process-request.v1",
       schema_version: 1,
       executable: request.runtime.executable,
       executable_sha256: request.runtime.executable_sha256,
-      arguments: semgrepArguments(request),
+      arguments: [...semgrepArguments(request)],
       cwd: request.source_root,
       environment: [
         { name: "HOME", value: request.scratch_root },
@@ -293,8 +343,7 @@ export async function runScaSemgrepV1(
         ? "invalid_output"
         : processErrorCode(processResult);
 
-  return validateContract(
-    ScaSemgrepResultV1Schema,
+  return validateScaSemgrepResultV1(
     {
       schema_id: SCA_SEMGREP_RESULT_SCHEMA,
       schema_version: 1,
@@ -315,6 +364,6 @@ export async function runScaSemgrepV1(
       truncated: processResult.stdout_truncated || processResult.stderr_truncated,
       error_code: errorCode,
     },
-    "SCA Semgrep result"
+    request
   );
 }

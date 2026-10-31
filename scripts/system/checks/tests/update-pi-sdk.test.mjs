@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   PI_PACKAGES,
@@ -31,6 +32,8 @@ import {
 
 const OLD_VERSION = "0.84.4";
 const NEW_VERSION = "0.85.0";
+const OLD_TYPEBOX_VERSION = "1.2.0";
+const NEW_TYPEBOX_VERSION = "1.3.0";
 const temporaryDirectories = [];
 
 function writeJson(filePath, value) {
@@ -38,7 +41,7 @@ function writeJson(filePath, value) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function writeInstalledPackages(projectRoot, version) {
+function writeInstalledPackages(projectRoot, version, typeboxVersion) {
   for (const packageName of PI_PACKAGES) {
     const packageRoot = path.join(projectRoot, "node_modules", ...packageName.split("/"));
     const manifest = { name: packageName, version };
@@ -50,25 +53,33 @@ function writeInstalledPackages(projectRoot, version) {
     }
     writeJson(path.join(packageRoot, "package.json"), manifest);
   }
+  writeJson(path.join(projectRoot, "node_modules", "typebox", "package.json"), {
+    name: "typebox",
+    version: typeboxVersion,
+  });
 }
 
-function createFixture(version = OLD_VERSION) {
+function createFixture(version = OLD_VERSION, typeboxVersion = OLD_TYPEBOX_VERSION) {
   const projectRoot = mkdtempSync(path.join(tmpdir(), "penny-pi-update-"));
   temporaryDirectories.push(projectRoot);
   writeJson(path.join(projectRoot, "package.json"), {
     name: "penny",
-    devDependencies: Object.fromEntries(PI_PACKAGES.map((name) => [name, version])),
+    devDependencies: {
+      ...Object.fromEntries(PI_PACKAGES.map((name) => [name, version])),
+      typebox: typeboxVersion,
+    },
   });
   writeJson(path.join(projectRoot, "apps", "orchestration", "package.json"), {
-    dependencies: { "@earendil-works/pi-coding-agent": version },
+    dependencies: {
+      "@earendil-works/pi-coding-agent": version,
+      typebox: typeboxVersion,
+    },
   });
-  writeFileSync(
-    path.join(projectRoot, "README.md"),
-    `# Penny\n\n- **Pi ${version}** — the currently supported agent runtime\n`,
-    "utf8"
-  );
-  writeFileSync(path.join(projectRoot, "bun.lock"), `lock:${version}\n`, "utf8");
-  writeInstalledPackages(projectRoot, version);
+  writeJson(path.join(projectRoot, "apps", "sca-service", "package.json"), {
+    dependencies: { typebox: typeboxVersion },
+  });
+  writeFileSync(path.join(projectRoot, "bun.lock"), `lock:${version}:${typeboxVersion}\n`, "utf8");
+  writeInstalledPackages(projectRoot, version, typeboxVersion);
   return projectRoot;
 }
 
@@ -76,10 +87,31 @@ function pinnedCodingAgentVersion(projectRoot) {
   return readPinnedVersions(projectRoot).root["@earendil-works/pi-coding-agent"];
 }
 
+function pinnedTypeboxVersions(projectRoot) {
+  const manifests = [
+    ["package.json", "devDependencies"],
+    ["apps/orchestration/package.json", "dependencies"],
+    ["apps/sca-service/package.json", "dependencies"],
+  ];
+  return manifests.map(([relativePath, field]) => {
+    const manifest = JSON.parse(readFileSync(path.join(projectRoot, relativePath), "utf8"));
+    return manifest[field].typebox;
+  });
+}
+
+function createChildRequest(source) {
+  const cwd = mkdtempSync(path.join(tmpdir(), "penny-pi-command-"));
+  temporaryDirectories.push(cwd);
+  const scriptPath = path.join(cwd, "child.mjs");
+  writeFileSync(scriptPath, source, "utf8");
+  return { command: process.execPath, args: [scriptPath], cwd, capture: true };
+}
+
 function createFakeRunner(projectRoot, options = {}) {
   const state = {
     globalVersion: options.globalVersion ?? OLD_VERSION,
     candidateVersion: options.candidateVersion ?? NEW_VERSION,
+    candidateTypeboxVersion: options.candidateTypeboxVersion ?? NEW_TYPEBOX_VERSION,
     latestVersion: options.latestVersion ?? options.candidateVersion ?? NEW_VERSION,
     latestQueries: 0,
     releaseVersion:
@@ -87,8 +119,14 @@ function createFakeRunner(projectRoot, options = {}) {
     releaseQueries: 0,
     calls: [],
   };
-  const runner = ({ command, args, cwd }) => {
-    state.calls.push({ command, args: [...args], cwd });
+  const runner = ({ command, args, cwd, extraEnvironment = {} }) => {
+    state.calls.push({
+      command,
+      args: [...args],
+      cwd,
+      extraEnvironment: { ...extraEnvironment },
+      graphVersion: pinnedCodingAgentVersion(projectRoot),
+    });
     if (command === "pi" && args.length === 1 && args[0] === "--version") {
       if (options.failPostUpdateVersion && state.updateAttempted) {
         throw new Error("global version unreadable");
@@ -125,6 +163,7 @@ function createFakeRunner(projectRoot, options = {}) {
     }
     if (command === "bun" && args[0] === "pm" && args[1] === "view") {
       const requested = args[2];
+      const property = args[3];
       if (options.unavailablePackage && requested.startsWith(`${options.unavailablePackage}@`)) {
         throw new Error("package unavailable");
       }
@@ -135,6 +174,15 @@ function createFakeRunner(projectRoot, options = {}) {
             ? options.latestVersionAfterValidation
             : state.latestVersion;
         return { stdout: `${JSON.stringify(latestVersion)}\n`, stderr: "" };
+      }
+      if (
+        requested === `${PI_PACKAGES[2]}@${state.candidateVersion}` &&
+        property === "dependencies.typebox"
+      ) {
+        return { stdout: `${JSON.stringify(state.candidateTypeboxVersion)}\n`, stderr: "" };
+      }
+      if (requested.startsWith("typebox@")) {
+        return { stdout: `${JSON.stringify(state.candidateTypeboxVersion)}\n`, stderr: "" };
       }
       return { stdout: `${JSON.stringify(state.candidateVersion)}\n`, stderr: "" };
     }
@@ -147,11 +195,21 @@ function createFakeRunner(projectRoot, options = {}) {
       const version = isProjectInstall
         ? pinnedCodingAgentVersion(projectRoot)
         : state.candidateVersion;
-      writeInstalledPackages(installRoot, version);
+      const typeboxVersion = isProjectInstall
+        ? pinnedTypeboxVersions(projectRoot)[0]
+        : state.candidateTypeboxVersion;
+      writeInstalledPackages(installRoot, version, typeboxVersion);
       if (isProjectInstall && !args.includes("--frozen-lockfile")) {
-        writeFileSync(path.join(projectRoot, "bun.lock"), `lock:${version}\n`, "utf8");
+        writeFileSync(
+          path.join(projectRoot, "bun.lock"),
+          `lock:${version}:${typeboxVersion}\n`,
+          "utf8"
+        );
       }
       return { stdout: "", stderr: "" };
+    }
+    if (command === "bun" && args[0] === "run" && args[1] === options.failBaselineCommand) {
+      throw new Error("baseline compatibility failure");
     }
     if (
       command === "bun" &&
@@ -237,6 +295,133 @@ test("argument parsing accepts one exact target and rejects command syntax", () 
   assert.throws(() => parseArguments(["--unknown"]), /unknown argument/u);
 });
 
+test("command runner preserves captured output on success", () => {
+  const request = createChildRequest(
+    'process.stdout.write("child stdout\\n"); process.stderr.write("child stderr\\n");'
+  );
+
+  assert.deepEqual(createCommandRunner()(request), {
+    stdout: "child stdout\n",
+    stderr: "child stderr\n",
+  });
+});
+
+for (const scenario of [
+  {
+    name: "stderr preferred over stdout",
+    source:
+      'process.stdout.write("unused stdout\\n"); process.stderr.write("child stderr diagnostic\\n"); process.exitCode = 7;',
+    detail: "child stderr diagnostic",
+  },
+  {
+    name: "stdout fallback",
+    source: 'process.stdout.write("child stdout diagnostic\\n"); process.exitCode = 7;',
+    detail: "child stdout diagnostic",
+  },
+]) {
+  test(`command runner reports a nonzero exit with ${scenario.name}`, () => {
+    const request = createChildRequest(scenario.source);
+
+    assert.throws(
+      () => createCommandRunner()(request),
+      (error) => {
+        assert.equal(error.name, "PiUpdateError");
+        assert.equal(error.code, PI_UPDATE_ERROR_CODES.PI_UPDATE_FAILED);
+        assert.ok(error.message.endsWith(`exited with status 7: ${scenario.detail}`));
+        assert.doesNotMatch(error.message, /unused stdout|signal|timed out|failed to run/u);
+        return true;
+      }
+    );
+  });
+}
+
+for (const [signal, capture] of [
+  ["SIGTERM", true],
+  ["SIGKILL", false],
+]) {
+  test(
+    `command runner reports the actual ${signal} signal with capture=${capture}`,
+    { skip: process.platform === "win32" ? "POSIX signal termination is not portable" : false },
+    () => {
+      const diagnostic = capture ? "child signal diagnostic" : "";
+      const request = createChildRequest(
+        `import { writeSync } from "node:fs";
+writeSync(2, ${JSON.stringify(diagnostic)});
+process.kill(process.pid, ${JSON.stringify(signal)});`
+      );
+
+      assert.throws(
+        () => createCommandRunner()({ ...request, capture }),
+        (error) => {
+          assert.equal(error.name, "PiUpdateError");
+          assert.ok(
+            error.message.endsWith(
+              `terminated by signal ${signal}${capture ? `: ${diagnostic}` : ""}`
+            )
+          );
+          assert.doesNotMatch(
+            error.message,
+            /status null|timed out|failed to run|OOM|out of memory/iu
+          );
+          return true;
+        }
+      );
+    }
+  );
+}
+
+test("command runner distinguishes a timeout from a child signal or exit status", () => {
+  const request = createChildRequest("setInterval(() => {}, 1000);");
+
+  assert.throws(
+    () => createCommandRunner()({ ...request, timeoutMs: 100 }),
+    (error) => {
+      assert.equal(error.name, "PiUpdateError");
+      assert.equal(error.cause.code, "ETIMEDOUT");
+      assert.match(error.message, /timed out after 100 ms/u);
+      if (process.platform !== "win32") assert.match(error.message, /signal SIGTERM/u);
+      assert.doesNotMatch(error.message, /status null|exited with status|failed to run/u);
+      return true;
+    }
+  );
+});
+
+test("command runner distinguishes a spawn failure from a child exit", () => {
+  const request = createChildRequest("");
+  const command = path.join(request.cwd, "missing-executable");
+
+  assert.throws(
+    () => createCommandRunner()({ ...request, command, args: [] }),
+    (error) => {
+      assert.equal(error.name, "PiUpdateError");
+      assert.equal(error.cause.code, "ENOENT");
+      assert.match(error.message, /failed to run .*ENOENT/u);
+      assert.doesNotMatch(error.message, /status null|exited with status|signal|timed out/u);
+      return true;
+    }
+  );
+});
+
+test(
+  "command runner reports a non-executable child as a spawn failure",
+  { skip: process.platform === "win32" ? "POSIX executable permissions are not portable" : false },
+  () => {
+    const request = createChildRequest("");
+    chmodSync(request.args[0], 0o644);
+
+    assert.throws(
+      () => createCommandRunner()({ ...request, command: request.args[0], args: [] }),
+      (error) => {
+        assert.equal(error.name, "PiUpdateError");
+        assert.equal(error.cause.code, "EACCES");
+        assert.match(error.message, /failed to run .*EACCES/u);
+        assert.doesNotMatch(error.message, /status null|exited with status|signal|timed out/u);
+        return true;
+      }
+    );
+  }
+);
+
 test("clean-consumer preflight catches an undeclared runtime dependency", () => {
   const realRunner = createCommandRunner();
   let consumerRoot;
@@ -294,14 +479,18 @@ test("clean-consumer preflight catches an undeclared runtime dependency", () => 
   assert.equal(existsSync(consumerRoot), false, "clean-consumer scratch state must be removed");
 });
 
-test("pin updates preserve the manifests while changing all five declarations and README", () => {
+test("pin updates coordinate Pi and TypeBox declarations without requiring a README", () => {
   const projectRoot = createFixture();
 
-  updatePinnedFiles(projectRoot, NEW_VERSION);
+  updatePinnedFiles(projectRoot, NEW_VERSION, NEW_TYPEBOX_VERSION);
 
   const pins = readPinnedVersions(projectRoot);
   assert.equal(pinsMatchVersion(pins, NEW_VERSION), true);
-  assert.match(readFileSync(path.join(projectRoot, "README.md"), "utf8"), /\*\*Pi 0\.85\.0\*\*/u);
+  assert.deepEqual(pinnedTypeboxVersions(projectRoot), [
+    NEW_TYPEBOX_VERSION,
+    NEW_TYPEBOX_VERSION,
+    NEW_TYPEBOX_VERSION,
+  ]);
 });
 
 test("a non-latest explicit target fails before compatibility or mutation", () => {
@@ -387,10 +576,12 @@ test("a Pi package-name migration fails before compatibility or mutation", () =>
 test("a broken clean-consumer package fails before Penny project mutation", () => {
   const projectRoot = createFixture();
   const snapshot = new Map(
-    ["package.json", "apps/orchestration/package.json", "README.md", "bun.lock"].map((file) => [
-      file,
-      readFileSync(path.join(projectRoot, file)),
-    ])
+    [
+      "package.json",
+      "apps/orchestration/package.json",
+      "apps/sca-service/package.json",
+      "bun.lock",
+    ].map((file) => [file, readFileSync(path.join(projectRoot, file))])
   );
   const { runner, state } = createFakeRunner(projectRoot, {
     failCandidatePackageImport: true,
@@ -537,7 +728,61 @@ test("an update-required clean checkout restores the frozen baseline before chec
   assert.ok(frozenInstallIndex < firstCheckIndex);
 });
 
-test("a successful update validates locally before updating global Pi", () => {
+for (const failedCommand of ["typescript:architecture", "typecheck:all", "test:pi-compat"]) {
+  test(`baseline ${failedCommand} failure stops before candidate staging or global update`, () => {
+    const projectRoot = createFixture();
+    const snapshot = new Map(
+      [
+        "package.json",
+        "apps/orchestration/package.json",
+        "apps/sca-service/package.json",
+        "bun.lock",
+      ].map((file) => [file, readFileSync(path.join(projectRoot, file))])
+    );
+    const { runner, state } = createFakeRunner(projectRoot, {
+      failBaselineCommand: failedCommand,
+    });
+
+    assert.throws(
+      () =>
+        runPiUpdate({
+          projectRoot,
+          globalPiExecutable: "pi",
+          runCommand: runner,
+          log: () => {},
+          acquireLock: false,
+        }),
+      (error) => {
+        assert.equal(error.code, PI_UPDATE_ERROR_CODES.BASELINE_FAILED);
+        assert.equal(error.phase, "baseline_compatibility");
+        assert.match(formatPiUpdateFailure(error), /baseline compatibility failure/u);
+        return true;
+      }
+    );
+
+    for (const [file, content] of snapshot) {
+      assert.deepEqual(readFileSync(path.join(projectRoot, file)), content);
+    }
+    assert.equal(state.globalVersion, OLD_VERSION);
+    assert.ok(state.calls.every((call) => call.graphVersion === OLD_VERSION));
+    assert.deepEqual(
+      state.calls
+        .filter(
+          (call) => call.cwd === projectRoot && call.command === "bun" && call.args[0] === "install"
+        )
+        .map((call) => call.args),
+      [["install", "--frozen-lockfile"]],
+      "baseline failure must not install a staged candidate or trigger rollback"
+    );
+    assert.equal(
+      state.calls.some((call) => call.command === "pi" && call.args[0] === "update"),
+      false
+    );
+  });
+}
+
+test("a successful update runs compatibility checks once per graph before updating global Pi", () => {
+  const environmentBefore = { ...process.env };
   const projectRoot = createFixture();
   const { runner, state } = createFakeRunner(projectRoot);
 
@@ -552,40 +797,149 @@ test("a successful update validates locally before updating global Pi", () => {
   assert.deepEqual(result, { status: "updated", version: NEW_VERSION });
   assert.equal(state.globalVersion, NEW_VERSION);
   assert.equal(pinsMatchVersion(readPinnedVersions(projectRoot), NEW_VERSION), true);
-  assert.equal(readFileSync(path.join(projectRoot, "bun.lock"), "utf8"), `lock:${NEW_VERSION}\n`);
   assert.equal(
-    state.calls.some(
-      (call) => call.command === "bun" && call.args.join(" ") === "run test:pi-compat"
-    ),
-    true
+    readFileSync(path.join(projectRoot, "bun.lock"), "utf8"),
+    `lock:${NEW_VERSION}:${NEW_TYPEBOX_VERSION}\n`
   );
-  assert.equal(
-    state.calls.some(
-      (call) => call.command === "bun" && call.args.join(" ") === "run test:typescript"
-    ),
-    false
+  assert.deepEqual(pinnedTypeboxVersions(projectRoot), [
+    NEW_TYPEBOX_VERSION,
+    NEW_TYPEBOX_VERSION,
+    NEW_TYPEBOX_VERSION,
+  ]);
+  const localCli = path.join(
+    projectRoot,
+    "node_modules",
+    "@earendil-works",
+    "pi-coding-agent",
+    "dist",
+    "bundle",
+    "cli.js"
+  );
+  const compatibilityCalls = state.calls.filter(
+    (call) =>
+      call.cwd === projectRoot &&
+      ((call.command === "bun" && call.args[0] === "run") ||
+        (call.command === process.execPath && call.args[0] === localCli))
+  );
+  assert.deepEqual(
+    compatibilityCalls.map((call) => [call.graphVersion, call.command, ...call.args]),
+    [OLD_VERSION, NEW_VERSION].flatMap((version) => [
+      [version, "bun", "run", "typescript:architecture"],
+      [version, "bun", "run", "typecheck:all"],
+      [version, "bun", "run", "test:pi-compat"],
+      [version, process.execPath, localCli, "--approve", "--no-session", "--list-models"],
+    ])
+  );
+  const expectedEnvironment = {
+    PI_OFFLINE: "1",
+    PROJECT_ROOT: projectRoot,
+    PENNY_SKILLS_DIR: path.join(projectRoot, ".pi", "skills"),
+  };
+  for (const call of compatibilityCalls) {
+    assert.deepEqual(call.extraEnvironment, expectedEnvironment);
+  }
+  const globalSmokeCalls = state.calls.filter(
+    (call) => call.command === "pi" && call.args[0] === "--approve"
+  );
+  assert.deepEqual(
+    globalSmokeCalls.map((call) => [call.cwd, call.args, call.extraEnvironment]),
+    [[projectRoot, ["--approve", "--no-session", "--list-models"], expectedEnvironment]]
+  );
+  const consumerCalls = state.calls.filter((call) => call.cwd !== projectRoot);
+  assert.equal(consumerCalls.length, 3);
+  assert.deepEqual(
+    consumerCalls.map((call) => call.extraEnvironment),
+    [{}, { PI_OFFLINE: "1" }, { PI_OFFLINE: "1" }],
+    "clean-consumer install, import and CLI must not receive checkout roots"
+  );
+  for (const call of state.calls.filter(
+    (call) =>
+      call.cwd === projectRoot &&
+      !compatibilityCalls.includes(call) &&
+      !globalSmokeCalls.includes(call)
+  )) {
+    assert.deepEqual(
+      call.extraEnvironment,
+      call.command === "bun" && call.args[0] === "install" ? { PI_OFFLINE: "1" } : {},
+      "installs, registry/release discovery and global update/version checks must stay independent"
+    );
+  }
+  assert.ok(
+    isDeepStrictEqual({ ...process.env }, environmentBefore),
+    "updater must not mutate process.env"
   );
   const updateIndex = state.calls.findIndex(
     (call) => call.command === "pi" && call.args[0] === "update"
   );
-  const candidateTestIndex = state.calls.findLastIndex(
-    (call) => call.command === "bun" && call.args[0] === "run"
+  const candidateSmokeIndex = state.calls.findLastIndex(
+    (call) => call.command === process.execPath && call.args[0] === localCli
   );
   assert.ok(
-    updateIndex > candidateTestIndex,
-    "global update must follow candidate compatibility checks"
+    updateIndex > candidateSmokeIndex,
+    "global update must follow candidate compatibility checks and extension loading"
+  );
+});
+
+test("checkout validation overrides hostile inherited roots in a real local child", () => {
+  const environmentBefore = { ...process.env };
+  const projectRoot = createFixture();
+  const { runner, state } = createFakeRunner(projectRoot);
+  runPiUpdate({
+    projectRoot,
+    globalPiExecutable: "pi",
+    runCommand: runner,
+    log: () => {},
+    acquireLock: false,
+  });
+  const validationCall = state.calls.find(
+    (call) => call.command === "bun" && call.args.join(" ") === "run test:pi-compat"
+  );
+  assert.ok(validationCall);
+  const request = createChildRequest(`process.stdout.write(JSON.stringify({
+  cwd: process.cwd(),
+  PI_OFFLINE: process.env.PI_OFFLINE,
+  PROJECT_ROOT: process.env.PROJECT_ROOT,
+  PENNY_SKILLS_DIR: process.env.PENNY_SKILLS_DIR,
+  inherited: process.env.CHECKOUT_ROOT_PROBE,
+}));`);
+  const inheritedEnvironment = Object.freeze({
+    ...process.env,
+    PI_OFFLINE: "0",
+    PROJECT_ROOT: path.join(request.cwd, "wrong-project"),
+    PENNY_SKILLS_DIR: path.join(request.cwd, "wrong-skills"),
+    CHECKOUT_ROOT_PROBE: "preserved",
+  });
+  const extraEnvironment = Object.freeze({ ...validationCall.extraEnvironment });
+  const cwd = path.join(projectRoot, "apps", "orchestration");
+  const result = createCommandRunner(inheritedEnvironment)({ ...request, cwd, extraEnvironment });
+
+  assert.deepEqual(JSON.parse(result.stdout), {
+    cwd,
+    PI_OFFLINE: "1",
+    PROJECT_ROOT: projectRoot,
+    PENNY_SKILLS_DIR: path.join(projectRoot, ".pi", "skills"),
+    inherited: "preserved",
+  });
+  assert.ok(
+    isDeepStrictEqual({ ...process.env }, environmentBefore),
+    "updater must not mutate process.env"
   );
 });
 
 test("candidate failure restores exact project files and does not update global Pi", () => {
+  const environmentBefore = { ...process.env };
   const projectRoot = createFixture();
   const snapshot = new Map(
-    ["package.json", "apps/orchestration/package.json", "README.md", "bun.lock"].map((file) => [
-      file,
-      readFileSync(path.join(projectRoot, file)),
-    ])
+    [
+      "package.json",
+      "apps/orchestration/package.json",
+      "apps/sca-service/package.json",
+      "bun.lock",
+    ].map((file) => [file, readFileSync(path.join(projectRoot, file))])
   );
-  const { runner, state } = createFakeRunner(projectRoot, { failCandidateCommand: "typecheck" });
+  const { runner, state } = createFakeRunner(projectRoot, {
+    failCandidateCommand: "typecheck:all",
+  });
 
   assert.throws(
     () =>
@@ -599,6 +953,7 @@ test("candidate failure restores exact project files and does not update global 
     (error) => {
       assert.equal(error.code, PI_UPDATE_ERROR_CODES.PENNY_TYPE_COMPATIBILITY_FAILED);
       assert.equal(error.phase, "typecheck");
+      assert.match(error.message, /bun run typecheck:all/u);
       assert.match(error.message, /global Pi was not updated/u);
       return true;
     }
@@ -609,6 +964,10 @@ test("candidate failure restores exact project files and does not update global 
     assert.deepEqual(readFileSync(path.join(projectRoot, file)), content);
   }
   assert.equal(pinsMatchVersion(readPinnedVersions(projectRoot), OLD_VERSION), true);
+  assert.equal(
+    state.calls.some((call) => call.command === "pi" && call.args[0] === "update"),
+    false
+  );
   const candidateInstallIndex = state.calls.findIndex(
     (call) => call.command === "bun" && call.args.join(" ") === "install"
   );
@@ -622,9 +981,24 @@ test("candidate failure restores exact project files and does not update global 
     candidateInstallIndex < rollbackInstallIndex && rollbackInstallIndex < rollbackBuildIndex,
     "rollback must restore the frozen graph before rebuilding orchestration"
   );
+  assert.deepEqual(state.calls[rollbackBuildIndex].extraEnvironment, {
+    PI_OFFLINE: "1",
+    PROJECT_ROOT: projectRoot,
+    PENNY_SKILLS_DIR: path.join(projectRoot, ".pi", "skills"),
+  });
+  assert.ok(
+    isDeepStrictEqual({ ...process.env }, environmentBefore),
+    "updater must not mutate process.env"
+  );
 });
 
 for (const scenario of [
+  {
+    name: "candidate architecture failure",
+    options: { failCandidateCommand: "typescript:architecture" },
+    code: PI_UPDATE_ERROR_CODES.PENNY_ARCHITECTURE_FAILED,
+    phase: "typescript:architecture",
+  },
   {
     name: "candidate runtime-test failure",
     options: { failCandidateCommand: "test:pi-compat" },
@@ -641,10 +1015,12 @@ for (const scenario of [
   test(`${scenario.name} restores exact project files and skips global update`, () => {
     const projectRoot = createFixture();
     const snapshot = new Map(
-      ["package.json", "apps/orchestration/package.json", "README.md", "bun.lock"].map((file) => [
-        file,
-        readFileSync(path.join(projectRoot, file)),
-      ])
+      [
+        "package.json",
+        "apps/orchestration/package.json",
+        "apps/sca-service/package.json",
+        "bun.lock",
+      ].map((file) => [file, readFileSync(path.join(projectRoot, file))])
     );
     const { runner, state } = createFakeRunner(projectRoot, scenario.options);
 
@@ -719,7 +1095,15 @@ test("global update failure restores local state when global Pi remains unchange
 
   assert.equal(state.globalVersion, OLD_VERSION);
   assert.equal(pinsMatchVersion(readPinnedVersions(projectRoot), OLD_VERSION), true);
-  assert.equal(readFileSync(path.join(projectRoot, "bun.lock"), "utf8"), `lock:${OLD_VERSION}\n`);
+  assert.equal(
+    readFileSync(path.join(projectRoot, "bun.lock"), "utf8"),
+    `lock:${OLD_VERSION}:${OLD_TYPEBOX_VERSION}\n`
+  );
+  assert.deepEqual(pinnedTypeboxVersions(projectRoot), [
+    OLD_TYPEBOX_VERSION,
+    OLD_TYPEBOX_VERSION,
+    OLD_TYPEBOX_VERSION,
+  ]);
 });
 
 test("a late global updater error fails closed while retaining aligned candidate pins", () => {
@@ -786,30 +1170,30 @@ test("an unreadable global version after update fails closed and retains recover
   assert.equal(pinsMatchVersion(readPinnedVersions(projectRoot), NEW_VERSION), true);
 });
 
-test("missing coordinated package release aborts before manifest mutation", () => {
-  const projectRoot = createFixture();
-  const originalManifest = readFileSync(path.join(projectRoot, "package.json"));
-  const { runner, state } = createFakeRunner(projectRoot, {
-    unavailablePackage: "@earendil-works/pi-tui",
+for (const unavailablePackage of ["@earendil-works/pi-tui", "typebox"]) {
+  test(`missing coordinated ${unavailablePackage} release aborts before manifest mutation`, () => {
+    const projectRoot = createFixture();
+    const originalManifest = readFileSync(path.join(projectRoot, "package.json"));
+    const { runner, state } = createFakeRunner(projectRoot, { unavailablePackage });
+
+    assert.throws(
+      () =>
+        runPiUpdate({
+          projectRoot,
+          globalPiExecutable: "pi",
+          runCommand: runner,
+          log: () => {},
+          acquireLock: false,
+        }),
+      (error) => {
+        assert.equal(error.code, PI_UPDATE_ERROR_CODES.CANDIDATE_RELEASE_UNAVAILABLE);
+        assert.equal(error.phase, "candidate_release_metadata");
+        assert.match(formatPiUpdateFailure(error), /package unavailable/u);
+        return true;
+      }
+    );
+
+    assert.equal(state.globalVersion, OLD_VERSION);
+    assert.deepEqual(readFileSync(path.join(projectRoot, "package.json")), originalManifest);
   });
-
-  assert.throws(
-    () =>
-      runPiUpdate({
-        projectRoot,
-        globalPiExecutable: "pi",
-        runCommand: runner,
-        log: () => {},
-        acquireLock: false,
-      }),
-    (error) => {
-      assert.equal(error.code, PI_UPDATE_ERROR_CODES.CANDIDATE_RELEASE_UNAVAILABLE);
-      assert.equal(error.phase, "candidate_release_metadata");
-      assert.match(formatPiUpdateFailure(error), /package unavailable/u);
-      return true;
-    }
-  );
-
-  assert.equal(state.globalVersion, OLD_VERSION);
-  assert.deepEqual(readFileSync(path.join(projectRoot, "package.json")), originalManifest);
-});
+}

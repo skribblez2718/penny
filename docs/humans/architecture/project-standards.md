@@ -27,6 +27,17 @@ Without canonical standards, every contributor invents their own pattern. That s
 
 The standards also ensure Pi compatibility. Penny runs on the Pi agent runtime, and Pi expects extensions, skills, and prompts to follow specific shapes. Deviating from those shapes risks runtime failures that are hard to diagnose.
 
+## Simplicity Within the Standards
+
+Binding outcomes and explicit standards are not the same as a model's chosen implementation.
+Choose the simplest sufficient design for the task and its actual risks. Added machinery
+must justify its operating cost and maintenance burden against simpler alternatives,
+including any safety benefit—even when labeled “security.” Prior model/reviewer approval and sunk
+implementation effort do not establish necessity. Reviews should challenge unsupported
+additions as well as check compliance, without waiving binding standards or granting authority.
+The agent-side [proportionality rule](../../agents/architecture/project-standards.md#proportionality-outcomes-before-mechanisms)
+owns this distinction; it adds no new form or approval process.
+
 ## How the Standards Are Enforced
 
 The enforcement is mostly procedural, not technical:
@@ -39,20 +50,20 @@ The goal is not bureaucracy. It is to make the right choice the easy choice.
 
 ## The Task Completion Protocol
 
-Before any feature or fix can be called complete, it must pass ten checks. This protocol exists because "it works on my machine" is not enough for a system that other agents and humans rely on.
+Before a feature or fix is called complete, apply the checks required by its changed contracts and scope. Record why a check is inapplicable; a smaller task cannot waive a feature standard's required evidence. Review and planning report evidence and gaps rather than claiming unrun work passed.
 
-| #   | Check               | What It Means                                                                   |
-| --- | ------------------- | ------------------------------------------------------------------------------- |
-| 1   | Lint clean          | The code passes `flake8` or `bun run lint`                                      |
-| 2   | Unit tests          | Every public function has tests                                                 |
-| 3   | Integration tests   | Multi-module interactions are tested                                            |
-| 4   | E2E tests           | The full lifecycle is exercised. This is mandatory, not optional                |
-| 5   | Regression tests    | Existing test suites still pass                                                 |
-| 6   | Human docs          | `docs/humans/` is accurate and up to date                                       |
-| 7   | Agent docs          | `docs/agents/` is accurate and up to date                                       |
-| 8   | `AGENTS.md` index   | The feature is indexed in the right place                                       |
-| 9   | Prompt architecture | Token budgets are respected and domain content stays out of the Cognitive Frame |
-| 10  | False claims audit  | No inflated test counts or overstated coverage                                  |
+| #   | Check               | What It Means                                                                                                                                        |
+| --- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Lint clean          | The code passes `flake8` or `bun run lint`                                                                                                           |
+| 2   | Unit tests          | Changed public behavior and boundaries have appropriate checks                                                                                       |
+| 3   | Integration tests   | Multi-module interactions are tested                                                                                                                 |
+| 4   | E2E tests           | Full lifecycle is mandatory for lifecycle, orchestration, custody, gate, recovery or delivery changes, and wherever the feature contract requires it |
+| 5   | Regression tests    | Applicable suites pass; owned regressions and unrelated existing failures are distinguished                                                          |
+| 6   | Human docs          | `docs/humans/` is accurate and up to date                                                                                                            |
+| 7   | Agent docs          | `docs/agents/` is accurate and up to date                                                                                                            |
+| 8   | `AGENTS.md` index   | The feature is indexed in the right place                                                                                                            |
+| 9   | Prompt architecture | Token budgets are respected and domain content stays out of the Cognitive Frame                                                                      |
+| 10  | False claims audit  | No inflated test counts or overstated coverage                                                                                                       |
 
 For an implementation, applicable checks must pass before completion is claimed. For review,
 diagnosis, or planning, the work identifies applicable checks and evidence gaps rather than
@@ -63,7 +74,8 @@ and map them to evidence or an approved exception.
 ## What This Means for Contributors
 
 - Reach for the standard implementation first. If you think you need something else, you probably need to reframe the problem.
-- E2E tests are not a nice-to-have. They are required.
+- Required lifecycle E2E exercises the real affected path, including applicable refusal, cancellation, restart and adversarial cases. Stubs alone do not prove lifecycle behavior; deterministic model fixtures prove engine conformance, not a live deployment.
+- Failed applicable checks block an unqualified completion claim. Fix owned regressions and rerun affected checks; revert only authorized, safely reversible task-owned changes when appropriate. Preserve other work, and obtain separate approval for destructive/external rollback. Report unrelated failures and the verification they prevent.
 - Documentation is part of the feature, not an afterthought.
 - If you find a standard that genuinely does not fit, document why and get approval before deviating.
 

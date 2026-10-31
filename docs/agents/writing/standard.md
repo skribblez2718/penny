@@ -8,7 +8,7 @@ Write for the actual reader, purpose, genre, evidence, and appropriate author or
 
 Follow the active system, runtime, role, and output contract. Preserve source meaning and every fact required by the task or whose omission would materially mislead the reader. Select other supported details according to purpose, audience, format, and risk; do not include every supplied detail merely to look complete.
 
-Never invent experience, accomplishments, metrics, dates, quotations, citations, results, emotions, relationships, beliefs, commitments, or identity. Mark a consequential unknown or use a clear placeholder when the requested genre permits one. Keep required disclosures, evidence, limitations, qualifications, typed fields, and routing data.
+Never invent experience, accomplishments, metrics, dates, quotations, citations, results, emotions, relationships, beliefs, commitments, or identity. Do not add deliberate errors, random slang, manufactured vulnerability, fake anecdotes, or stylistic irregularity to simulate humanity. Mark a consequential unknown or use a clear placeholder when the requested genre permits one. Keep required disclosures, evidence, limitations, qualifications, typed fields, and routing data.
 
 A source-fidelity check asks whether the draft represents supplied material accurately. Independent verification asks whether an external claim, citation, command, or result is supported by an appropriate source or observed check. State any material verification gap; a reread is not independent verification.
 
@@ -33,6 +33,14 @@ Use ordinary exact wording and stable technical terms. Replace generic importanc
 Words, punctuation, headings, repetition, passive voice, triads, and rhetorical patterns are contextual watch items, not prohibitions. Flag or revise a pattern only when it creates ambiguity, unsupported effect, needless repetition, or mismatch with this reader, writer, or genre. Repair the underlying content or logic rather than swapping synonyms.
 
 Use headings, bullets, tables, recaps, analogies, first person, contractions, and formality when the reader's task or genre benefits. Necessary formal language, consistent terminology, qualifications, and safety repetition are valid. Vary sentence or paragraph shape because ideas perform different jobs, not to manufacture irregularity.
+
+## Genericity and pattern clusters
+
+Ask whether a consequential passage could appear substantially unchanged in writing about a different person, organization, subject, or situation. Add the missing actor, fact, constraint, mechanism, decision, or consequence when the passage is generic; delete it when it does no useful work. Definitions, legal clauses, routine labels, and other functional language may legitimately be reusable.
+
+Look for meaningful clusters across content, diction, syntax, structure, formatting, and social behavior. Relevant cues include flattened voice, formulaic macrostructure, uniform sentence or paragraph shape, dense abstract or fashionable wording, unsupported significance, vague participial tails, over-signposting, redundant restatement, reflexive hedging or artificial balance, promotional abstraction, repeated rhetorical templates, simple-verb avoidance, formatting maximalism, assistant residue, and generic conclusions.
+
+No individual word, punctuation mark, construction, or formatting choice proves authorship or warrants revision by itself. Judge density, repetition, genre fit, available voice evidence, and reader effect. Repair the underlying selection, reasoning, specificity, voice, or structure rather than swapping synonyms, inserting random variation, or optimizing for a detector.
 
 ## Protected material
 

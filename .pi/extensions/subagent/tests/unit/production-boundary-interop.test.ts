@@ -2,7 +2,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 
 import { adaptPiJsonMessage } from "../../agent-runner.js";
-import { createAgentNameEnumSchema, readHostToolNames } from "../../index.js";
+import { createAgentNameSchema, readHostToolNames } from "../../index.js";
 
 describe("subagent production-boundary interop", () => {
   it("reads the current host tool catalog and preserves the legacy absent-host fallback", () => {
@@ -56,12 +56,12 @@ describe("subagent production-boundary interop", () => {
     ).toBeUndefined();
   });
 
-  it("builds a Google-compatible TypeBox enum from a runtime-discovered string catalog", () => {
-    const schema = createAgentNameEnumSchema(["echo", "piper"]);
+  it("accepts nonempty names without freezing a provider enum; runtime discovery owns existence", () => {
+    const schema = createAgentNameSchema();
 
     expect(Value.Check(schema, "echo")).toBe(true);
-    expect(Value.Check(schema, "piper")).toBe(true);
-    expect(Value.Check(schema, "unknown-agent")).toBe(false);
+    expect(Value.Check(schema, "newly-added-agent")).toBe(true);
+    expect(Value.Check(schema, "")).toBe(false);
     expect(Value.Check(schema, 42)).toBe(false);
   });
 });

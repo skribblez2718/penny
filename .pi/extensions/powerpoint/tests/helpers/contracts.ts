@@ -101,7 +101,7 @@ export function requirePowerpointToolResult(
 export function createExtensionApiHarness(): ExtensionApiHarness {
   const registeredTools: unknown[] = [];
   const registrationHost: Pick<ExtensionAPI, "on" | "registerTool" | "registerCommand"> = {
-    on: () => {},
+    on: () => () => {},
     registerTool(tool) {
       registeredTools.push(tool);
     },

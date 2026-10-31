@@ -48,7 +48,7 @@ TARGETS = [
 FAMILY_ORDER = ["epistemic", "deliberative", "operational"]
 FAMILY_BLURB = {
     "epistemic": "transform information into knowledge or judgment",
-    "deliberative": "determine what should happen",
+    "deliberative": "determine what should be defined or happen",
     "operational": "convert intent into externalizable work",
 }
 

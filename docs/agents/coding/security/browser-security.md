@@ -34,7 +34,5 @@ Changing browser storage, messaging, DOM APIs, cross-origin behavior, CSP, Trust
 
 ## Current external references
 
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.
 - [Content Security Policy Level 3](https://www.w3.org/TR/CSP3/) describes CSP as defense in depth and its reporting/enforcement model.
 - [Trusted Types](https://www.w3.org/TR/trusted-types/) describes typed enforcement for DOM XSS sinks and its deployment limitations.

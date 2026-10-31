@@ -2,19 +2,59 @@ export * from "./catalog-prompt.js";
 export * from "./artifact-store.js";
 export * from "./checkpointer.js";
 export * from "./child-workflows/contracts.js";
+export * from "./child-workflows/gates.js";
+export * from "./child-workflows/imagegen-policy.js";
+export * from "./child-workflows/imagegen.js";
 export * from "./child-workflows/owner.js";
 export * from "./child-workflows/registration.js";
 export * from "./child-workflows/storage.js";
 export * from "./composition.js";
+export * from "./composition-assurance.js";
 export * from "./config.js";
 export * from "./context.js";
+export {
+  nativeArtifactInputs,
+  nativeStartRequest,
+  assertAdmittedArtifactInputs,
+  recoverAdmittedArtifactInputs,
+} from "./contextual-artifacts.js";
 export * from "./contracts.js";
 export * from "./engine.js";
+export * from "./source-routing-summary.js";
+export * from "./host-operations/adapter.js";
+export * from "./host-operations/contracts.js";
+export * from "./host-operations/lease-authority.js";
+export * from "./host-operations/owner.js";
+export * from "./host-operations/result-cache.js";
+export * from "./host-operations/storage.js";
+export * from "./sca/p07-production-host.js";
+export * from "./imagegen/types.js";
+export * from "./imagegen/activation.js";
+export * from "./imagegen/profile-registry.js";
+export * from "./imagegen/storage-admission.js";
+export * from "./imagegen/export-registry.js";
+export * from "./imagegen/start-admission.js";
+export * from "./imagegen/slot-ledger.js";
+export * from "./imagegen/graph-builder.js";
+export * from "./imagegen/comfy-client.js";
+export * from "./imagegen/operation-owner.js";
+export * from "./imagegen/readiness-operation.js";
+export * from "./imagegen/export-operation.js";
+export * from "./imagegen/runtime-config.js";
 export * from "./loans.js";
 export * from "./liveness.js";
 export * from "./liveness-profiles.js";
 export * from "./model-client.js";
+export * from "./model-vision.js";
 export * from "./observability.js";
+export * from "./png-media.js";
+export * from "./mp4-media.js";
+export * from "./videogen/contracts.js";
+export * from "./videogen/graph-builder.js";
+export * from "./videogen/profile-registry.js";
+export * from "./videogen/upload-operation.js";
+export * from "./videogen/operation-owner.js";
+export * from "./skill-result-image.js";
 export * from "./kb/workflows.js";
 export {
   CapabilityEnvelopeSchema,
@@ -95,14 +135,21 @@ export * from "./playbooks/registry.js";
 export * from "./playbooks/assess.js";
 export * from "./playbooks/decide.js";
 export * from "./playbooks/diagnose.js";
+export * from "./playbooks/define.js";
 export * from "./playbooks/plan.js";
 export * from "./playbooks/produce.js";
 export * from "./playbooks/research.js";
+export * from "./playbooks/imagegen.js";
 export * from "./skill-contracts/assess.js";
 export * from "./skill-contracts/decide.js";
 export * from "./skill-contracts/diagnose.js";
+export * from "./skill-contracts/define.js";
+export * from "./skill-contracts/define-support.js";
+export * from "./skill-contracts/define-trace.js";
+export * from "./skill-contracts/define-profiles.js";
 export * from "./skill-contracts/evidence-admission.js";
 export * from "./skill-contracts/effects.js";
+export * from "./skill-contracts/imagegen.js";
 export * from "./skill-contracts/plan.js";
 export * from "./skill-contracts/produce.js";
 export * from "./skill-contracts/review.js";
@@ -110,3 +157,15 @@ export * from "./receipts.js";
 export * from "./service.js";
 export * from "./state/index.js";
 export * from "./worker.js";
+export * from "./sca/ordinary-advanced-contracts.js";
+export * from "./sca/ordinary-advanced-host.js";
+export * from "./sca/ordinary-model-runtime.js";
+export * from "./sca/ordinary-offline-runner.js";
+
+export * from "./playbooks/videogen.js";
+export * from "./videogen/runtime-config.js";
+export * from "./videogen/execution-state.js";
+
+export * from "./videogen/capability-status.js";
+export * from "./skill-result.js";
+export * from "./build-provenance.js";

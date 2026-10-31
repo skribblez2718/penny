@@ -5,7 +5,8 @@ import { registerPdfTools } from "../../tools/pdf.js";
 import { registerProxyTools } from "../../tools/proxy.js";
 import { registerRouteFormFileTools } from "../../tools/routes.js";
 import type { PlaywrightConfig } from "../../types.js";
-import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 import { runWithAdmittedRegisteredBrowserPolicy } from "../helpers/registered-browser-policy.js";
 
 interface RegisteredTool {

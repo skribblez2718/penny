@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { initializePennyState } from "@penny/orchestration/source";
+import { initializePennyState } from "@penny/orchestration";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { persistArtifactOutput, type ArtifactRef } from "../../artifact-client.js";

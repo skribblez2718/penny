@@ -37,8 +37,9 @@ Glob patterns are not accepted. Every observed skip remains visible in the struc
 `EVIDENCE` output, including whether it matched the configuration. An unknown reason,
 unconfigured skip, deselection, or suite in which every test skipped still fails.
 
-Run the checker from `$PROJECT_ROOT`:
+Install the frozen development environment, then run the checker from `$PROJECT_ROOT` with the project interpreter. Using an ambient `python` can select unrelated global packages and produce false dependency failures.
 
 ```bash
-python scripts/system/checks/check_compliance.py
+make setup-dev
+.venv/bin/python scripts/system/checks/check_compliance.py
 ```

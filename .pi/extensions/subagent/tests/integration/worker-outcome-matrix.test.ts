@@ -3,18 +3,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { initializePennyState } from "@penny/orchestration/source";
+import { initializePennyState, resolveWorkerLeaseProfile } from "@penny/orchestration";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  createTestExtensionApi,
-  createTestToolInfos,
-  isRecord,
-  isUnknownFunction,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi, createTestToolInfos } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord, isUnknownFunction } from "../../../../lib/tests/test-narrowers.js";
 import { readArtifactById } from "../../../artifacts/owner-client.js";
 import { discoverAgents } from "../../agents.js";
 import type { SubagentDetails } from "../../agent-runner.js";
+
+const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../../../..");
 
 const { mockSpawn } = vi.hoisted(() => ({ mockSpawn: vi.fn() }));
 
@@ -84,7 +82,7 @@ function assistantEvent(task: string): Record<string, unknown> {
   };
 }
 
-function fakeJsonProcess(task: string) {
+function fakeJsonProcess(task: string, messageEvents?: readonly Record<string, unknown>[]) {
   const processDouble = new EventEmitter();
   const stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
   const stderr = Object.assign(new EventEmitter(), { destroy: vi.fn() });
@@ -100,7 +98,8 @@ function fakeJsonProcess(task: string) {
 
   const complete = (): void => {
     const events: Record<string, unknown>[] = [];
-    if (!task.includes("NO_MESSAGE")) events.push(assistantEvent(task));
+    if (messageEvents !== undefined) events.push(...messageEvents);
+    else if (!task.includes("NO_MESSAGE")) events.push(assistantEvent(task));
     if (!task.includes("NO_AGENT_END")) events.push({ type: "agent_end" });
     if (events.length > 0) {
       stdout.emit(
@@ -152,7 +151,7 @@ describe("subagent JSON-mode worker outcome matrix", () => {
   beforeEach(async () => {
     sandbox = mkdtempSync(path.join(tmpdir(), "penny-worker-outcome-matrix-"));
     process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
-    const state = initializePennyState(process.cwd(), { env: process.env });
+    const state = initializePennyState(PROJECT_ROOT, { env: process.env });
     orchestrationDatabase = state.paths.orchestration.database;
     mockSpawn.mockReset();
     shutdownHandler = undefined;
@@ -164,7 +163,7 @@ describe("subagent JSON-mode worker outcome matrix", () => {
 
     let registered: RegisteredSubagentTool | undefined;
     const names = [
-      ...new Set(discoverAgents(process.cwd(), "project").agents.flatMap((agent) => agent.tools)),
+      ...new Set(discoverAgents(PROJECT_ROOT, "project").agents.flatMap((agent) => agent.tools)),
     ];
     const host = createTestExtensionApi({
       getAllTools: () => createTestToolInfos(names),
@@ -185,6 +184,7 @@ describe("subagent JSON-mode worker outcome matrix", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     mockSpawn.mockReset();
     if (previousStateRoot === undefined) delete process.env.PENNY_STATE_ROOT;
     else process.env.PENNY_STATE_ROOT = previousStateRoot;
@@ -193,7 +193,7 @@ describe("subagent JSON-mode worker outcome matrix", () => {
 
   function context() {
     return {
-      cwd: process.cwd(),
+      cwd: PROJECT_ROOT,
       hasUI: false as const,
       sessionManager: { getSessionId: () => "worker-outcome-parent" },
     };
@@ -207,7 +207,7 @@ describe("subagent JSON-mode worker outcome matrix", () => {
       details.outputArtifactRefs.map(async (ref) => {
         const artifact = await readArtifactById({
           artifactId: ref.artifact_id,
-          projectRoot: process.cwd(),
+          projectRoot: PROJECT_ROOT,
           env: process.env,
         });
         return artifact.content.toString("utf8");
@@ -220,7 +220,9 @@ describe("subagent JSON-mode worker outcome matrix", () => {
     if (sqlite === undefined) throw new Error("node:sqlite unavailable");
     {
       using database = new sqlite.DatabaseSync(orchestrationDatabase);
-      database.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+      database.exec(
+        "DROP TABLE host_operation_calls; DROP TABLE child_workflow_calls; PRAGMA user_version=10;"
+      );
     }
 
     const result = await tool.execute(
@@ -228,7 +230,6 @@ describe("subagent JSON-mode worker outcome matrix", () => {
       {
         agent: "echo",
         task: "must not spawn",
-        input_artifacts: [`art_${"0".repeat(64)}`],
       },
       undefined,
       undefined,
@@ -253,7 +254,7 @@ describe("subagent JSON-mode worker outcome matrix", () => {
         details: {
           component: "orchestration",
           actualSchemaVersion: 10,
-          requiredSchemaVersion: 12,
+          requiredSchemaVersion: 13,
           upgradeSupported: true,
           recoveryAction: "penny-state-upgrade",
         },
@@ -350,6 +351,98 @@ describe("subagent JSON-mode worker outcome matrix", () => {
       "",
     ]);
     expect(result.content[0]?.text).not.toContain("late output after close");
+  });
+
+  it.each([
+    {
+      name: "recovered error",
+      first: "error",
+      final: "stop",
+      status: "completed",
+      reason: "assistant_completed",
+    },
+    {
+      name: "final failed partial",
+      first: "stop",
+      final: "error",
+      status: "failed",
+      reason: "assistant_error",
+    },
+    {
+      name: "replacement error",
+      first: "error",
+      final: "error",
+      error: "current failure",
+      status: "failed",
+      reason: "assistant_error",
+    },
+    {
+      name: "final aborted partial",
+      first: "error",
+      final: "aborted",
+      status: "cancelled",
+      reason: "assistant_cancelled",
+    },
+    {
+      name: "missing final stop",
+      first: "stop",
+      final: undefined,
+      status: "failed",
+      reason: "malformed_terminal",
+    },
+    {
+      name: "empty final output",
+      first: "stop",
+      final: "stop",
+      empty: true,
+      status: "completed",
+      reason: "assistant_completed",
+    },
+  ])("uses the current terminal message, never abandoned state: $name", async (fixture) => {
+    const bytes = fixture.empty === true ? "" : "COMPLETED successfully; terminal=completed🙂";
+    mockSpawn.mockImplementationOnce(() =>
+      fakeJsonProcess("TERMINAL_SEQUENCE", [
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "earlier output must not win" }],
+            stopReason: fixture.first,
+            ...(fixture.first === "error" ? { errorMessage: "abandoned failure" } : {}),
+          },
+        },
+        // agent_end is not final: native recovery can still emit another assistant terminal.
+        { type: "agent_end" },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: bytes }],
+            ...(fixture.final === undefined ? {} : { stopReason: fixture.final }),
+            ...(fixture.error === undefined ? {} : { errorMessage: fixture.error }),
+          },
+        },
+      ])
+    );
+    const result = await tool.execute(
+      "terminal-sequence",
+      { agent: "echo", task: "TERMINAL_SEQUENCE" },
+      undefined,
+      undefined,
+      context()
+    );
+    const worker = result.details.results[0];
+    if (worker === undefined) throw new Error("terminal sequence omitted its worker");
+    expect(worker.stopReason).toBe(fixture.final);
+    expect(worker.errorMessage).toBe(fixture.error);
+    expect(worker.terminalOutcome).toEqual({
+      schema_version: 1,
+      status: fixture.status,
+      reason: fixture.reason,
+    });
+    expect(result.isError === true).toBe(fixture.status !== "completed");
+    expect(worker.outputArtifactState).toBe("persisted");
+    await expect(exactOutputs(result.details)).resolves.toEqual([bytes]);
   });
 
   it("returns failed single aggregate for completed execution with required persistence failure", async () => {
@@ -490,6 +583,66 @@ describe("subagent JSON-mode worker outcome matrix", () => {
     });
     expect(failed.content[0]?.text).toContain("output:PROCESS_ERROR");
   });
+
+  it.each(["caller", "inactivity"] as const)(
+    "retains the first termination cause when %s wins at the lease boundary",
+    async (firstCause) => {
+      vi.useFakeTimers({ now: Date.now(), toFake: ["Date", "setTimeout", "clearTimeout"] });
+      let lastActivityAt: number | undefined;
+      mockSpawn.mockImplementationOnce(() => {
+        spawnedProcess = fakeJsonProcess("WAIT_CANCEL");
+        // Keep termination pending across the competing cause; no real child is involved.
+        spawnedProcess.kill.mockImplementation(() => true);
+        spawnedProcess.stdout.on("data", () => {
+          lastActivityAt = Date.now();
+        });
+        return spawnedProcess;
+      });
+      const controller = new AbortController();
+      const execution = tool.execute(
+        "termination-cause",
+        { agent: "echo", task: "WAIT_CANCEL", model: "faux/direct-continuation" },
+        controller.signal,
+        undefined,
+        context()
+      );
+      await vi.waitFor(() => expect(lastActivityAt).toBeDefined());
+      if (lastActivityAt === undefined || spawnedProcess === undefined)
+        throw new Error("termination cause fixture did not start");
+      const lease = resolveWorkerLeaseProfile({
+        providerId: "faux",
+        modelId: "direct-continuation",
+        purpose: "phase",
+      });
+      await vi.advanceTimersByTimeAsync(
+        lease.inactivity_interval_ms - (Date.now() - lastActivityAt) - 1
+      );
+      expect(spawnedProcess.kill).not.toHaveBeenCalled();
+      if (firstCause === "caller") controller.abort();
+      await vi.advanceTimersByTimeAsync(1);
+      if (firstCause === "inactivity") controller.abort();
+      expect(spawnedProcess.kill).toHaveBeenCalledTimes(1);
+      spawnedProcess.emit("exit", 0, null);
+      spawnedProcess.emit("close", 0, null);
+      const result = await execution;
+      const worker = result.details.results[0];
+      if (worker === undefined) throw new Error("termination cause result omitted worker");
+      expect(worker.wasAborted).toBe(true);
+      expect(worker.inactivityExpired).toBe(firstCause === "inactivity");
+      expect(worker.errorMessage).toBe(
+        firstCause === "inactivity"
+          ? "Agent inactivity lease expired without trusted progress"
+          : "Agent was aborted"
+      );
+      expect(worker.terminalOutcome).toMatchObject(
+        firstCause === "inactivity"
+          ? { status: "failed", reason: "process_lifecycle" }
+          : { status: "cancelled", reason: "caller_cancelled" }
+      );
+      expect(result.isError).toBe(true);
+      await expect(exactOutputs(result.details)).resolves.toEqual(["output:WAIT_CANCEL"]);
+    }
+  );
 
   it("finalizes an active extension child once across repeated session shutdown", async () => {
     const execution = tool.execute(

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { CompletionGateSchema, validateContract, type CompletionGate } from "../src/contracts.js";
-import { evaluateCompletionGate } from "../src/playbooks/playbook.js";
-import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
+import { CompletionGateSchema, validateContract, type CompletionGate } from "../dist/contracts.js";
+import { evaluateCompletionGate } from "../dist/playbooks/playbook.js";
+import { RESEARCH_SKILL_CONTRACT } from "../dist/playbooks/research.js";
 
 const RESEARCH_GATE = RESEARCH_SKILL_CONTRACT.completion_gate;
 

@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from "crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import * as path from "path";
 import { canonicalArtifactJson, parseArtifactRef, type ArtifactRef } from "./artifact-client.js";
 
@@ -91,8 +91,13 @@ function ownerTransports(): Map<string, TrustedQuestionnaireTransport> {
 export function withExecutionOwnerEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     ...environment,
-    PENNY_RECEIPT_HMAC_KEY: ownerKey().toString("hex"),
-    PENNY_APPROVAL_HMAC_KEY: ownerKey().toString("hex"),
+    // Legacy compatibility keys are domain-separated. They cannot forge realm UI events.
+    PENNY_RECEIPT_HMAC_KEY: createHmac("sha256", ownerKey())
+      .update("legacy-receipt-child-v1")
+      .digest("hex"),
+    PENNY_APPROVAL_HMAC_KEY: createHmac("sha256", ownerKey())
+      .update("legacy-approval-child-v1")
+      .digest("hex"),
   };
 }
 
@@ -170,7 +175,16 @@ export interface TrustedQuestionnaireBinding {
   renderedQuestionsDigest: string;
 }
 
+/** Trusted in-process continuation, never part of the model-visible binding or wire. */
+export interface TrustedQuestionnaireCompletion {
+  complete(
+    events: readonly Record<string, unknown>[]
+  ): Promise<{ text: string }> | { text: string };
+  revoke(): void;
+}
+
 interface TrustedQuestionnaireTransport {
+  completion?: TrustedQuestionnaireCompletion;
   questions: TrustedQuestionnaireQuestion[];
   binding: TrustedQuestionnaireBinding;
   createdAt: number;
@@ -191,13 +205,21 @@ function pruneTrustedQuestionnaireTransports(now: number): void {
   for (const [capability, transport] of ownerTransports()) {
     if (transport.consumed || now - transport.createdAt > TRUSTED_QUESTIONNAIRE_MAX_AGE_MS) {
       ownerTransports().delete(capability);
+      transport.completion?.revoke();
     }
   }
   while (ownerTransports().size >= TRUSTED_QUESTIONNAIRE_MAX_PENDING) {
     const oldest = ownerTransports().keys().next().value;
     if (typeof oldest !== "string" || oldest.length === 0) break;
-    ownerTransports().delete(oldest);
+    revokeTrustedQuestionnaireTransport(oldest);
   }
+}
+
+/** Cancel/reload/expiry revokes both the bearer and its retained native resources. */
+export function revokeTrustedQuestionnaireTransport(capability: string): void {
+  const transport = ownerTransports().get(capability);
+  ownerTransports().delete(capability);
+  transport?.completion?.revoke();
 }
 
 /**
@@ -207,7 +229,8 @@ function pruneTrustedQuestionnaireTransports(now: number): void {
  */
 export function registerTrustedQuestionnaireTransport(
   questions: TrustedQuestionnaireQuestion[],
-  binding: TrustedQuestionnaireBinding
+  binding: TrustedQuestionnaireBinding,
+  completion?: TrustedQuestionnaireCompletion
 ): string | undefined {
   if (!questions.length) return undefined;
   const actualDigest = renderedQuestionsDigest(questions);
@@ -230,13 +253,14 @@ export function registerTrustedQuestionnaireTransport(
     binding: structuredClone(binding),
     createdAt: now,
     consumed: false,
+    ...(completion === undefined ? {} : { completion }),
   });
   return capability;
 }
 
 export function resolveTrustedQuestionnaireTransport(
   capability: string
-): Omit<TrustedQuestionnaireTransport, "createdAt" | "consumed"> | undefined {
+): Pick<TrustedQuestionnaireTransport, "questions" | "binding"> | undefined {
   pruneTrustedQuestionnaireTransports(Date.now());
   const transport = ownerTransports().get(capability);
   if (!transport || transport.consumed) return undefined;
@@ -249,6 +273,7 @@ export function resolveTrustedQuestionnaireTransport(
 export function consumeTrustedQuestionnaireTransport(
   capability: string
 ): Omit<TrustedQuestionnaireTransport, "createdAt" | "consumed"> | undefined {
+  pruneTrustedQuestionnaireTransports(Date.now());
   const transport = ownerTransports().get(capability);
   if (!transport || transport.consumed) return undefined;
   transport.consumed = true;
@@ -256,6 +281,7 @@ export function consumeTrustedQuestionnaireTransport(
   return {
     questions: structuredClone(transport.questions),
     binding: structuredClone(transport.binding),
+    ...(transport.completion === undefined ? {} : { completion: transport.completion }),
   };
 }
 
@@ -351,7 +377,7 @@ function contentText(content: unknown): string {
 
 interface ObservedCall {
   command: string;
-  startedAt?: string;
+  startedAt?: string | undefined;
 }
 
 interface ObservedCommand extends ObservedCall {
@@ -561,8 +587,37 @@ export function parseTrustedHumanEventMarker(text: string): Record<string, unkno
   }
 }
 
+/** Same-process verifier. Never exports the realm secret to a worker, file or child env.
+ * Signature verification proves execution-owner custody, not an operator principal/policy.
+ * Domain admission must additionally bind the full event, exact refs, current policy and time. */
+export function verifyExecutionOwnerSignature(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    typeof value.signature !== "string" ||
+    !/^[a-f0-9]{64}$/.test(value.signature)
+  )
+    return false;
+  let count = 0;
+  const bounded = (item: unknown, depth: number): boolean => {
+    if (++count > 16384 || depth > 32) return false;
+    if (item === null || typeof item === "boolean") return true;
+    if (typeof item === "number") return Number.isFinite(item);
+    if (typeof item === "string") return Buffer.byteLength(item) <= 1_048_576;
+    if (Array.isArray(item))
+      return item.length <= 4096 && item.every((child) => bounded(child, depth + 1));
+    if (!isRecord(item) || Object.getPrototypeOf(item) !== Object.prototype) return false;
+    return Object.entries(item).every(
+      ([key, child]) => key.length <= 256 && bounded(child, depth + 1)
+    );
+  };
+  if (!bounded(value, 0) || Buffer.byteLength(canonicalReceiptJson(value)) > 1_048_576)
+    return false;
+  return timingSafeEqual(
+    Buffer.from(value.signature, "hex"),
+    Buffer.from(ownerSignature(value), "hex")
+  );
+}
+
 export function verifyOwnerReceiptForTest(receipt: Record<string, unknown>): boolean {
-  const signature = String(receipt.signature ?? "");
-  const expected = ownerSignature(receipt);
-  return signature.length === 64 && signature === expected;
+  return verifyExecutionOwnerSignature(receipt);
 }

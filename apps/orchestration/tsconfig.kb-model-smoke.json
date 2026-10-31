@@ -9,7 +9,8 @@
   },
   "include": [
     "src/**/*.ts",
-    "smoke/**/*.ts",
+    "smoke/kb-model-smoke*.ts",
+    "smoke/child-workflow-model-smoke.test.ts",
     "vitest.kb-model-smoke.config.ts",
     "vitest.child-workflow-model-smoke.config.ts"
   ],

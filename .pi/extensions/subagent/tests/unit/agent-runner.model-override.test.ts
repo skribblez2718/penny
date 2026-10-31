@@ -10,7 +10,7 @@ import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { initializePennyState, resolvePennyProjectState } from "@penny/orchestration/source";
+import { initializePennyState, resolvePennyProjectState } from "@penny/orchestration";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockSpawn } = vi.hoisted(() => ({

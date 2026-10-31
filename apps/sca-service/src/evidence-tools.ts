@@ -1,15 +1,15 @@
 import { Type, type Static } from "typebox";
 
-import { validateContract } from "../../orchestration/src/contracts.js";
+import { validateContract } from "../../orchestration/dist/contracts.js";
 import {
   sealScaFindingEvidenceV1,
   type ScaFindingEvidenceV1,
-} from "../../orchestration/src/sca/stronger-evidence.js";
+} from "../../orchestration/dist/sca/stronger-evidence.js";
 import {
   ScaStrongerExecutionAuthorizationV1Schema,
   validateScaStrongerExecutionAuthorizationV1,
-} from "../../orchestration/src/sca/human-authorization.js";
-import { OpaqueIdSchema, Sha256Schema } from "../../orchestration/src/skill-contracts/common.js";
+} from "../../orchestration/dist/sca/human-authorization.js";
+import { OpaqueIdSchema, Sha256Schema } from "../../orchestration/dist/skill-contracts/common.js";
 import {
   ScaEvidenceExecutionReceiptV1Schema,
   validateScaEvidenceExecutionReceiptV1,

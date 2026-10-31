@@ -6,7 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer, canonicalJson, type StartAdmissionInput } from "../src/checkpointer.js";
+import { Checkpointer, canonicalJson, type StartAdmissionInput } from "../dist/checkpointer.js";
 import {
   validateDirective,
   type ArtifactRef,
@@ -15,13 +15,13 @@ import {
   type JsonValue,
   type RunIdentity,
   type SkillContract,
-} from "../src/contracts.js";
-import { RunContext } from "../src/context.js";
-import { orchestrationDurableStateCodec } from "../src/durable-state.js";
-import { OrchestrationEngine } from "../src/engine.js";
-import type { PlaybookCoreV1 } from "../src/playbooks/playbook.js";
-import type { PlaybookRegistrationV1, PlaybookRegistryV1 } from "../src/playbooks/registry.js";
-import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
+} from "../dist/contracts.js";
+import { RunContext } from "../dist/context.js";
+import { orchestrationDurableStateCodec } from "../dist/durable-state.js";
+import { OrchestrationEngine } from "../dist/engine.js";
+import type { PlaybookCore } from "../dist/playbooks/playbook.js";
+import type { PlaybookRegistration, PlaybookRegistry } from "../dist/playbooks/registry.js";
+import { RESEARCH_SKILL_CONTRACT } from "../dist/playbooks/research.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const roots: string[] = [];
@@ -96,7 +96,7 @@ function terminal(context: RunContext): Directive {
   return next;
 }
 
-class AdmissionPlaybook implements PlaybookCoreV1 {
+class AdmissionPlaybook implements PlaybookCore {
   initialize(context: RunContext): Directive {
     if (context.constraints.missing_required !== true) context.transition("required");
     context.transition(context.constraints.forbidden_origin === true ? "forbidden" : "origin");
@@ -169,7 +169,7 @@ function contract(
   };
 }
 
-function registration(skillContract = contract()): PlaybookRegistrationV1 {
+function registration(skillContract = contract()): PlaybookRegistration {
   return {
     name: PLAYBOOK,
     contract: skillContract,
@@ -212,7 +212,7 @@ function runtime(input: {
   const dbPath = path.join(input.projectRoot, "orchestration.db");
   const checkpointer = new Checkpointer(dbPath, input.observer);
   const active = registration(input.skillContract);
-  const registry: PlaybookRegistryV1 = new Map([[PLAYBOOK, active]]);
+  const registry: PlaybookRegistry = new Map([[PLAYBOOK, active]]);
   return {
     checkpointer,
     dbPath,
@@ -385,11 +385,51 @@ describe("P1.1 central completion admission", () => {
       producing_state: "origin",
     });
     const { checkpointer, engine } = runtime({ projectRoot, skillContract: artifactContract });
-    const result = start(engine, projectRoot, `run_product_${mode}`, { terminal_artifacts: mode }, [
-      ...refs,
-    ]);
+    const runId = `run_product_${mode}`;
+    const result = start(
+      engine,
+      projectRoot,
+      runId,
+      { terminal_artifacts: mode },
+      refs.map((ref) => ({ ...ref, run_id: runId }))
+    );
     expect(result).toMatchObject({ action: "incomplete", met: false });
     expect(checkpointer.completionRefusal(`run_product_${mode}`)?.failure_codes).toContain(code);
+    checkpointer.close();
+  });
+
+  it("selects only the current run's product when imported evidence has the same phase and a higher version", () => {
+    const projectRoot = root();
+    const { checkpointer, engine } = runtime({
+      projectRoot,
+      skillContract: contract({
+        selector: "terminal_artifact",
+        schema_id: "test.legacy-product",
+        product_schema_version: 1,
+        artifact_kind: "agent-output",
+        producing_state: "origin",
+      }),
+    });
+    const runId = "run_current_product_with_import";
+    const current = { ...artifact(1), run_id: runId };
+    const imported = artifact(4);
+    const admitted = start(engine, projectRoot, runId, {}, [imported, current]);
+    expect(admitted).toMatchObject({
+      action: "complete",
+      met: true,
+      artifacts: [imported, current],
+    });
+    expect(checkpointer.completionAdmission(runId)?.latest_product.product_id).toBe(
+      current.artifact_id
+    );
+    const missingRunId = "run_import_is_not_output";
+    expect(start(engine, projectRoot, missingRunId, {}, [imported])).toMatchObject({
+      action: "incomplete",
+      met: false,
+    });
+    expect(checkpointer.completionRefusal(missingRunId)?.failure_codes).toEqual([
+      "LATEST_PRODUCT_MISSING",
+    ]);
     checkpointer.close();
   });
 

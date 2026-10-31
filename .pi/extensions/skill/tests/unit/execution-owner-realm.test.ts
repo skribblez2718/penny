@@ -23,7 +23,7 @@
  * per-extension isolation.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 import { isRecord, requireString } from "../../../../lib/tests/test-narrowers.js";
 
@@ -43,6 +43,7 @@ type ExecutionReceiptsModule = Pick<
   | "registerTrustedQuestionnaireTransport"
   | "resolveTrustedQuestionnaireTransport"
   | "consumeTrustedQuestionnaireTransport"
+  | "revokeTrustedQuestionnaireTransport"
 >;
 
 function isExecutionReceiptsModule(value: unknown): value is ExecutionReceiptsModule {
@@ -52,7 +53,8 @@ function isExecutionReceiptsModule(value: unknown): value is ExecutionReceiptsMo
     typeof value.renderedQuestionsDigest === "function" &&
     typeof value.registerTrustedQuestionnaireTransport === "function" &&
     typeof value.resolveTrustedQuestionnaireTransport === "function" &&
-    typeof value.consumeTrustedQuestionnaireTransport === "function"
+    typeof value.consumeTrustedQuestionnaireTransport === "function" &&
+    typeof value.revokeTrustedQuestionnaireTransport === "function"
   );
 }
 
@@ -69,7 +71,7 @@ describe("execution-owner realm singleton", () => {
     const b = await freshInstance("key-b");
 
     // The key is never exposed directly; withExecutionOwnerEnvironment is the only
-    // sanctioned way it leaves the module, and it is what trusted gate transport receives.
+    // compatibility child key derivation. Neither derived key is the realm UI-event key.
     const envA = a.withExecutionOwnerEnvironment({});
     const envB = b.withExecutionOwnerEnvironment({});
 
@@ -178,5 +180,72 @@ describe("execution-owner realm singleton", () => {
     // could be redeemed twice by alternating instances.
     expect(consumer.resolveTrustedQuestionnaireTransport(capability)).toBeUndefined();
     expect(registrar.resolveTrustedQuestionnaireTransport(capability)).toBeUndefined();
+  });
+
+  it("retains the native completion across loader realms without exposing it in resolution", async () => {
+    const a = await freshInstance("completion-owner"),
+      b = await freshInstance("completion-ui");
+    const questions = [{ id: "q", label: "Q", prompt: "Fixture", options: [], allowOther: true }];
+    const complete = vi.fn(() => ({ text: "fixture completion, not approval" }));
+    const revoke = vi.fn();
+    const capability = requireString(
+      a.registerTrustedQuestionnaireTransport(
+        questions,
+        {
+          runId: "callback-fixture",
+          gateId: "gate",
+          challenge: "challenge",
+          artifactRef: {},
+          transportRef: {},
+          renderedQuestionsDigest: a.renderedQuestionsDigest(questions),
+        },
+        { complete, revoke }
+      )
+    );
+    const resolved = b.resolveTrustedQuestionnaireTransport(capability);
+    expect(resolved).toBeDefined();
+    expect(Object.keys(resolved ?? {})).toEqual(["questions", "binding"]);
+    expect(complete).not.toHaveBeenCalled();
+    const consumed = b.consumeTrustedQuestionnaireTransport(capability);
+    if (!consumed?.completion) throw new Error("cross-realm completion missing");
+    expect(await consumed.completion.complete([])).toEqual({
+      text: "fixture completion, not approval",
+    });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(a.consumeTrustedQuestionnaireTransport(capability)).toBeUndefined();
+    expect(revoke).not.toHaveBeenCalled();
+  });
+
+  it("revokes retained native resources exactly once on cancellation and transport expiry", async () => {
+    const a = await freshInstance("completion-expiry");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    try {
+      const questions = [{ id: "q", label: "Q", prompt: "Fixture", options: [], allowOther: true }];
+      const binding = {
+        runId: "expiry",
+        gateId: "gate",
+        challenge: "challenge",
+        artifactRef: {},
+        transportRef: {},
+        renderedQuestionsDigest: a.renderedQuestionsDigest(questions),
+      };
+      const revoke = vi.fn(),
+        complete = vi.fn(() => ({ text: "not called" }));
+      const cap = requireString(
+        a.registerTrustedQuestionnaireTransport(questions, binding, { revoke, complete })
+      );
+      a.revokeTrustedQuestionnaireTransport(cap);
+      a.revokeTrustedQuestionnaireTransport(cap);
+      expect(revoke).toHaveBeenCalledTimes(1);
+      const expired = requireString(
+        a.registerTrustedQuestionnaireTransport(questions, binding, { revoke, complete })
+      );
+      clock.mockReturnValue(1000 + 30 * 60 * 1000 + 1);
+      expect(a.resolveTrustedQuestionnaireTransport(expired)).toBeUndefined();
+      expect(revoke).toHaveBeenCalledTimes(2);
+      expect(complete).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

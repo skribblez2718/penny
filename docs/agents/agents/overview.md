@@ -8,49 +8,27 @@ Remote harness/service presence belongs to a separate registry.
 
 ## Maximum and active tool surfaces
 
-YAML frontmatter is the maximum ordinary catalog authority. Direct, parallel, and chain
-invocation activates it exactly. A TypeScript orchestration catalog-worker phase activates
-YAML exactly when its active registration omits `allowed_tools`; otherwise it may activate
-one explicit non-empty duplicate-free strict YAML subset bound into the canonical runtime-
-registration digest and worker invocation metadata.
-
-No trust profile, task, input, liveness/model policy, optional-service state, or runtime
-condition may select or change that subset. Missing, empty, duplicate, additive,
-replacement, equality-sized, unavailable, and non-YAML selections fail before session
-creation; Pi receives the accepted list exactly and active equality is checked before the
-model prompt. `authority:` and `tool_profiles:` continue to lint YAML exactly and are not
-mutated by a phase subset.
-
-All provider extensions load before activation. An unavailable backing service behind a
-registered selected tool returns a typed error when called; its tool is not conditionally
-hidden. Anonymous host-private isolated sessions remain separate and are not catalog roles.
+YAML declares maximum catalog authority; invocation activates exact YAML or a registered
+strict subset under the [binding runtime rule](discovery-and-tools.md#binding-runtime-rule).
+That owner defines every admission condition, including the guarded zero-tool exception;
+tasks and prompt layers cannot select tools. [Profiles](tool-profiles.md#rules) lint the
+static YAML maximum, not phase selection. Anonymous host-private sessions remain separate.
 
 ## Artifact communication
 
-Exact task outputs move by immutable artifact ID or a caller-specified file path.
-Artifacts are communication addresses, not permissions.
-
-1. Owner code verifies every supplied `input_artifacts` ID by exact manifest lookup and
-   digest/length before spawn.
-2. The worker reads needed IDs with `artifact_read`, repeating with `next_range` until
-   complete.
-3. The worker returns complete assistant output and any closed routing `SUMMARY`.
-4. Owner code persists and re-reads exact bytes before routing or success.
-5. Result text prints the exact output ID.
-
-IDs may cross runs/sessions and support arbitrary multi-source fan-in. Chain mode inserts
-the prior step ID automatically and permits extra explicit IDs. Memory, `/tmp`, repository
-search, and name-only pointers are not substitute handoff channels.
+Exact work products move by immutable artifact ID or caller-specified path, never memory
+or substitute search. IDs are communication addresses, not permissions.
+[Invocation](invocation.md#task-contract) owns full reads, `missing_input:`, mode-specific
+handoff, exact output capture/readback before routing, and recovery.
 
 ## Lifecycle
 
-1. Discover the requested definition from the current catalog snapshot.
-2. Assemble Cognitive Frame + Role Definition + optional Domain Guidance + Project Index.
-3. Preflight required providers and exact input IDs.
-4. Spawn a fresh Pi process/session with exact YAML or the one eligible registration-bound
-   orchestration strict subset.
-5. Capture complete final assistant bytes.
-6. Persist and re-read output, then parse any routing-only `SUMMARY`.
+The direct execution owner captures the current catalog for each invocation, assembles a
+fresh worker context, preflights names/inputs/providers, and captures output before success.
+Catalog edits do not require reloading the direct tool; registered orchestration bindings
+remain independently frozen and checked. Use the
+[invocation procedure](invocation.md#assembly) for dispatch and capture. For changes to
+layer assembly, use [prompt architecture](../prompts/architecture.md#worker-assembly).
 
 ## Isolation
 
@@ -60,13 +38,7 @@ container/VM for untrusted or unattended work.
 
 ## Verification
 
-- [ ] Every local role has one `.pi/agents/<name>.md` file.
-- [ ] Every file has a non-empty duplicate-free known `tools:` list.
-- [ ] Direct/parallel/chain runners assert exact YAML equality before model use.
-- [ ] TypeScript orchestration asserts absent-subset YAML equality and validates only
-      registration/digest-bound strict subsets before session creation.
-- [ ] Ordinary registered phases omit `allowed_tools` and activate exact agent YAML; synthetic
-      registration-bound strict subsets remain separately tested without sandbox/isolation claims,
-      and host-private tools remain separate.
-- [ ] Every successful output is persisted, re-read, and returned with an ID.
-- [ ] Cross-run single/parallel/chain/fan-in communication is tested.
+- [ ] Every local role has one `.pi/agents/<name>.md` file with valid catalog metadata.
+- [ ] [Tool activation](discovery-and-tools.md#verification) and
+      [handoff](invocation.md#verification) checks cover the selected execution path.
+- [ ] Fresh context and tool allowlists are not described as filesystem/process isolation.

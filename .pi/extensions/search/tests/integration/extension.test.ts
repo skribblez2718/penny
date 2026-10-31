@@ -14,8 +14,8 @@ import {
   measureToolResult,
   resolveToolResultBudget,
 } from "../../../lib/tool-result-budget.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
 import {
-  createTestExtensionApi,
   isRecord,
   parseJson,
   requireArray,

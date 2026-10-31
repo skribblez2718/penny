@@ -13,33 +13,35 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { loadPromptDocumentation } from "../src/catalog-prompt.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { loadPromptDocumentation } from "../dist/catalog-prompt.js";
 import {
   canonicalBrowserNetworkAllowlist,
   currentRegisteredBrowserPolicyCarrier,
   registeredBrowserPolicyOwnerScopeId,
   runWithRegisteredBrowserPolicy,
-} from "../src/browser-policy-carrier.js";
-import { Checkpointer } from "../src/checkpointer.js";
-import type { Directive } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
+} from "../dist/browser-policy-carrier.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import type { Directive } from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import {
   PiAgentClient,
+  buildAgentOpening,
   parseSsotTools,
   type AgentCompletion,
   type AgentInvocation,
   type ModelClient,
-} from "../src/model-client.js";
-import { DECIDE_PLAYBOOK_REGISTRATION } from "../src/playbooks/decide.js";
+} from "../dist/model-client.js";
+import { DECIDE_PLAYBOOK_REGISTRATION } from "../dist/playbooks/decide.js";
+import { PRODUCE_PLAYBOOK_REGISTRATION } from "../dist/playbooks/produce.js";
 import {
   bindGenericChildYamlAuthority,
   resolvePlaybook,
   runtimeRegistrationSha256,
   validateRegistrationContract,
-  type PlaybookRegistrationV1,
-} from "../src/playbooks/registry.js";
-import { WorkerExecutor } from "../src/worker.js";
+  type PlaybookRegistration,
+} from "../dist/playbooks/registry.js";
+import { WorkerExecutor } from "../dist/worker.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -109,7 +111,7 @@ class CapturingClient implements ModelClient {
   }
 }
 
-function browserPolicyTestRegistration(rawAllowlist: readonly string[]): PlaybookRegistrationV1 {
+function browserPolicyTestRegistration(rawAllowlist: readonly string[]): PlaybookRegistration {
   const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
   if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
   const phase = worker.phases.get("deciding");
@@ -126,7 +128,7 @@ function browserPolicyTestRegistration(rawAllowlist: readonly string[]): Playboo
   };
 }
 
-function strictToolTestRegistration(): PlaybookRegistrationV1 {
+function strictToolTestRegistration(): PlaybookRegistration {
   const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
   if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
   const phase = worker.phases.get("deciding");
@@ -144,6 +146,120 @@ function strictToolTestRegistration(): PlaybookRegistrationV1 {
 }
 
 describe("W6 active worker registration", () => {
+  it("carries the exact projection declaration through real worker opening metadata without changing unopted/repair instructions", async () => {
+    const base = PRODUCE_PLAYBOOK_REGISTRATION;
+    if (base.worker.kind !== "catalog-agent") throw new Error("Produce catalog worker absent");
+    const expected = base.worker.phases.get("verifying_artifact")?.result_projection?.declaration;
+    if (expected === undefined) throw new Error("Produce projection absent");
+    using artifacts = new ArtifactStore(path.join(temporaryRoot(), "artifacts"));
+    const client = new CapturingClient();
+    const worker = new WorkerExecutor(client, artifacts, {
+      projectRoot: PROJECT_ROOT,
+      parallelConcurrency: 1,
+      registration: base,
+    });
+    worker.setReceiptAuthority(TEST_RECEIPT_AUTHORITY);
+    await expect(
+      worker.execute(
+        researchDirective({
+          runId: "run-projection-opening",
+          playbook: "produce",
+          stateId: "verifying_artifact",
+          agent: "vera",
+        })
+      )
+    ).rejects.toBe(client.boundary);
+    const invocation = client.invocations[0];
+    if (invocation?.registration === undefined) throw new Error("captured registration absent");
+    const registration = invocation.registration;
+    expect(registration.result_projection).toEqual(expected);
+    const openingInput = {
+      invocation,
+      registration,
+      agentGuidance: "role",
+      domainGuidance: "domain",
+      activeToolNames: [],
+    };
+    const opening = buildAgentOpening(openingInput);
+    expect(opening).toContain("no model-authored SUMMARY is required");
+    expect(opening).not.toContain("end with the closed SUMMARY line");
+    const { result_projection: _projection, ...unopted } = registration;
+    expect(buildAgentOpening({ ...openingInput, registration: unopted })).toContain(
+      "Return the complete stage output in assistant text and end with the closed SUMMARY line defined by the domain guidance."
+    );
+    expect(
+      buildAgentOpening({
+        ...openingInput,
+        invocation: {
+          ...invocation,
+          executionPurpose: "routing_repair",
+          routingRepairGuidance: "Closed correction only",
+        },
+      })
+    ).toContain("Return exactly the one summary-only line required above.");
+    expect(() =>
+      buildAgentOpening({
+        ...openingInput,
+        registration: {
+          ...registration,
+          result_projection: { ...expected, state_id: "critiquing_artifact" },
+        },
+      })
+    ).toThrow(/projection/u);
+    expect(() =>
+      buildAgentOpening({
+        ...openingInput,
+        registration: { ...registration, opening_policy: "host_private_opening" },
+      })
+    ).toThrow(/projection/u);
+  });
+
+  it.each(["wrong_phase", "missing_declaration", "missing_implementation"])(
+    "refuses %s projection authority in the real WorkerExecutor before model work",
+    async (mode) => {
+      const base = PRODUCE_PLAYBOOK_REGISTRATION;
+      if (base.worker.kind !== "catalog-agent") throw new Error("Produce catalog worker absent");
+      const vera = base.worker.phases.get("verifying_artifact");
+      if (vera?.result_projection === undefined) throw new Error("Produce projection absent");
+      const projector = {
+        ...vera.result_projection,
+        declaration: { ...vera.result_projection.declaration },
+      };
+      if (mode === "missing_declaration") Reflect.deleteProperty(projector, "declaration");
+      if (mode === "missing_implementation") Reflect.deleteProperty(projector, "project");
+      if (mode === "wrong_phase") projector.declaration.state_id = "critiquing_artifact";
+      const registration: PlaybookRegistration = {
+        ...base,
+        worker: {
+          ...base.worker,
+          phases: new Map(base.worker.phases).set("verifying_artifact", {
+            ...vera,
+            result_projection: projector,
+          }),
+        },
+      };
+      using artifacts = new ArtifactStore(path.join(temporaryRoot(), "artifacts"));
+      const client = new CapturingClient();
+      const worker = new WorkerExecutor(client, artifacts, {
+        projectRoot: PROJECT_ROOT,
+        parallelConcurrency: 1,
+        registration,
+      });
+      worker.setReceiptAuthority(TEST_RECEIPT_AUTHORITY);
+      await expect(
+        worker.execute(
+          researchDirective({
+            runId: `run-projection-authority-${mode}`,
+            playbook: "produce",
+            stateId: "verifying_artifact",
+            agent: "vera",
+          })
+        )
+      ).rejects.toThrow();
+      expect(client.invocations).toHaveLength(0);
+    }
+  );
+
   it("exposes the exact validated active registration and binds it in the service", () => {
     const root = temporaryRoot();
     using checkpointer = new Checkpointer(path.join(root, "orchestration.db"));
@@ -154,9 +270,12 @@ describe("W6 active worker registration", () => {
     });
     const template = resolvePlaybook("research");
     if (template === undefined) throw new Error("research registration is unavailable");
-    expect(engine.registration).toBe(template);
+    // The engine freezes current role/guidance/YAML bindings, not the unbound template's
+    // object identity. Compare the complete independently resolved active registration.
+    const expected = bindGenericChildYamlAuthority(template, root);
+    expect(engine.registration).toEqual(expected);
     expect(runtimeRegistrationSha256(engine.registration)).toBe(
-      runtimeRegistrationSha256(template)
+      runtimeRegistrationSha256(expected)
     );
     expect(engine.contract).toBe(engine.registration.contract);
 
@@ -410,7 +529,7 @@ describe("W6 active worker registration", () => {
     if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const phase = worker.phases.get("deciding");
     if (phase === undefined) throw new Error("deciding phase is absent");
-    const withPolicy = (allowlist: readonly string[]): PlaybookRegistrationV1 => ({
+    const withPolicy = (allowlist: readonly string[]): PlaybookRegistration => ({
       ...DECIDE_PLAYBOOK_REGISTRATION,
       worker: {
         ...worker,

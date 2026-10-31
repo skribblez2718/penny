@@ -13,10 +13,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { validateDirective } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { validateDirective } from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import {
   ContentReviewError,
@@ -25,17 +25,17 @@ import {
   conflictRecordForAllocation,
   packetDigest,
   packetJcs,
-} from "../src/kb/content-review.js";
-import { CapabilityStore } from "../src/kb/capabilities.js";
-import { canonicalJson, sha256Hex } from "../src/kb/contracts.js";
-import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
-import { mintSourceCapability } from "../src/kb/gate.js";
-import { defaultKbIngestPlane } from "../src/kb/ingest-plane.js";
-import { readSelectedGeneration } from "../src/kb/generations.js";
-import { allocateComposeAuthority } from "../src/kb/composition-authority.js";
-import { admitOperationStart } from "../src/kb/operation-starts.js";
-import { RunArtifactStore } from "../src/kb/run-artifacts.js";
-import { initKb } from "../src/kb/workflows.js";
+} from "../dist/kb/content-review.js";
+import { CapabilityStore } from "../dist/kb/capabilities.js";
+import { canonicalJson, sha256Hex } from "../dist/kb/contracts.js";
+import { readPolicy, writePolicy } from "../dist/kb/filesystem.js";
+import { mintSourceCapability } from "../dist/kb/gate.js";
+import { defaultKbIngestPlane } from "../dist/kb/ingest-plane.js";
+import { readSelectedGeneration } from "../dist/kb/generations.js";
+import { allocateComposeAuthority } from "../dist/kb/composition-authority.js";
+import { admitOperationStart } from "../dist/kb/operation-starts.js";
+import { RunArtifactStore } from "../dist/kb/run-artifacts.js";
+import { initKb } from "../dist/kb/workflows.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_callback";

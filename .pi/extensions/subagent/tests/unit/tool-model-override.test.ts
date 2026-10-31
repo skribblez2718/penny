@@ -7,11 +7,8 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import {
-  createTestExtensionApi,
-  createTestToolInfos,
-  isRecord,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi, createTestToolInfos } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 import { discoverAgents } from "../../agents.js";
 
 type RunSingleAgent = typeof import("../../agent-runner.js").runSingleAgent;
@@ -296,13 +293,11 @@ describe("subagent tool model override", () => {
     const { join } = await import("node:path");
     const owner = await import("../../../artifacts/owner-client.js");
     const { initializePennyState } =
-      await import("../../../../../apps/orchestration/src/state/index.js");
+      await import("../../../../../apps/orchestration/dist/state/index.js");
     const root = mkdtempSync(join(tmpdir(), "penny-subagent-input-"));
     chmodSync(root, 0o700);
-    // Artifact storage is isolated under PENNY_STATE_ROOT, but the execution
-    // catalog must use Penny's real agent directory. A synthetic cwd would
-    // intentionally trip the reload-required catalog-drift guard before the
-    // handoff reaches the mocked runner.
+    // Artifact storage is isolated under PENNY_STATE_ROOT. Resolve the real project
+    // catalog so the fixture uses actual role metadata at the mocked runner boundary.
     const projectRoot = process.cwd();
     const previousStateRoot = process.env.PENNY_STATE_ROOT;
     const previousArtifactRoot = process.env.PENNY_ARTIFACT_ROOT;

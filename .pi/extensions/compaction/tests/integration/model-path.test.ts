@@ -11,9 +11,9 @@ import {
   CATALOG_WORKER_CONTINUITY_METADATA,
   CATALOG_WORKER_SESSION_METADATA,
   initializePennyState,
-} from "@penny/orchestration/source";
+} from "@penny/orchestration";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import compactionExtension from "../../index.js";
+import compactionExtension, { createCompactionHandler } from "../../index.js";
 import type { GenerateModelSummaryInput, SummarizerCtx } from "../../summarizer.js";
 import { createMockCompactionPi, type CompactionEvent } from "../fixtures/compaction-pi.js";
 import {
@@ -84,9 +84,15 @@ beforeEach(() => {
   process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
   delete process.env.PENNY_ARTIFACT_ROOT;
   projectId = initializePennyState(projectRoot, { env: process.env }).projectId;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }))
+  );
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   generateModelSummaryMock.mockReset();
   delete process.env.PENNY_ABLATE_COMPACTION_DETERMINISTIC_SUMMARY;
   if (previousStateRoot === undefined) delete process.env.PENNY_STATE_ROOT;
@@ -97,6 +103,110 @@ afterEach(() => {
 });
 
 describe("model-owned prose path", () => {
+  it("injects progress only into the producer; completion and abort retire its callback", async () => {
+    const pi = createMockCompactionPi();
+    const report = vi.fn();
+    let late: GenerateModelSummaryInput["onProgress"];
+    generateModelSummaryMock.mockImplementationOnce(async (input) => {
+      late = input.onProgress;
+      input.onProgress?.({ activity_class: "assistant_text_delta", observed_units: 12 });
+      return { prose: "## Goal\nPrivate summary prose", model: "test/summary" };
+    });
+    pi.api.on("session_before_compact", createCompactionHandler(report));
+    await pi.emitRequired(mockEvent(), ctx());
+    late?.({ activity_class: "assistant_text_delta", observed_units: 999 });
+    expect(report.mock.calls).toEqual([
+      [{ activity_class: "assistant_text_delta", observed_units: 12 }],
+    ]);
+    const controller = new AbortController();
+    generateModelSummaryMock.mockImplementationOnce(async (input) => {
+      controller.abort();
+      input.onProgress?.({ activity_class: "assistant_text_delta", observed_units: 999 });
+      return null;
+    });
+    await pi.emitRequired({ ...mockEvent(), signal: controller.signal }, ctx());
+    expect(report).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a cancelled owner's later cleanup summary before dispatch", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const report = vi.fn();
+    await expect(
+      createCompactionHandler()(mockEvent(), ctx(), report, controller.signal)
+    ).resolves.toEqual({ cancel: true });
+    expect(generateModelSummaryMock).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("aborts a black-holed optional telemetry POST while the summary returns immediately", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | null | undefined;
+    let settled = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (url, init) => {
+        if (!String(url).endsWith("/compactions")) return new Response(null, { status: 204 });
+        signal = init?.signal;
+        if (!signal) throw new Error("telemetry missing cancellation signal");
+        try {
+          await new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("fake fetch aborted")), {
+              once: true,
+            });
+          });
+        } finally {
+          settled = true;
+        }
+        return new Response();
+      })
+    );
+    generateModelSummaryMock.mockResolvedValueOnce({
+      prose: "## Goal\nContinue",
+      model: "test/summary",
+    });
+    const pi = createMockCompactionPi();
+    compactionExtension(pi.api);
+    const result = await pi.emitRequired(mockEvent(), ctx());
+    expect(result.compaction.details.summary_source).toBe("model");
+    expect(generateModelSummaryMock).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(signal?.aborted).toBe(true);
+    expect(settled).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("forwards cancellation to telemetry and cancels response bodies without another summary", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (_url, init) => {
+        if (!init?.signal) throw new Error("missing telemetry signal");
+        controller.abort();
+        expect(init.signal.aborted).toBe(true);
+        return new Response(new ReadableStream({ cancel }), { status: 503 });
+      })
+    );
+    generateModelSummaryMock.mockResolvedValueOnce({
+      prose: "## Goal\nContinue",
+      model: "test/summary",
+    });
+    const pi = createMockCompactionPi();
+    compactionExtension(pi.api);
+    const result = await pi.emitRequired({ ...mockEvent(), signal: controller.signal }, ctx());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(result.compaction.details.summary_source).toBe("model");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(generateModelSummaryMock).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("uses the model prose and appends code-owned RESUME-REFS", async () => {
     generateModelSummaryMock.mockResolvedValueOnce({
       prose: "## Goal\nRefactor the token estimator\n## Critical Context\n- uses tiktoken",
@@ -201,6 +311,7 @@ describe("model-owned prose path", () => {
           session_id: "code-session-1",
           skill_name: "code",
           state: "complete",
+          requires_approval: false,
           steps_total: 1,
           agents_invoked: ["coder"],
           errors: [],

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../src/checkpointer.js";
+import { canonicalJson, sha256 } from "../dist/checkpointer.js";
 import {
   DEFAULT_CHILD_WORKFLOW_POLICY_V1,
   DEFAULT_CHILD_WORKFLOW_POLICY_V2,
@@ -23,7 +23,7 @@ import {
   validateInitialChildWorkflowDirective,
   type ChildWorkflowCallRecordV1,
   type ChildWorkflowRequestV1,
-} from "../src/child-workflows/contracts.js";
+} from "../dist/child-workflows/contracts.js";
 import {
   childRequestMatchesProvider,
   childWorkflowCandidateRegistrySha256,
@@ -34,9 +34,9 @@ import {
   validateChildWorkflowCandidateRegistryV2,
   type ChildProviderDescriptorV1,
   type ChildProviderDescriptorV2,
-} from "../src/child-workflows/registration.js";
-import { SEMANTIC_PRODUCT_VALIDATORS } from "../src/composition.js";
-import { validateDirective } from "../src/contracts.js";
+} from "../dist/child-workflows/registration.js";
+import { SEMANTIC_PRODUCT_VALIDATORS } from "../dist/composition.js";
+import { validateDirective } from "../dist/contracts.js";
 import type {
   ArtifactRef,
   ChildWorkflowOutputContractV1,
@@ -45,14 +45,14 @@ import type {
   InputArtifacts,
   InvokeChildWorkflowDirective,
   RunIdentity,
-} from "../src/contracts.js";
+} from "../dist/contracts.js";
 import {
   PLAYBOOK_REGISTRY,
   runtimeRegistrationSha256,
-  type PlaybookRegistrationV1,
+  type PlaybookRegistration,
   validateChildWorkflowCandidateRegistration,
-} from "../src/playbooks/registry.js";
-import { assertWorkerExecutableDirective } from "../src/worker.js";
+} from "../dist/playbooks/registry.js";
+import { assertWorkerExecutableDirective } from "../dist/worker.js";
 
 const CURRENT_ORDINARY_PROVIDER_NAMES = [
   "assess",
@@ -65,7 +65,7 @@ const CURRENT_ORDINARY_PROVIDER_NAMES = [
 
 function registrationFor(
   name: (typeof CURRENT_ORDINARY_PROVIDER_NAMES)[number]
-): PlaybookRegistrationV1 {
+): PlaybookRegistration {
   const registration = PLAYBOOK_REGISTRY.get(name);
   if (registration === undefined) throw new Error(`missing ordinary registration '${name}'`);
   return registration;
@@ -377,6 +377,41 @@ describe("CW-01 child-workflow contract closure", () => {
         provider_request: unsafeKey,
       })
     ).toThrow(/unsafe key/);
+  });
+
+  it("binds versioned invocation policy into canonical child request bytes", () => {
+    const strict = validateChildWorkflowRequest({
+      ...request(),
+      child_name: "plan",
+      provider_request_schema_id: "penny.plan-request.v1",
+      invocation_policy: { schema_version: 2, specification_assurance: "reviewed_definition" },
+    });
+    expect(strict.invocation_policy).toEqual({
+      schema_version: 2,
+      specification_assurance: "reviewed_definition",
+    });
+    expect(canonicalJson(strict)).not.toBe(
+      canonicalJson({
+        ...strict,
+        invocation_policy: { schema_version: 2, specification_assurance: "semantic_only" },
+      })
+    );
+    expect(() =>
+      validateChildWorkflowRequest({
+        ...strict,
+        invocation_policy: { schema_version: 1, specification_assurance: "reviewed_definition" },
+      })
+    ).toThrow();
+    expect(() =>
+      validateChildWorkflowRequest({
+        ...strict,
+        invocation_policy: {
+          schema_version: 2,
+          specification_assurance: "reviewed_definition",
+          extra: true,
+        },
+      })
+    ).toThrow();
   });
 
   it("requires exact canonical child-request artifact bytes", () => {

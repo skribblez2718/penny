@@ -1,20 +1,20 @@
 # Tailwind CSS — Documentation Lookup
 
-> **Hybrid lookup.** The table below is a self-healing cache of known-good URLs.
-> Fetch the URL for your concept; if it 404s or drifts, repair the row per
-> [../library-docs.md](../library-docs.md). Fetch the live page for current API.
+> **Hybrid lookup.** The table below supplies cached entry points. Fetch the URL
+> for your concept; follow [library lookup](../library-docs.md) for version/content
+> verification and failures. Repair rows only within authorized documentation
+> maintenance. Fetch the live page for current API.
 
 - **Canonical docs:** https://tailwindcss.com/docs
-- **URL scheme:** `https://tailwindcss.com/docs/<page>` (no browsable root index —
-  use the table below or search)
-- **Version:** confirm from `package.json`. **v3 → v4 changed a lot** (CSS-first
-  `@import "tailwindcss"` + `@theme`, no `tailwind.config.js`, automatic content
-  detection, `@tailwindcss/vite`). Fetch docs for the installed major version.
+- **URL scheme:** `https://tailwindcss.com/docs/<page>`
+- **Version:** confirm from `package.json` / lockfile and fetch docs for the
+  installed major version. Use its upgrade guide to check installation,
+  configuration, theme, content-detection, and build-plugin differences.
 
-## Concept → URL table (self-healing cache)
+## Concept → URL table (cached entry points)
 
 `Verified`: `✓ <date>` = confirmed live that date · `seed` = curated, confirm on
-first use (a failed fetch self-heals and dates the row).
+first use. Dates change only after live verification in authorized maintenance.
 
 | Concept                                     | URL                                                            | Verified     |
 | ------------------------------------------- | -------------------------------------------------------------- | ------------ |

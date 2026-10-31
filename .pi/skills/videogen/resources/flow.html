@@ -1,0 +1,2831 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="penny-flow-template" content="1" />
+    <title>Videogen · executor contract matrix</title>
+    <style>
+      :root {
+        --canvas: #0d1117;
+        --surface: #161b22;
+        --surface-raised: #1c2230;
+        --border: #3a4657;
+        --text: #f0f6fc;
+        --muted: #b6c2cf;
+        --host: #c4b5fd;
+        --start: #94a3b8;
+        --gate: #fbbf24;
+        --done: #4ade80;
+        --negative: #fb7185;
+        --annie: #c4b5fd;
+        --carren: #fb7185;
+        --demetri: #60a5fa;
+        --echo: #22d3ee;
+        --ida: #f59e0b;
+        --piper: #facc15;
+        --skribble: #d8b4fe;
+        --synthia: #f472b6;
+        --tabitha: #fb923c;
+        --vera: #4ade80;
+        --fwd: #aab7c7;
+        --loop: #fbbf24;
+        --exit: #4ade80;
+        --abort: #fb7185;
+        --esc: #cbd5e1;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        background: var(--canvas);
+        color: var(--text);
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+      }
+      body {
+        margin: 0;
+      }
+      header,
+      .callout,
+      .legend,
+      main,
+      footer {
+        width: min(100% - 32px, 1760px);
+        margin-inline: auto;
+      }
+      header {
+        padding-top: 28px;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(1.45rem, 2.2vw, 2rem);
+        line-height: 1.2;
+      }
+      .summary,
+      .muted {
+        color: var(--muted);
+        max-width: 100ch;
+      }
+      .callout {
+        margin-top: 20px;
+        border-inline-start: 4px solid var(--gate);
+        border-radius: 8px;
+        background: #251f0d;
+        color: #f9e8a4;
+        padding: 12px 16px;
+      }
+      .callout p {
+        margin: 0;
+      }
+      .legend {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 14px 28px;
+        padding: 20px 0;
+      }
+      .legend h2,
+      .route-rail h2,
+      footer h2 {
+        font-size: 0.9rem;
+        margin: 0 0 7px;
+        color: var(--text);
+      }
+      .legend ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+      .legend li {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .swatch,
+      .line {
+        display: inline-block;
+        flex: 0 0 auto;
+      }
+      .swatch {
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        background: var(--swatch);
+      }
+      .line {
+        width: 25px;
+        border-top: 3px solid var(--swatch);
+      }
+      .line.dash {
+        border-top-style: dashed;
+      }
+      main {
+        padding-bottom: 24px;
+      }
+      .flow-viewport {
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: #090d12;
+        padding: 12px;
+        outline-offset: 4px;
+      }
+      .flow-viewport:focus-visible {
+        outline: 3px solid #facc15;
+      }
+      #wrap {
+        min-width: 1340px;
+        max-width: 1760px;
+        margin-inline: auto;
+      }
+      .graph-area {
+        position: relative;
+        min-height: 1180px;
+      }
+      #edges {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        pointer-events: none;
+      }
+      .edge {
+        fill: none;
+        stroke: var(--fwd);
+        stroke-width: 2.4;
+      }
+      .edge.loop {
+        stroke: var(--loop);
+        stroke-dasharray: 7 5;
+      }
+      .edge.exit {
+        stroke: var(--exit);
+      }
+      .edge.abort {
+        stroke: var(--abort);
+        stroke-dasharray: 6 5;
+      }
+      .edge.gate {
+        stroke: var(--gate);
+      }
+      .edge.esc {
+        stroke: var(--esc);
+        stroke-dasharray: 4 5;
+      }
+      .node {
+        position: absolute;
+        width: 270px;
+        min-height: 92px;
+        padding: 12px 13px 12px 18px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface);
+        box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+      }
+      .node::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 5px;
+        border-radius: 10px 0 0 10px;
+        background: var(--agent, var(--host));
+      }
+      .node-title {
+        display: flex;
+        gap: 7px;
+        align-items: baseline;
+        font-size: 0.94rem;
+        font-weight: 750;
+        overflow-wrap: anywhere;
+      }
+      .node-owner {
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 650;
+      }
+      .node-desc {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 0.79rem;
+        overflow-wrap: anywhere;
+      }
+      .badge {
+        margin-inline-start: auto;
+        padding: 2px 6px;
+        border-radius: 999px;
+        background: var(--badge, var(--host));
+        color: #111827;
+        font:
+          750 0.66rem/1.2 system-ui,
+          sans-serif;
+        letter-spacing: 0.05em;
+        white-space: nowrap;
+      }
+      .node.start {
+        --agent: var(--start);
+      }
+      .node.host {
+        --agent: var(--host);
+      }
+      .node.gate {
+        --agent: var(--gate);
+        --badge: var(--gate);
+        background: #25200f;
+      }
+      .node.done {
+        --agent: var(--done);
+        --badge: var(--done);
+        background: #102719;
+      }
+      .node.error {
+        --agent: var(--negative);
+        --badge: var(--negative);
+        background: #30161c;
+      }
+      .node.esc {
+        --agent: var(--esc);
+      }
+      .node.annie {
+        --agent: var(--annie);
+      }
+      .node.carren {
+        --agent: var(--carren);
+      }
+      .node.demetri {
+        --agent: var(--demetri);
+      }
+      .node.echo {
+        --agent: var(--echo);
+      }
+      .node.ida {
+        --agent: var(--ida);
+      }
+      .node.piper {
+        --agent: var(--piper);
+      }
+      .node.skribble {
+        --agent: var(--skribble);
+      }
+      .node.synthia {
+        --agent: var(--synthia);
+      }
+      .node.tabitha {
+        --agent: var(--tabitha);
+      }
+      .node.vera {
+        --agent: var(--vera);
+      }
+      .route-rail {
+        margin-top: 18px;
+        border-top: 1px solid var(--border);
+        padding-top: 14px;
+      }
+      .route-rail > p {
+        margin: 0 0 10px;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      #route-labels {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 9px;
+      }
+      .lbl {
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-inline-start: 4px solid var(--fwd);
+        border-radius: 7px;
+        background: var(--surface-raised);
+        color: var(--text);
+        padding: 7px 9px;
+        font-size: 0.78rem;
+        overflow-wrap: anywhere;
+      }
+      .lbl.loop {
+        border-inline-start-color: var(--loop);
+      }
+      .lbl.exit {
+        border-inline-start-color: var(--exit);
+      }
+      .lbl.abort {
+        border-inline-start-color: var(--abort);
+      }
+      .lbl.gate {
+        border-inline-start-color: var(--gate);
+      }
+      .lbl.esc {
+        border-inline-start-color: var(--esc);
+      }
+      .route-id {
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .route-state {
+        color: var(--muted);
+      }
+      footer {
+        padding: 0 0 44px;
+        color: var(--muted);
+      }
+      footer p {
+        max-width: 105ch;
+      }
+      .sr-only {
+        position: absolute !important;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      @media (max-width: 720px) {
+        header,
+        .callout,
+        .legend,
+        main,
+        footer {
+          width: min(100% - 20px, 1760px);
+        }
+        #route-labels {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition: none !important;
+          animation: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Videogen · internal contract flow</h1>
+      <p class="summary">
+        Registered executor state/repair contract. Dashed optional informational-child branches
+        remain unconnected; no production qualification is claimed.
+      </p>
+    </header>
+    <aside class="callout" aria-label="Key workflow invariant">
+      <p>
+        G1 before image/voice effects; actual voice before G2; actual moving rough cut before G4;
+        current AV and native reviews before G5; local dual-product readback only.
+      </p>
+    </aside>
+    <section class="legend" aria-label="Diagram legend">
+      <div>
+        <h2>State owners and control states</h2>
+        <ul>
+          <li><span class="swatch" style="--swatch: var(--host)"></span>host</li>
+          <li><span class="swatch" style="--swatch: var(--gate)"></span>gate</li>
+          <li><span class="swatch" style="--swatch: var(--done)"></span>positive terminal</li>
+          <li>
+            <span class="swatch" style="--swatch: var(--negative)"></span>non-positive terminal
+          </li>
+          <li>
+            <span class="swatch" style="--swatch: var(--annie)"></span>agent owner (named on card)
+          </li>
+        </ul>
+      </div>
+      <div>
+        <h2>Route kinds</h2>
+        <ul>
+          <li><span class="line" style="--swatch: var(--fwd)"></span>forward</li>
+          <li><span class="line dash" style="--swatch: var(--loop)"></span>policy-led repair</li>
+          <li><span class="line" style="--swatch: var(--exit)"></span>pass / exit</li>
+          <li><span class="line dash" style="--swatch: var(--abort)"></span>abort / deny</li>
+          <li><span class="line dash" style="--swatch: var(--esc)"></span>escalation</li>
+        </ul>
+      </div>
+    </section>
+    <main>
+      <section
+        class="flow-viewport"
+        aria-labelledby="flow-heading"
+        aria-label="Workflow graph; use arrow keys to scroll when it is wider than the window"
+        tabindex="0"
+      >
+        <h2 id="flow-heading" class="sr-only">Workflow graph</h2>
+        <div id="wrap">
+          <div class="graph-area" id="graph-area">
+            <svg id="edges" aria-hidden="true" focusable="false">
+              <defs>
+                <marker
+                  id="arrowhead"
+                  markerWidth="9"
+                  markerHeight="9"
+                  refX="7"
+                  refY="3"
+                  orient="auto"
+                  markerUnits="strokeWidth"
+                >
+                  <path d="M0,0 L7,3 L0,6 Z" fill="context-stroke"></path>
+                </marker>
+              </defs>
+            </svg>
+          </div>
+          <section class="route-rail" aria-labelledby="routes-heading">
+            <h2 id="routes-heading">Route labels</h2>
+            <p>Each numbered route below maps to one directed arrow in the graph.</p>
+            <ol id="route-labels"></ol>
+          </section>
+          <ul id="edge-list" class="sr-only" aria-label="Complete workflow edge list"></ul>
+        </div>
+      </section>
+    </main>
+    <footer>
+      <h2>Notes</h2>
+      <p>
+        This diagram mirrors the executor contract descriptor, including optional
+        informational-child edges that remain unconnected. Every edge is listed in the route rail,
+        including uniform cancellation/error/incomplete exits. Budget spent or unresolved evidence
+        never becomes a fake pass. Workers cannot authorize effects; still images cannot prove full
+        AV playback.
+      </p>
+    </footer>
+    <!-- prettier-ignore -->
+    <script>
+      const N = {
+        "admit": {
+          "title": "admit",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 0
+        },
+        "brief_analysis": {
+          "title": "brief_analysis",
+          "desc": "Identify consequential gaps in the imagined story, audience, emotion, style, identity, pacing, camera/action, voice, rights, must-haves and dislikes.",
+          "cls": "annie",
+          "who": "annie",
+          "lane": "center",
+          "y": 210
+        },
+        "research_fact": {
+          "title": "research_fact",
+          "desc": "Check the one externally verifiable consequential question against the supplied readable sources.",
+          "cls": "echo",
+          "who": "echo",
+          "lane": "center",
+          "y": 420
+        },
+        "story_options": {
+          "title": "story_options",
+          "desc": "Offer two to four materially different story treatments.",
+          "cls": "ida",
+          "who": "ida",
+          "lane": "center",
+          "y": 630
+        },
+        "story_choice": {
+          "title": "story_choice",
+          "desc": "Choose among the exact current story treatments using the brief and evidence.",
+          "cls": "demetri",
+          "who": "demetri",
+          "lane": "center",
+          "y": 840
+        },
+        "story_plan": {
+          "title": "story_plan",
+          "desc": "Plan the scenes and independently replaceable shots.",
+          "cls": "piper",
+          "who": "piper",
+          "lane": "center",
+          "y": 1050
+        },
+        "script_text": {
+          "title": "script_text",
+          "desc": "Write the complete actual dialogue and narration from the exact current outline.",
+          "cls": "skribble",
+          "who": "skribble",
+          "lane": "center",
+          "y": 1260
+        },
+        "story_check": {
+          "title": "story_check",
+          "desc": "Check the outline against the separately authored script.",
+          "cls": "annie",
+          "who": "annie",
+          "lane": "center",
+          "y": 1470
+        },
+        "g1": {
+          "title": "g1",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "gate",
+          "badge": "HITL",
+          "host_only": true,
+          "lane": "center",
+          "y": 1680,
+          "decisions": [
+            "approve",
+            "refine",
+            "deny"
+          ]
+        },
+        "asset_prepare": {
+          "title": "asset_prepare",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 1890
+        },
+        "image_child": {
+          "title": "image_child",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 2100
+        },
+        "voice_capture": {
+          "title": "voice_capture",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 2310
+        },
+        "look_check": {
+          "title": "look_check",
+          "desc": "Check the captured asset ledger against canon, current identity and actual voice evidence.",
+          "cls": "annie",
+          "who": "annie",
+          "lane": "center",
+          "y": 2520
+        },
+        "reference_verify": {
+          "title": "reference_verify",
+          "desc": "Verify objective reference criteria against exact canonical PNGs and captured audio evidence.",
+          "cls": "vera",
+          "who": "vera",
+          "lane": "center",
+          "y": 2730
+        },
+        "reference_critique": {
+          "title": "reference_critique",
+          "desc": "Critique the current reference images for identity, continuity and approved treatment.",
+          "cls": "carren",
+          "who": "carren",
+          "lane": "center",
+          "y": 2940
+        },
+        "g2": {
+          "title": "g2",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "gate",
+          "badge": "HITL",
+          "host_only": true,
+          "lane": "center",
+          "y": 3150,
+          "decisions": [
+            "approve",
+            "refine",
+            "deny"
+          ]
+        },
+        "animatic_plan": {
+          "title": "animatic_plan",
+          "desc": "Plan rational-second board timing and route intents using approved canon and look/voice.",
+          "cls": "piper",
+          "who": "piper",
+          "lane": "center",
+          "y": 3360
+        },
+        "animatic_build": {
+          "title": "animatic_build",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 3570
+        },
+        "g3": {
+          "title": "g3",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "gate",
+          "badge": "HITL",
+          "host_only": true,
+          "lane": "center",
+          "y": 3780,
+          "decisions": [
+            "approve",
+            "refine",
+            "deny"
+          ]
+        },
+        "route_choice": {
+          "title": "route_choice",
+          "desc": "Compare only host-supplied qualified profile alternatives for the selected shot.",
+          "cls": "demetri",
+          "who": "demetri",
+          "lane": "center",
+          "y": 3990
+        },
+        "shot_prepare": {
+          "title": "shot_prepare",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 4200
+        },
+        "draft_apply": {
+          "title": "draft_apply",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 4410
+        },
+        "draft_verify": {
+          "title": "draft_verify",
+          "desc": "Verify the selected current draft shot using full-decode records and exact timestamped frames.",
+          "cls": "vera",
+          "who": "vera",
+          "lane": "center",
+          "y": 4620
+        },
+        "draft_critique": {
+          "title": "draft_critique",
+          "desc": "Critique the selected draft shot for observable identity, composition and editorial fitness.",
+          "cls": "carren",
+          "who": "carren",
+          "lane": "center",
+          "y": 4830
+        },
+        "rough_build": {
+          "title": "rough_build",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 5040
+        },
+        "rough_review": {
+          "title": "rough_review",
+          "desc": "Verify the actual moving draft cut, captured voice and measured timing/coverage records.",
+          "cls": "vera",
+          "who": "vera",
+          "lane": "center",
+          "y": 5250
+        },
+        "rough_critique": {
+          "title": "rough_critique",
+          "desc": "Critique editorial rhythm and continuity of the current rough-cut evidence.",
+          "cls": "carren",
+          "who": "carren",
+          "lane": "center",
+          "y": 5460
+        },
+        "g4": {
+          "title": "g4",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "gate",
+          "badge": "HITL",
+          "host_only": true,
+          "lane": "center",
+          "y": 5670,
+          "decisions": [
+            "approve",
+            "refine",
+            "deny"
+          ]
+        },
+        "final_prepare": {
+          "title": "final_prepare",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 5880
+        },
+        "final_apply": {
+          "title": "final_apply",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 6090
+        },
+        "final_verify": {
+          "title": "final_verify",
+          "desc": "Verify the selected final source against current final criteria, full decode and exact current frames.",
+          "cls": "vera",
+          "who": "vera",
+          "lane": "center",
+          "y": 6300
+        },
+        "final_critique": {
+          "title": "final_critique",
+          "desc": "Critique current final-source evidence after objective verification.",
+          "cls": "carren",
+          "who": "carren",
+          "lane": "center",
+          "y": 6510
+        },
+        "finish_prepare": {
+          "title": "finish_prepare",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 6720
+        },
+        "finish_apply": {
+          "title": "finish_apply",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 6930
+        },
+        "master_verify": {
+          "title": "master_verify",
+          "desc": "Verify current post-transform master, measured picture/audio, caption/sync and frozen package/native evidence.",
+          "cls": "vera",
+          "who": "vera",
+          "lane": "center",
+          "y": 7140
+        },
+        "master_critique": {
+          "title": "master_critique",
+          "desc": "Critique editorial picture evidence for the current post-transform master.",
+          "cls": "carren",
+          "who": "carren",
+          "lane": "center",
+          "y": 7350
+        },
+        "g5": {
+          "title": "g5",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "gate",
+          "badge": "HITL",
+          "host_only": true,
+          "lane": "center",
+          "y": 7560,
+          "decisions": [
+            "approve",
+            "refine",
+            "deny"
+          ]
+        },
+        "delivery_prepare": {
+          "title": "delivery_prepare",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 7770
+        },
+        "delivery_apply": {
+          "title": "delivery_apply",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 7980
+        },
+        "completion_check": {
+          "title": "completion_check",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 8190
+        },
+        "clarify": {
+          "title": "clarify",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "gate",
+          "badge": "HITL",
+          "host_only": true,
+          "lane": "center",
+          "y": 8400,
+          "decisions": [
+            "answer",
+            "cancel"
+          ]
+        },
+        "child_call": {
+          "title": "child_call",
+          "desc": "Host-owned exact-artifact continuation; requires private runtime bindings.",
+          "cls": "host",
+          "badge": "HOST",
+          "host_only": true,
+          "lane": "center",
+          "y": 8610
+        },
+        "evidence_synthesis": {
+          "title": "evidence_synthesis",
+          "desc": "Resolve only the contradictions between the supplied captured findings.",
+          "cls": "synthia",
+          "who": "synthia",
+          "lane": "center",
+          "y": 8820
+        },
+        "delivered": {
+          "title": "delivered",
+          "desc": "Terminal requires independent engine admission; no runtime is connected.",
+          "cls": "done",
+          "badge": "TERM",
+          "host_only": true,
+          "lane": "center",
+          "y": 9030
+        },
+        "incomplete": {
+          "title": "incomplete",
+          "desc": "Terminal requires independent engine admission; no runtime is connected.",
+          "cls": "error",
+          "badge": "TERM",
+          "host_only": true,
+          "lane": "center",
+          "y": 9240
+        },
+        "cancelled": {
+          "title": "cancelled",
+          "desc": "Terminal requires independent engine admission; no runtime is connected.",
+          "cls": "error",
+          "badge": "TERM",
+          "host_only": true,
+          "lane": "center",
+          "y": 9450
+        },
+        "error": {
+          "title": "error",
+          "desc": "Terminal requires independent engine admission; no runtime is connected.",
+          "cls": "error",
+          "badge": "TERM",
+          "host_only": true,
+          "lane": "center",
+          "y": 9660
+        }
+      };
+      const E = [
+        {
+          "from": "admit",
+          "to": "brief_analysis",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "brief_analysis",
+          "to": "research_fact",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "brief_analysis",
+          "to": "story_options",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "brief_analysis",
+          "to": "story_plan",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "research_fact",
+          "to": "story_options",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "research_fact",
+          "to": "story_plan",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "story_options",
+          "to": "story_choice",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "story_choice",
+          "to": "story_plan",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "story_plan",
+          "to": "script_text",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "script_text",
+          "to": "story_check",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "story_check",
+          "to": "g1",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "g1",
+          "to": "asset_prepare",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g1",
+          "to": "story_plan",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g1",
+          "to": "script_text",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g1",
+          "to": "g1",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "asset_prepare",
+          "to": "image_child",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "asset_prepare",
+          "to": "voice_capture",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "asset_prepare",
+          "to": "look_check",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "image_child",
+          "to": "image_child",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "image_child",
+          "to": "voice_capture",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "image_child",
+          "to": "look_check",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "voice_capture",
+          "to": "voice_capture",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "voice_capture",
+          "to": "look_check",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "look_check",
+          "to": "reference_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "reference_verify",
+          "to": "reference_critique",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "reference_critique",
+          "to": "g2",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "g2",
+          "to": "animatic_plan",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g2",
+          "to": "asset_prepare",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "animatic_plan",
+          "to": "animatic_build",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "animatic_build",
+          "to": "g3",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "g3",
+          "to": "route_choice",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g3",
+          "to": "shot_prepare",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g3",
+          "to": "animatic_plan",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "route_choice",
+          "to": "shot_prepare",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "shot_prepare",
+          "to": "draft_apply",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "draft_apply",
+          "to": "draft_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "draft_verify",
+          "to": "draft_critique",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "draft_critique",
+          "to": "route_choice",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "draft_critique",
+          "to": "shot_prepare",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "draft_critique",
+          "to": "rough_build",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "rough_build",
+          "to": "rough_review",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "rough_review",
+          "to": "rough_critique",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "rough_critique",
+          "to": "g4",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "g4",
+          "to": "final_prepare",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g4",
+          "to": "rough_build",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g4",
+          "to": "shot_prepare",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g4",
+          "to": "story_plan",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g4",
+          "to": "script_text",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "final_prepare",
+          "to": "final_apply",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "final_prepare",
+          "to": "final_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "final_apply",
+          "to": "final_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "final_verify",
+          "to": "final_critique",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "final_critique",
+          "to": "final_prepare",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "final_critique",
+          "to": "finish_prepare",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "finish_prepare",
+          "to": "finish_apply",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "finish_apply",
+          "to": "master_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "master_verify",
+          "to": "master_critique",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "master_critique",
+          "to": "g5",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "g5",
+          "to": "delivery_prepare",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g5",
+          "to": "finish_prepare",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g5",
+          "to": "final_prepare",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g5",
+          "to": "story_plan",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g5",
+          "to": "script_text",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "g5",
+          "to": "admit",
+          "kind": "gate",
+          "label": "approve exact scope/version or refine mapped producer"
+        },
+        {
+          "from": "delivery_prepare",
+          "to": "delivery_apply",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "delivery_apply",
+          "to": "completion_check",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "completion_check",
+          "to": "delivered",
+          "kind": "exit",
+          "label": "only all seven engine completion predicates"
+        },
+        {
+          "from": "completion_check",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "clarify",
+          "to": "admit",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "brief_analysis",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "research_fact",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "story_options",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "story_choice",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "story_plan",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "script_text",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "asset_prepare",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "animatic_plan",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "route_choice",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "shot_prepare",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "rough_build",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "final_prepare",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "finish_prepare",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "clarify",
+          "to": "master_critique",
+          "kind": "fwd",
+          "label": "exact matched answer; host-derived producer, no new permission"
+        },
+        {
+          "from": "child_call",
+          "to": "brief_analysis",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "child_call",
+          "to": "story_plan",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "child_call",
+          "to": "story_check",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "child_call",
+          "to": "route_choice",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "child_call",
+          "to": "draft_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "child_call",
+          "to": "master_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "story_check",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "reference_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "draft_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "rough_review",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "final_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "master_verify",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "brief_analysis",
+          "to": "brief_analysis",
+          "kind": "loop",
+          "label": "analysis_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "brief_analysis",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "research_fact",
+          "to": "research_fact",
+          "kind": "loop",
+          "label": "evidence_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "research_fact",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "story_options",
+          "to": "story_options",
+          "kind": "loop",
+          "label": "analysis_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "story_options",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "story_choice",
+          "to": "story_options",
+          "kind": "loop",
+          "label": "analysis_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "story_choice",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "story_plan",
+          "to": "story_plan",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "story_plan",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "script_text",
+          "to": "script_text",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "script_text",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "story_check",
+          "to": "story_plan",
+          "kind": "loop",
+          "label": "validation_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "story_check",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "story_check",
+          "to": "script_text",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "look_check",
+          "to": "asset_prepare",
+          "kind": "loop",
+          "label": "analysis_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "look_check",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "reference_verify",
+          "to": "asset_prepare",
+          "kind": "loop",
+          "label": "validation_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "reference_verify",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "reference_critique",
+          "to": "asset_prepare",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "reference_critique",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "animatic_plan",
+          "to": "animatic_plan",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "animatic_plan",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "route_choice",
+          "to": "route_choice",
+          "kind": "loop",
+          "label": "analysis_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "route_choice",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "draft_verify",
+          "to": "shot_prepare",
+          "kind": "loop",
+          "label": "validation_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "draft_verify",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "draft_critique",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "rough_review",
+          "to": "rough_build",
+          "kind": "loop",
+          "label": "validation_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "rough_review",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "rough_critique",
+          "to": "rough_build",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "rough_critique",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "final_verify",
+          "to": "final_prepare",
+          "kind": "loop",
+          "label": "validation_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "final_verify",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "final_critique",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "master_verify",
+          "to": "finish_prepare",
+          "kind": "loop",
+          "label": "validation_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "master_verify",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "master_verify",
+          "to": "final_prepare",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "master_critique",
+          "to": "finish_prepare",
+          "kind": "loop",
+          "label": "product_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "master_critique",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "evidence_synthesis",
+          "kind": "loop",
+          "label": "synthesis_gap; policy-led repair and fresh evidence"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "brief_analysis",
+          "to": "child_call",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "story_plan",
+          "to": "child_call",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "story_check",
+          "to": "child_call",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "route_choice",
+          "to": "child_call",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "draft_verify",
+          "to": "child_call",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "master_verify",
+          "to": "child_call",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "story_check",
+          "to": "evidence_synthesis",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "reference_verify",
+          "to": "evidence_synthesis",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "draft_verify",
+          "to": "evidence_synthesis",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "rough_review",
+          "to": "evidence_synthesis",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "final_verify",
+          "to": "evidence_synthesis",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "master_verify",
+          "to": "evidence_synthesis",
+          "kind": "fwd",
+          "label": "validated current products and host-selected condition"
+        },
+        {
+          "from": "brief_analysis",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "research_fact",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "story_options",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "story_choice",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "story_plan",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "script_text",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "story_check",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "look_check",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "reference_verify",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "reference_critique",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "animatic_plan",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "route_choice",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "draft_verify",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "draft_critique",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "rough_review",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "rough_critique",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "final_verify",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "final_critique",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "master_verify",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "master_critique",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "admit",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "g1",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "asset_prepare",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "image_child",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "voice_capture",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "g2",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "animatic_build",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "g3",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "shot_prepare",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "draft_apply",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "rough_build",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "g4",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "final_prepare",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "final_apply",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "finish_prepare",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "finish_apply",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "g5",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "delivery_prepare",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "delivery_apply",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "completion_check",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "child_call",
+          "to": "clarify",
+          "kind": "esc",
+          "label": "material question; no effect permission"
+        },
+        {
+          "from": "brief_analysis",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "brief_analysis",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "research_fact",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "research_fact",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "story_options",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "story_options",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "story_choice",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "story_choice",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "story_plan",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "story_plan",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "script_text",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "script_text",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "story_check",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "story_check",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "look_check",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "look_check",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "reference_verify",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "reference_verify",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "reference_critique",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "reference_critique",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "animatic_plan",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "animatic_plan",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "route_choice",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "route_choice",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "draft_verify",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "draft_verify",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "draft_critique",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "draft_critique",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "rough_review",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "rough_review",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "rough_critique",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "rough_critique",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "final_verify",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "final_verify",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "final_critique",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "final_critique",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "master_verify",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "master_verify",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "master_critique",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "master_critique",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "evidence_synthesis",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "admit",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "admit",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "admit",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "g1",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "g1",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "g1",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "asset_prepare",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "asset_prepare",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "asset_prepare",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "image_child",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "image_child",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "image_child",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "voice_capture",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "voice_capture",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "voice_capture",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "g2",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "g2",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "g2",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "animatic_build",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "animatic_build",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "animatic_build",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "g3",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "g3",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "g3",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "shot_prepare",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "shot_prepare",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "shot_prepare",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "draft_apply",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "draft_apply",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "draft_apply",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "rough_build",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "rough_build",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "rough_build",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "g4",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "g4",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "g4",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "final_prepare",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "final_prepare",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "final_prepare",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "final_apply",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "final_apply",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "final_apply",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "finish_prepare",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "finish_prepare",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "finish_prepare",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "finish_apply",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "finish_apply",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "finish_apply",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "g5",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "g5",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "g5",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "delivery_prepare",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "delivery_prepare",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "delivery_prepare",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "delivery_apply",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "delivery_apply",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "delivery_apply",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "completion_check",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "completion_check",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "clarify",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "clarify",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "clarify",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        },
+        {
+          "from": "child_call",
+          "to": "incomplete",
+          "kind": "abort",
+          "label": "deny, blocker or exhausted budget; met:false"
+        },
+        {
+          "from": "child_call",
+          "to": "cancelled",
+          "kind": "abort",
+          "label": "cancel; unresolved remote work remains quarantined"
+        },
+        {
+          "from": "child_call",
+          "to": "error",
+          "kind": "abort",
+          "label": "unrecoverable corruption; met:false"
+        }
+      ];
+      const graph = document.getElementById("graph-area");
+      const svg = document.getElementById("edges");
+      const routes = document.getElementById("route-labels");
+      const edgeList = document.getElementById("edge-list");
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const nodeWidth = 270;
+      const edgeColor = {
+        fwd: "#aab7c7",
+        gate: "#fbbf24",
+        loop: "#fbbf24",
+        exit: "#4ade80",
+        abort: "#fb7185",
+        esc: "#cbd5e1",
+      };
+
+      function point(rect, side) {
+        if (side === "top") return { x: rect.x + rect.width / 2, y: rect.y };
+        if (side === "left") return { x: rect.x, y: rect.y + rect.height / 2 };
+        if (side === "right") return { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+      }
+
+      function sides(source, target) {
+        if (source.x + source.width <= target.x) return ["right", "left"];
+        if (target.x + target.width <= source.x) return ["left", "right"];
+        if (source.y <= target.y) return ["bottom", "top"];
+        return ["top", "bottom"];
+      }
+
+      function control(pointValue, side, width, height, bend) {
+        const step = 76 + Math.abs(bend);
+        const clampX = (value) => Math.max(12, Math.min(width - 12, value));
+        const clampY = (value) => Math.max(12, Math.min(height - 12, value));
+        if (side === "top")
+          return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y - step) };
+        if (side === "left")
+          return { x: clampX(pointValue.x - step), y: clampY(pointValue.y + bend) };
+        if (side === "right")
+          return { x: clampX(pointValue.x + step), y: clampY(pointValue.y + bend) };
+        return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y + step) };
+      }
+
+      function appendText(parent, className, text) {
+        const element = document.createElement("span");
+        element.className = className;
+        element.textContent = text;
+        parent.append(element);
+        return element;
+      }
+
+      function render() {
+        const width = Math.max(
+          1340,
+          Math.min(1760, document.querySelector(".flow-viewport").clientWidth - 24)
+        );
+        const viewport = document.querySelector(".flow-viewport");
+        const previousViewportWidth = Number(viewport.dataset.viewportWidth || "0");
+        document.getElementById("wrap").style.width = `${width}px`;
+        if (
+          viewport.clientWidth < width &&
+          (previousViewportWidth === 0 || previousViewportWidth >= width)
+        ) {
+          viewport.scrollLeft = Math.round((width - viewport.clientWidth) / 2);
+        }
+        viewport.dataset.viewportWidth = `${viewport.clientWidth}`;
+        graph.replaceChildren(svg);
+        routes.replaceChildren();
+        edgeList.replaceChildren();
+        const nodeRects = new Map();
+        const lanes = { left: 42, center: (width - nodeWidth) / 2, right: width - nodeWidth - 42 };
+        for (const [id, node] of Object.entries(N)) {
+          const card = document.createElement("article");
+          card.className = `node ${node.cls}`;
+          card.id = `node-${id}`;
+          card.dataset.nodeId = id;
+          card.style.left = `${lanes[node.lane]}px`;
+          card.style.top = `${node.y}px`;
+          const title = document.createElement("div");
+          title.className = "node-title";
+          appendText(title, "node-state", node.title);
+          if (node.who) appendText(title, "node-owner", `· ${node.who}`);
+          if (node.badge) appendText(title, "badge", node.badge);
+          const desc = document.createElement("p");
+          desc.className = "node-desc";
+          desc.textContent = node.desc;
+          card.append(title, desc);
+          graph.append(card);
+        }
+        let graphHeight = 0;
+        for (const [id] of Object.entries(N)) {
+          const card = document.getElementById(`node-${id}`);
+          const x = Number.parseFloat(card.style.left);
+          const y = Number.parseFloat(card.style.top);
+          const rect = { x, y, width: card.offsetWidth, height: card.offsetHeight };
+          nodeRects.set(id, rect);
+          graphHeight = Math.max(graphHeight, y + rect.height + 38);
+        }
+        graph.style.height = `${Math.max(1180, graphHeight)}px`;
+        svg.setAttribute("viewBox", `0 0 ${width} ${graph.clientHeight}`);
+        for (const [index, edge] of E.entries()) {
+          const source = nodeRects.get(edge.from);
+          const target = nodeRects.get(edge.to);
+          const [sourceSide, targetSide] =
+            edge.s1 && edge.s2 ? [edge.s1, edge.s2] : sides(source, target);
+          const from = point(source, sourceSide);
+          const to = point(target, targetSide);
+          const bend = edge.bow || (edge.kind === "loop" ? 58 : 0);
+          const sourceControl = control(from, sourceSide, width, graph.clientHeight, bend);
+          const targetControl = control(
+            to,
+            targetSide,
+            width,
+            graph.clientHeight,
+            edge.kind === "exit" ? -bend : bend
+          );
+          const path = document.createElementNS(SVG_NS, "path");
+          path.classList.add("edge", edge.kind);
+          path.dataset.edgeIndex = String(index);
+          path.setAttribute(
+            "d",
+            `M ${from.x} ${from.y} C ${sourceControl.x} ${sourceControl.y}, ${targetControl.x} ${targetControl.y}, ${to.x} ${to.y}`
+          );
+          path.setAttribute("stroke", edgeColor[edge.kind]);
+          path.setAttribute("marker-end", "url(#arrowhead)");
+          svg.append(path);
+
+          const visibleRoute = document.createElement("li");
+          visibleRoute.className = `lbl ${edge.kind}`;
+          visibleRoute.dataset.edgeIndex = String(index);
+          appendText(visibleRoute, "route-id", `${index + 1}. `);
+          appendText(visibleRoute, "route-state", `${edge.from} → ${edge.to}: `);
+          visibleRoute.append(document.createTextNode(edge.label));
+          routes.append(visibleRoute);
+
+          const accessibleRoute = document.createElement("li");
+          accessibleRoute.textContent = `${edge.from} to ${edge.to}: ${edge.label} (${edge.kind})`;
+          edgeList.append(accessibleRoute);
+        }
+      }
+      render();
+      window.addEventListener("resize", render);
+    </script>
+  </body>
+</html>

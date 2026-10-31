@@ -19,8 +19,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { initKb, queryKb } from "../src/kb/workflows.js";
-import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
+import { initKb, queryKb } from "../dist/kb/workflows.js";
+import { readPolicy, writePolicy } from "../dist/kb/filesystem.js";
 
 /** The active parent identity these runs execute under (§5.3). */
 const E2E_PARENT = { provider: "ollama", model: "qwen327b:latest" };
@@ -42,33 +42,33 @@ function installTestPolicy(kbRoot: string): void {
     allowed_child_models: [{ ...E2E_PARENT, locality: "local" }],
   });
 }
-import { mintSourceCapability } from "../src/kb/gate.js";
+import { mintSourceCapability } from "../dist/kb/gate.js";
 import {
   ContentReviewService,
   authenticateLocalContentReviewer,
-} from "../src/kb/content-review.js";
-import { readSelectedGeneration } from "../src/kb/generations.js";
-import { CapabilityStore } from "../src/kb/capabilities.js";
-import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
-import { Checkpointer } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { admitOperationStart } from "../src/kb/operation-starts.js";
-import { ArtifactStore } from "../src/artifact-store.js";
-import { OrchestrationEngine } from "../src/engine.js";
-import { kbLivenessPolicy } from "../src/liveness.js";
+} from "../dist/kb/content-review.js";
+import { readSelectedGeneration } from "../dist/kb/generations.js";
+import { CapabilityStore } from "../dist/kb/capabilities.js";
+import { KbWorkerClient } from "../dist/kb/kb-worker-client.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { admitOperationStart } from "../dist/kb/operation-starts.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { OrchestrationEngine } from "../dist/engine.js";
+import { kbLivenessPolicy } from "../dist/liveness.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
+import { OrchestrationRunner, WorkerExecutor } from "../dist/worker.js";
 import {
   createTestOnlyArtifactBodyRunner,
   type KbPhaseInvocation,
-} from "../src/kb/session-tools.js";
-import type { Directive } from "../src/contracts.js";
+} from "../dist/kb/session-tools.js";
+import type { Directive } from "../dist/contracts.js";
 import {
   IngestVerificationReportSchema,
   PageDraftArtifactSchema,
   ReadPhaseBriefResultSchema,
   validateKbContract,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 import { kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
@@ -339,7 +339,7 @@ async function driveToGate(stack: Stack, capIds: readonly string[]): Promise<Dir
   const workers = new WorkerExecutor(stack.worker, new ArtifactStore(stack.artifactRoot), {
     projectRoot: stack.projectRoot,
     parallelConcurrency: 1,
-    workerTimeoutMs: 20_000,
+    fallbackInactivityLeaseMs: 20_000,
   });
   workers.setReceiptAuthority(stack.engine.receiptAuthority);
   const runner = new OrchestrationRunner(stack.engine, workers);

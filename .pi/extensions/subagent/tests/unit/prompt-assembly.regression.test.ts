@@ -11,15 +11,11 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { initializePennyState } from "@penny/orchestration/source";
+import { initializePennyState } from "@penny/orchestration";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  createTestExtensionApi,
-  isRecord,
-  requireFunction,
-  requireString,
-} from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord, requireFunction, requireString } from "../../../../lib/tests/test-narrowers.js";
 
 const { mockSpawn } = vi.hoisted(() => ({
   mockSpawn: vi.fn(),

@@ -31,8 +31,3 @@ Accepting, creating, extracting, transforming, storing, serving, or deleting fil
 
 - [Input validation](input-validation.md) owns boundary validation.
 - [Resource limits](resource-limits.md) owns budgets; [configuration](configuration.md) and [secrets](secrets.md) cover storage isolation.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

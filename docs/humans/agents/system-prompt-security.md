@@ -6,19 +6,31 @@ System prompt security is the set of layered controls that keep untrusted conten
 
 ## The Layered Controls
 
-1. **System-role authority.** Penny's operating policy is delivered in the system role, which models are trained to prioritize over user-role content.
+1. **Instruction authority, not permission enforcement.** Penny's operating policy is delivered
+   in the system role. Role placement and markers guide interpretation; they do not stop an
+   authorized tool interface from causing effects.
 2. **User-authorized task scope.** The user's message is authoritative for the goal and request-specific constraints — but not for system policy, tools, permissions, credentials, or consequence limits.
-3. **YAML maximums, fixed orchestration subsets, and exact IDs.** Direct/parallel/chain catalog workers and orchestration phases without a subset activate the agent YAML list exactly. One eligible TypeScript orchestration phase may use a fixed non-empty duplicate-free strict YAML subset bound into its canonical registration digest and worker metadata. Trust profiles, tasks, inputs, runtime conditions, model/liveness policy, and optional services cannot select it. `artifact_read` performs direct exact-ID lookup and byte verification without grants or expiry; YAML-declared read-only memory is advisory only.
+3. **YAML maxima, registered subsets, and exact IDs.** The
+   [binding runtime rule](../../agents/agents/discovery-and-tools.md#binding-runtime-rule)
+   owns catalog selection, including its guarded zero-tool exception. Profiles statically
+   lint the YAML maximum, not runtime phase selection. `artifact_read` verifies exact IDs
+   and bytes without granting authority or proving payload claims true; memory is advisory.
 
-   Allowlists are now derived from a declared authority class rather than hand-curated, and a CI check fails the build if a role's tools drift from the authority it claims. This closed a real gap: several roles that declared themselves read-only in prose held form-fill, file-upload, and arbitrary-code-execution tools. **Be precise about what that fixed.** Browser authority is now structural — a read-only role genuinely cannot submit a form or execute Playwright code. Filesystem and shell authority are not: every agent still holds `bash`, so a read-only role can still write files, install packages, and reach the network. The allowlist bounds the browser surface; the host boundary and user supervision still bound everything else. See [Tool Authority Profiles](tool-profiles.md).
+   Browser ceilings exclude dedicated fill/upload/evaluate interfaces, not every possible
+   mutation: clicks and keys can submit forms. Roles holding `bash` can still mutate files,
+   processes, and networks. See [Tool Authority Profiles](tool-profiles.md).
 
 4. **Workflow approval states and signed receipts.** Consequential skill-workflow steps require approval gates backed by HMAC receipts, not prompt promises.
-5. **No filesystem sandbox currently (2026-08-06).** Agents invoked by a workflow skill previously ran under Bubblewrap (filesystem mounted read-only except the work target and selected state paths, owner-protected paths shadowed). That layer was removed after testing showed it did not address the runtime failure mode it had been introduced to mitigate; receipt/approval secrets are still stripped from every spawned agent's environment regardless. A containerized replacement is planned but not yet implemented.
+5. **No filesystem/process sandbox on catalog-worker paths.** Approval/receipt secrets
+   are stripped from spawned environments, but fresh context and a tool allowlist do not
+   reduce host OS permissions or prevent extension code from loading.
+
 6. **Host/container isolation for primary and direct paths.** The primary session and direct subagent calls run with the invoking user's OS permissions. For untrusted repositories or unattended work, use an external container or VM.
 
 ## What the Markers Actually Do
 
-Markers give the model a clear structural map: here is stable policy, here is the role, here is domain guidance, here is project context, here is the task. That clarity genuinely helps models resist confusion attacks — content after the boundary claiming to be system instructions is visibly out of place. But position in the prompt is a cue, not a privilege mechanism. Treat marker language that says "cannot be overridden" as aspiration unless a runtime control backs it.
+Markers give the model a clear structural map: here is stable policy, here is the role, here is domain guidance, here is project context, here is the task. Content after a boundary claiming to be system instructions is still subordinate content;
+markers do not prove resistance to such an attack. But position in the prompt is a cue, not a privilege mechanism. Treat marker language that says "cannot be overridden" as aspiration unless a runtime control backs it.
 
 ## Authority in One Sentence
 
@@ -26,12 +38,12 @@ The user defines the task; external content may supply evidence or designated re
 
 ## Security by Execution Path
 
-| Execution path                         | Context/tool isolation                                                                  | Filesystem/process isolation                                                                                                        | Effective boundary                                                                                    |
-| -------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Primary Penny session                  | Pi system role plus current tool inventory                                              | Pi runs with the invoking user's permissions; no Pi built-in sandbox                                                                | Host OS/container, actual tool surface, explicit approvals, user supervision                          |
-| Direct `subagent(...)`                 | Separate Pi process/context; exact-YAML agent allowlist                                 | No filesystem/process sandbox on this path                                                                                          | Host OS/container plus tool allowlist — separate context is not a filesystem sandbox                  |
-| Skill-invoked agent                    | Separate process/context; exact YAML or one fixed registration-bound strict YAML subset | No filesystem/process sandbox (Bubblewrap removed 2026-08-06; approval/receipt secrets still stripped from the spawned environment) | Selected tool-call surface, workflow gates, receipts, and host boundary; not extension-code isolation |
-| Untrusted repository / unattended work | Depends on selected path                                                                | Use an external container, VM, or micro-VM with minimal mounts, credentials, and network                                            | OS or virtualization boundary                                                                         |
+| Execution path                         | Context/tool isolation                                                                  | Filesystem/process isolation                                                                  | Effective boundary                                                                                    |
+| -------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Primary Penny session                  | Pi system role plus current tool inventory                                              | Pi runs with the invoking user's permissions; no Pi built-in sandbox                          | Host OS/container, actual tool surface, explicit approvals, user supervision                          |
+| Direct `subagent(...)`                 | Separate Pi process/context; exact-YAML agent allowlist                                 | No filesystem/process sandbox on this path                                                    | Host OS/container plus tool allowlist — separate context is not a filesystem sandbox                  |
+| Skill-invoked agent                    | Separate process/context; exact YAML or one fixed registration-bound strict YAML subset | No filesystem/process sandbox; approval/receipt secrets stripped from the spawned environment | Selected tool-call surface, workflow gates, receipts, and host boundary; not extension-code isolation |
+| Untrusted repository / unattended work | Depends on selected path                                                                | Use an external container, VM, or micro-VM with minimal mounts, credentials, and network      | OS or virtualization boundary                                                                         |
 
 One more subtlety: the agent runner force-loads Penny's extension modules so providers can register regardless of working directory. The selected `--tools` allowlist—exact YAML or the eligible registration-bound strict subset—controls what the model can call; it does not prevent extension code from loading. An `artifact_read`-only active surface is therefore not OS/process sandboxing or extension-code isolation. An artifact ID is a communication address, while runtime checks still enforce manifest identity, path containment, digest, length, and UTF-8 ranges.
 

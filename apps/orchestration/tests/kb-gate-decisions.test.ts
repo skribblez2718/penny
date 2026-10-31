@@ -12,14 +12,14 @@ import {
   validateGateDecisionReceipt,
   validateRetrievalFixture,
   type ObservationPairEvidenceV1,
-} from "../src/kb/gate-decisions.js";
+} from "../dist/kb/gate-decisions.js";
 import {
   canonicalJson,
   sha256Hex,
   type ObservationCohortManifestV1,
   type ObservationWindowDecisionV1,
   type ResearchObservationProjectionV1,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../..");

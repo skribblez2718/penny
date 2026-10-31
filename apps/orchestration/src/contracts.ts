@@ -111,6 +111,8 @@ export type CurrentArtifactRef = ArtifactRef;
 export const InputArtifactBindingSchema = Type.Object(
   {
     slot: Id,
+    /** Omission retains the native typed-port path; context never binds a native port. */
+    designation: Type.Optional(Type.Union([Type.Literal("binding"), Type.Literal("context")])),
     ref: ArtifactRefSchema,
   },
   { additionalProperties: false }
@@ -139,6 +141,8 @@ export const CurrentOutputArtifactMetadataSchema = Type.Object(
     media_type: Id,
     content_schema: Type.Optional(ContentSchemaIdentityV1Schema),
     parent_ref: Type.Union([ArtifactRefSchema, Type.Null()]),
+    /** Optional domain revision parent when an operation-addressed artifact remains version 1. */
+    domain_revision_parent_ref: Type.Optional(Type.Union([ArtifactRefSchema, Type.Null()])),
     upstream_refs: Type.Array(ArtifactRefSchema),
   },
   { additionalProperties: false }
@@ -160,6 +164,27 @@ export const ExecutionReceiptSchema = Type.Object(
     executor: Type.Literal("pi-sdk"),
     command: Type.Array(Id, { minItems: 1, maxItems: 16 }),
     model: Type.Union([Id, Type.Null()]),
+    requested_model: Type.Optional(
+      Type.Object(
+        {
+          schema_version: Type.Literal(1),
+          alias: Id,
+          override: Id,
+          provider: Id,
+          model: Type.String({ minLength: 1, maxLength: 512 }),
+        },
+        { additionalProperties: false }
+      )
+    ),
+    observed_model: Type.Optional(
+      Type.Object(
+        {
+          provider: Id,
+          model: Type.String({ minLength: 1, maxLength: 512 }),
+        },
+        { additionalProperties: false }
+      )
+    ),
     working_directory: Id,
     trust_profile: TrustProfileSchema,
     started_at: IsoTimestamp,
@@ -204,7 +229,7 @@ export const LivenessTerminalReasonSchema = Type.Union([
 ]);
 export type LivenessTerminalReason = Static<typeof LivenessTerminalReasonSchema>;
 
-const LivenessRepairPolicySchema = Type.Object(
+const HistoricalLivenessRepairPolicySchema = Type.Object(
   {
     max_invocations_per_state_branch: Type.Literal(1),
     model_turns_per_worker: Type.Literal(4),
@@ -215,6 +240,7 @@ const LivenessRepairPolicySchema = Type.Object(
   { additionalProperties: false }
 );
 
+/** Historical record verification only; never accepted by the execution codec. */
 export const LivenessPolicyV1Schema = Type.Object(
   {
     schema_version: Type.Literal(1),
@@ -233,17 +259,12 @@ export const LivenessPolicyV1Schema = Type.Object(
     identical_malformed_digest_limit: Type.Literal(2),
     protocol_errors_per_worker: Type.Literal(4),
     identical_protocol_digest_limit: Type.Literal(2),
-    routing_repair: LivenessRepairPolicySchema,
+    routing_repair: HistoricalLivenessRepairPolicySchema,
   },
   { additionalProperties: false }
 );
-export type LivenessPolicyV1 = Static<typeof LivenessPolicyV1Schema>;
 
-/**
- * New ordinary-work policy. Counters remain observable, but ordinary phase/model/tool/external
- * counts are deliberately absent: they are not termination authority. Routing-only repair and
- * malformed/protocol protections remain bounded separately.
- */
+/** Historical Research budget artifacts retain this exact storage schema, not execution authority. */
 export const LivenessPolicyV2Schema = Type.Object(
   {
     schema_version: Type.Literal(2),
@@ -255,18 +276,29 @@ export const LivenessPolicyV2Schema = Type.Object(
     identical_malformed_digest_limit: Type.Literal(2),
     protocol_errors_per_worker: Type.Literal(4),
     identical_protocol_digest_limit: Type.Literal(2),
-    routing_repair: LivenessRepairPolicySchema,
+    routing_repair: HistoricalLivenessRepairPolicySchema,
   },
   { additionalProperties: false }
 );
-export type LivenessPolicyV2 = Static<typeof LivenessPolicyV2Schema>;
 
-const LivenessRepairPolicyV3Schema = Type.Object(
+const LivenessRepairPolicySchema = Type.Object(
   {
-    max_invocations_per_state_branch: Type.Literal(1),
-    model_turns_per_worker: Type.Literal(4),
-    tool_calls_per_worker: Type.Literal(2),
-    external_calls_per_worker: Type.Literal(0),
+    max_invocations_per_state_branch: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    model_turns_per_worker: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    tool_calls_per_worker: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    external_calls_per_worker: Type.Union([
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
   },
   { additionalProperties: false }
 );
@@ -276,7 +308,7 @@ const LivenessRepairPolicyV3Schema = Type.Object(
  * conservative unknown-provider fallbacks. It carries no total elapsed-work or run-duration
  * budget; exact provider/model lease bindings are persisted when the runtime resolves a model.
  */
-export const LivenessPolicyV3Schema = Type.Object(
+export const LivenessPolicySchema = Type.Object(
   {
     schema_version: Type.Literal(3),
     scope: Type.String({ pattern: "^[a-z][a-z0-9-]*$", maxLength: 128 }),
@@ -291,22 +323,26 @@ export const LivenessPolicyV3Schema = Type.Object(
       maximum: 2_592_000_000,
     }),
     renewal_policy: Type.Literal("trusted_host_activity_or_convergence_v1"),
-    malformed_results_per_state_branch: Type.Literal(2),
-    identical_malformed_digest_limit: Type.Literal(2),
-    protocol_errors_per_worker: Type.Literal(4),
-    identical_protocol_digest_limit: Type.Literal(2),
-    routing_repair: LivenessRepairPolicyV3Schema,
+    malformed_results_per_state_branch: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    identical_malformed_digest_limit: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    protocol_errors_per_worker: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    identical_protocol_digest_limit: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    routing_repair: LivenessRepairPolicySchema,
   },
   { additionalProperties: false }
 );
-export type LivenessPolicyV3 = Static<typeof LivenessPolicyV3Schema>;
-
-/** Durable policy reader: V1/V2 records retain exact historical behavior; new runs bind V3. */
-export const LivenessPolicySchema = Type.Union([
-  LivenessPolicyV1Schema,
-  LivenessPolicyV2Schema,
-  LivenessPolicyV3Schema,
-]);
 export type LivenessPolicy = Static<typeof LivenessPolicySchema>;
 
 export const LivenessSnapshotV1Schema = Type.Object(
@@ -542,6 +578,79 @@ export const ChildWorkflowPolicyBindingV1Schema = Type.Object(
 );
 export type ChildWorkflowPolicyBindingV1 = Static<typeof ChildWorkflowPolicyBindingV1Schema>;
 
+/** Exact operation-specific artifact contract accepted by the asynchronous host-operation owner. */
+export const HostOperationArtifactContractV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    port_name: Id,
+    artifact_kind: ArtifactKind,
+    schema_id: SchemaIdSchema,
+    schema_version_required: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false }
+);
+export type HostOperationArtifactContractV1 = Static<typeof HostOperationArtifactContractV1Schema>;
+
+/** Registration-derived authority projection frozen into each host-operation directive. */
+export const HostOperationPolicyBindingV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    declaration_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    adapter_id: Id,
+    backend_binding_id: Id,
+    backend_key_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    lease_profile_id: Id,
+    lease_profile_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    operation_inactivity_ms: Type.Integer({ minimum: 1, maximum: 2_592_000_000 }),
+  },
+  { additionalProperties: false }
+);
+export type HostOperationPolicyBindingV1 = Static<typeof HostOperationPolicyBindingV1Schema>;
+
+/**
+ * Internal asynchronous host-operation directive. Only OrchestrationRunner may delegate it to the
+ * registered owner; workers and model tools have no execution branch for this action.
+ */
+export const HostEffectLogicalIdentityV1Schema = Type.Object(
+  {
+    project_id: Id,
+    run_id: Id,
+    state_id: Id,
+    visit: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+    attempt: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+    kind: Id,
+    scope_ref: ArtifactRefSchema,
+    predecessor_ref: ArtifactRefSchema,
+    slot: Id,
+  },
+  { additionalProperties: false }
+);
+export type HostEffectLogicalIdentityV1 = Static<typeof HostEffectLogicalIdentityV1Schema>;
+
+export const InvokeHostOperationDirectiveV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(2),
+    host_operation_schema_version: Type.Literal(1),
+    /** Exact optional request-before-intent protocol; absent preserves legacy directives. */
+    effect_intent_ref: Type.Optional(ArtifactRefSchema),
+    effect_identity: Type.Optional(HostEffectLogicalIdentityV1Schema),
+    action: Type.Literal("invoke_host_operation"),
+    identity: RunIdentitySchema,
+    state_id: Id,
+    attempt: Type.Integer({ minimum: 1 }),
+    operation_id: Id,
+    operation_kind: Id,
+    registration_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    request_ref: ArtifactRefSchema,
+    request_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    input_artifacts: InputArtifactsSchema,
+    expected_result: HostOperationArtifactContractV1Schema,
+    policy_binding: HostOperationPolicyBindingV1Schema,
+  },
+  { additionalProperties: false }
+);
+export type InvokeHostOperationDirectiveV1 = Static<typeof InvokeHostOperationDirectiveV1Schema>;
+
 /**
  * Lease-bound new-call directive. The legacy schema-version-2 directive remains separately
  * parseable for exact historical replay. New calls intentionally carry no guessed model-turn,
@@ -599,7 +708,7 @@ export const InvokeChildWorkflowDirectiveSchema = Type.Object(
 );
 export type InvokeChildWorkflowDirective = Static<typeof InvokeChildWorkflowDirectiveSchema>;
 
-const ChildWorkflowGateProjectionV1Schema = Type.Object(
+export const ChildWorkflowGateProjectionV1Schema = Type.Object(
   {
     schema_version: Type.Literal(1),
     call_id: Id,
@@ -607,6 +716,19 @@ const ChildWorkflowGateProjectionV1Schema = Type.Object(
     child_gate_id: Id,
     child_challenge: Id,
     child_payload_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  },
+  { additionalProperties: false }
+);
+
+/** Explicitly versioned projection; older readers refuse rather than reinterpret it. */
+export const ChildWorkflowGateProjectionV2Schema = Type.Object(
+  {
+    ...ChildWorkflowGateProjectionV1Schema.properties,
+    schema_version: Type.Literal(2),
+    parent_registration_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    child_registration_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    invocation_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    child_gate_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
   },
   { additionalProperties: false }
 );
@@ -620,7 +742,9 @@ export const UserGateDirectiveSchema = Type.Object(
     gate_id: Id,
     challenge: Id,
     payload_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
-    child_workflow: Type.Optional(ChildWorkflowGateProjectionV1Schema),
+    child_workflow: Type.Optional(
+      Type.Union([ChildWorkflowGateProjectionV1Schema, ChildWorkflowGateProjectionV2Schema])
+    ),
     questions: Type.Array(
       Type.Object(
         {
@@ -843,6 +967,7 @@ export const DirectiveSchema = Type.Union([
   InvokeParallelDirectiveSchema,
   InvokeChildWorkflowDirectiveSchema,
   LeaseBoundInvokeChildWorkflowDirectiveV1Schema,
+  InvokeHostOperationDirectiveV1Schema,
   UserGateDirectiveSchema,
   TerminalDirectiveSchema,
   PausedDirectiveSchema,
@@ -885,7 +1010,7 @@ export const FeedbackKindSchema = Type.Union([
 ]);
 export type FeedbackKind = Static<typeof FeedbackKindSchema>;
 
-export const EvaluationResultV2Schema = Type.Object(
+export const EvaluationResultSchema = Type.Object(
   {
     schema_version: Type.Literal(2),
     kind: FeedbackKindSchema,
@@ -895,7 +1020,7 @@ export const EvaluationResultV2Schema = Type.Object(
   },
   { additionalProperties: false }
 );
-export type EvaluationResultV2 = Static<typeof EvaluationResultV2Schema>;
+export type EvaluationResult = Static<typeof EvaluationResultSchema>;
 
 const RepairStateIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 
@@ -948,13 +1073,30 @@ export const FeedbackRouteEvidenceV1Schema = Type.Object(
     feedback_kind: FeedbackKindSchema,
     detail_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
     strategy_delta_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
-    disposition: Type.Union([Type.Literal("repair"), Type.Literal("exhausted")]),
+    disposition: Type.Union([
+      Type.Literal("repair"),
+      Type.Literal("exhausted"),
+      Type.Literal("stalled"),
+      Type.Literal("progress_invalid"),
+    ]),
+    repair_progress_v1: Type.Optional(
+      Type.Object(
+        {
+          branch_id: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
+          fingerprint: Type.Union([Type.String({ pattern: "^[a-f0-9]{64}$" }), Type.Null()]),
+        },
+        { additionalProperties: false }
+      )
+    ),
     target_state: RepairStateIdSchema,
     budget: Type.Object(
       {
         counter: Type.Literal("iteration"),
         used_before: Type.Integer({ minimum: 0 }),
-        limit: Type.Integer({ minimum: 1 }),
+        limit: Type.Union([
+          Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+          Type.Null(),
+        ]),
         used_after: Type.Integer({ minimum: 0 }),
       },
       { additionalProperties: false }
@@ -1211,7 +1353,9 @@ export const SkillContractSchema = Type.Object(
     io: Type.Object(
       {
         request: SkillContractPortV1Schema,
-        input_ports: Type.Array(SkillContractPortV1Schema, { maxItems: 32 }),
+        // Exact predecessor and proof ports are distinct; this is representation capacity,
+        // not operation authority. Registrations and independent byte/count caps still apply.
+        input_ports: Type.Array(SkillContractPortV1Schema, { maxItems: 128 }),
         active_output_ports: Type.Array(SkillContractPortV1Schema, {
           minItems: 1,
           maxItems: 32,
@@ -1539,6 +1683,57 @@ export class ContractValidationError extends Error {
   }
 }
 
+// Diagnostic output is a disclosure boundary, not a serialization of rejected input.
+// Names are short ASCII identifiers; unsafe/oversized names are replaced, never truncated.
+const DIAGNOSTIC_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u;
+const DIAGNOSTIC_PATH_MAX_LENGTH = 256;
+const DIAGNOSTIC_NAMES_PER_ISSUE = 8;
+
+function diagnosticName(name: string): string {
+  return DIAGNOSTIC_NAME_PATTERN.test(name) &&
+    name !== "__proto__" &&
+    name !== "constructor" &&
+    name !== "prototype"
+    ? name
+    : "[redacted]";
+}
+
+function contractIssue(issue: ReturnType<typeof Value.Errors>[number]): string {
+  // TypeBox instance paths can contain unescaped caller-controlled record keys. Derive
+  // locations only from declared schema properties, including inside union branches.
+  const segments = issue.schemaPath.split("/");
+  const fields = segments.flatMap((segment, index) =>
+    segments[index - 1] === "properties" ? [diagnosticName(segment)] : []
+  );
+  const location = fields.length === 0 ? "/" : `/${fields.join("/")}`;
+  const safeLocation = location.length <= DIAGNOSTIC_PATH_MAX_LENGTH ? location : "/[redacted]";
+  const names = (values: readonly string[]): string => {
+    const selected = values.slice(0, DIAGNOSTIC_NAMES_PER_ISSUE).map(diagnosticName);
+    if (values.length > selected.length) selected.push("[additional names omitted]");
+    return selected.join(", ");
+  };
+  // Do not forward localized/custom messages: propertyNames and refinements can embed
+  // arbitrary rejected data. Other keywords remain useful without their raw params.
+  let message: string;
+  switch (issue.keyword) {
+    case "additionalProperties":
+      message = `must not have additional properties: ${names(issue.params.additionalProperties)}`;
+      break;
+    case "required":
+      message = `must have required properties ${names(issue.params.requiredProperties)}`;
+      break;
+    case "type":
+      message = `must be ${names(typeof issue.params.type === "string" ? [issue.params.type] : issue.params.type)}`;
+      break;
+    case "boolean":
+      message = "schema is false";
+      break;
+    default:
+      message = `${issue.keyword} constraint failed`;
+  }
+  return `${safeLocation}: ${message}`;
+}
+
 export function validateContract<TSchemaValue extends TSchema>(
   schema: TSchemaValue,
   value: unknown,
@@ -1547,10 +1742,24 @@ export function validateContract<TSchemaValue extends TSchema>(
   if (Value.Check(schema, value)) {
     return value as Static<TSchemaValue>;
   }
-  const issues = [...Value.Errors(schema, value)].map(
-    (issue) => `${issue.instancePath || "/"}: ${issue.message}`
-  );
-  throw new ContractValidationError(label, issues);
+  const errors = Value.Errors(schema, value);
+  // Discard union/closed-object sentinels before formatting, so their raw key paths
+  // cannot bypass redaction. Retain a safe sentinel if there is no actionable issue.
+  const actionable = errors.filter((issue) => issue.keyword !== "boolean");
+  const reported = new Set<string>();
+  let length = 0;
+  for (const issue of actionable.length > 0 ? actionable : errors) {
+    const formatted = contractIssue(issue);
+    if (reported.has(formatted)) continue;
+    // Reuse the contract's error-text ceiling, reserving room for the omission notice.
+    if (length + formatted.length + 2 > ERROR_MAX_LENGTH - 64) {
+      reported.add("/: additional validation issues omitted");
+      break;
+    }
+    reported.add(formatted);
+    length += formatted.length + 2;
+  }
+  throw new ContractValidationError(label, [...reported]);
 }
 
 export function isTerminalStatus(status: RunStatus): boolean {

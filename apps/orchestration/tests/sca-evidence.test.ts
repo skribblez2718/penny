@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { sha256 } from "../src/canonical-json.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { sha256 } from "../dist/canonical-json.js";
 import {
   domainRecordIdentity,
   domainRecordTimestamp,
@@ -15,14 +15,14 @@ import {
   type ScaDomainBundleV1,
   type ScaDomainRecordV1,
   type TaskRecordV1,
-} from "../src/sca/contracts.js";
+} from "../dist/sca/contracts.js";
 import {
   validateEvidenceCorpus,
   validateEvidencePointers,
   validateProofObligations,
   validateScaDomainBundle,
-} from "../src/sca/evidence.js";
-import { createCanonicalReplay } from "../src/sca/ledger.js";
+} from "../dist/sca/evidence.js";
+import { createCanonicalReplay } from "../dist/sca/ledger.js";
 import { requireValue } from "./helpers/narrowing.js";
 import {
   SCA_CLAIM_ID,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 import type { SingleResult, SubagentDetails } from "../../agent-runner.js";
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({

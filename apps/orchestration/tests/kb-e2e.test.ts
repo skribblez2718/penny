@@ -6,32 +6,32 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { validateDirective } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { validateDirective } from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import { jcsCanonicalize } from "../src/kb/approval-receipts.js";
-import { CapabilityStore, mintEnvelope } from "../src/kb/capabilities.js";
+import { jcsCanonicalize } from "../dist/kb/approval-receipts.js";
+import { CapabilityStore, mintEnvelope } from "../dist/kb/capabilities.js";
 import {
   KbActionSchema,
   canonicalJson,
   sha256Hex,
   validateKbContract,
-} from "../src/kb/contracts.js";
-import { readManifest, readPolicy, writePageRevision } from "../src/kb/filesystem.js";
+} from "../dist/kb/contracts.js";
+import { readManifest, readPolicy, writePageRevision } from "../dist/kb/filesystem.js";
 import {
   buildCatalog,
   buildGenerationIndex,
   newGenerationId,
   publishGeneration,
   readSelectedGeneration,
-} from "../src/kb/generations.js";
-import { verifyPromotionCandidate } from "../src/kb/promote.js";
-import { promotionApplyOperationSourceIdentity } from "../src/kb/operation-receipts.js";
-import { PromotionApprovalStore, PromotionSimulatedCrash } from "../src/kb/promotion.js";
-import { RunArtifactStore } from "../src/kb/run-artifacts.js";
-import { initKb } from "../src/kb/workflows.js";
+} from "../dist/kb/generations.js";
+import { verifyPromotionCandidate } from "../dist/kb/promote.js";
+import { promotionApplyOperationSourceIdentity } from "../dist/kb/operation-receipts.js";
+import { PromotionApprovalStore, PromotionSimulatedCrash } from "../dist/kb/promotion.js";
+import { RunArtifactStore } from "../dist/kb/run-artifacts.js";
+import { initKb } from "../dist/kb/workflows.js";
 import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const PROFILE = "kbp_e2e_promotion";

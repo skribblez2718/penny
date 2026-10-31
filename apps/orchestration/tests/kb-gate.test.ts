@@ -22,15 +22,15 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { initKb, statusKb } from "../src/kb/workflows.js";
+import { initKb, statusKb } from "../dist/kb/workflows.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
-import { readSelectedGeneration } from "../src/kb/generations.js";
+import { readSelectedGeneration } from "../dist/kb/generations.js";
 import {
   createTestOnlyIngestBodyRunner,
   ingestKb,
   type IngestSource,
   type TestOnlyIngestBodyRunner,
-} from "../src/kb/ingest.js";
+} from "../dist/kb/ingest.js";
 import {
   capabilitySha256Of,
   claimCapabilities,
@@ -45,14 +45,14 @@ import {
   approveGate,
   type GateState,
   GateStorageError,
-} from "../src/kb/gate.js";
+} from "../dist/kb/gate.js";
 import {
   CapabilityStore,
   mintEnvelope,
   validateEnvelopeCrossField,
   type CapabilityEnvelope,
-} from "../src/kb/capabilities.js";
-import { canonicalJson } from "../src/kb/contracts.js";
+} from "../dist/kb/capabilities.js";
+import { canonicalJson } from "../dist/kb/contracts.js";
 
 // ── Harness ─────────────────────────────────────────────────────────────────
 

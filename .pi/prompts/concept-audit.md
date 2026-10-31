@@ -9,15 +9,18 @@ Audit the concept at **`$1`** before implementation planning. Test whether its p
 
 - **Target:** `$1`
 - **Optional output-root token or first additional detail:** `$2`
-- **Remaining additional details:** `${@:3}`
+
+**Remaining additional details:**
+
+${@:3}
 
 ## 1. Parse and preflight
 
 Interpret only `$2` as the optional output-root position.
 
 - If `$2` begins with the literal prefix `output-root=`, remove that one leading prefix exactly and use the entire remainder; do not split on later `=` characters or search other positions.
-- Otherwise use the default output root and treat `$2` plus `${@:3}` as additional details.
-- When the token is recognized, additional details are `${@:3}`.
+- Otherwise use the default output root and include the second argument with the remaining additional details.
+- When the token is recognized, exclude it from the additional details.
 - An empty remainder or materially ambiguous visible token is a response-only `BLOCKED` branch: write nothing, issue no concept verdict, and ask the minimum targeted question.
 
 Pi exposes expanded/joined values, not original quoting. Do not claim a verbatim invocation. Safely paraphrase each distinguishable additional detail and mark it `APPLIED`, `OUT-OF-SCOPE — reason`, `CONFLICTS-WITH-AUDIT-CONTRACT — protection retained`, or `NEEDS-CLARIFICATION`; group text when boundaries are unclear. Never persist secrets, credentials, sensitive payloads, personal data, authorization material, or private path segments.

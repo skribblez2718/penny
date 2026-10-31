@@ -104,8 +104,14 @@ The sole local catalog is `.pi/agents/*.md`. Discovery requires:
 - a non-empty, duplicate-free `tools:` list;
 - optional model/provider/thinking settings.
 
-Catalog drift after registration returns `SUBAGENT_RELOAD_REQUIRED`; run `/reload` before
-retrying. Discovery never queries durable memory or infers remote service presence.
+Each tool call resolves names and captures definitions from fresh discovery. The name schema
+is a non-empty string, not a frozen enum: prompt/model/thinking/tool edits, additions and removals
+do not require `/reload`. Unknown names and unavailable YAML providers refuse before dispatch;
+exact tool activation is still checked before the prompt. In-flight workers keep their captured
+configuration. The provider-visible routing descriptions are a registration-time snapshot;
+`/reload` refreshes them and is still needed after changing extension code. Orchestration's
+registration-bound drift/recovery checks are separate and unchanged. Discovery never queries
+durable memory or infers remote service presence.
 
 ## Prompt assembly
 

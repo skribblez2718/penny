@@ -5,13 +5,11 @@ import {
   type TrustedQuestionnaireBinding,
   type TrustedQuestionnaireQuestion,
 } from "./execution-receipts.js";
-import {
-  ARTIFACT_DISPATCH_MODE_ENV,
-  type ArtifactDispatchPause,
-  type ArtifactDispatchRecovery,
-} from "./dispatch-control.js";
-import type { ArtifactRef } from "./artifact-client.js";
-import type { SkillIngressRefusalCode } from "./skill-ingress.js";
+import { ARTIFACT_DISPATCH_MODE_ENV } from "./dispatch-control.js";
+import { parseArtifactRef, type ArtifactRef } from "./artifact-client.js";
+import type { SkillResult } from "@penny/orchestration";
+
+export type { SkillResult } from "@penny/orchestration";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -21,75 +19,86 @@ function isUnknownArray(value: unknown): value is unknown[] {
   return Array.isArray(value);
 }
 
-/**
- * Result shape returned by executeSkill to the skill extension.
- * Pure data — no UI or extension types.
- */
-export interface SkillResult {
-  success: boolean;
-  session_id: string;
-  skill_name: string;
-  state: string;
-  plan?: Record<string, unknown>;
-  plan_steps?: Array<Record<string, unknown>>;
-  requires_approval: boolean;
-  session_room?: string;
-  steps_total: number;
-  agents_invoked: string[];
-  errors: string[];
-  /** Stable pre-session ingress refusal when registration/config/package admission fails. */
-  refusal_code?: SkillIngressRefusalCode;
-  /** Structured retained-state preflight failure, before any worker dispatch. */
-  state_failure?: {
-    readonly code: string;
-    readonly details: {
-      readonly component: string;
-      readonly actualSchemaVersion?: number;
-      readonly requiredSchemaVersion?: number;
-      readonly upgradeSupported?: boolean;
-      readonly recoveryAction?: string;
-    };
+export type RepairDiagnostics = NonNullable<SkillResult["repair_diagnostics"]>;
+
+/** Parse the engine's bounded diagnostic projection at the extension boundary. */
+export function parseRepairDiagnostics(value: unknown): RepairDiagnostics {
+  if (!isRecord(value) || !isRecord(value.budget) || !Array.isArray(value.feedback_report_refs)) {
+    throw new TypeError("invalid repair diagnostics");
+  }
+  if (
+    typeof value.origin_state !== "string" ||
+    typeof value.feedback_kind !== "string" ||
+    !Number.isSafeInteger(value.budget.used) ||
+    (value.budget.limit !== null && !Number.isSafeInteger(value.budget.limit)) ||
+    typeof value.budget.used !== "number" ||
+    (value.budget.limit !== null && typeof value.budget.limit !== "number") ||
+    value.budget.used < 0 ||
+    (value.budget.limit !== null && value.budget.limit < 0) ||
+    value.feedback_report_refs.length > 128
+  ) {
+    throw new TypeError("invalid repair diagnostics");
+  }
+  return {
+    origin_state: value.origin_state,
+    feedback_kind: value.feedback_kind,
+    budget: { used: value.budget.used, limit: value.budget.limit },
+    feedback_report_refs: value.feedback_report_refs.map(parseArtifactRef),
   };
-  /** Complete TypeScript engine terminal result, preserved without reconstruction. */
-  result?: Record<string, unknown>;
-  /** Exact terminal output selected by the skill's execution owner. */
-  output_artifact_ref?: ArtifactRef;
-  /** Path-free exact best partials for honest negative terminals. */
-  best_partial_artifact_refs?: ArtifactRef[];
-  /** Owner pause retryability; false for saved checkpoints that are ineligible to resume. */
-  retriable?: boolean;
-  /** Closed TypeScript dispatch-pause contract retained for operator tooling. */
-  dispatch_pause?: ArtifactDispatchPause;
-  /** Exact forward-recovery instruction associated with a dispatch pause. */
-  recovery?: ArtifactDispatchRecovery;
+}
 
-  // ── Multi-mode fields (all optional — default 'single' backward compat) ──
+export type SealDiagnostics = NonNullable<SkillResult["seal_diagnostics"]>;
 
-  /** Which invocation mode produced this result. */
-  mode?: "single" | "parallel" | "chain";
-
-  // Chain-specific
-  /** Which step in the chain (0-indexed). */
-  chain_step?: number;
-  /** Total steps in the chain. */
-  chain_total?: number;
-  /** Shared session ID for the entire chain — used as resume key. */
-  chain_session_id?: string;
-  /** Which step failed (populated on chain error). */
-  chain_error_step?: number;
-  /** Partial results from steps that completed before the error. */
-  chain_results?: SkillResult[];
-  /** Whether this failed chain can be resumed via resume_chain. */
-  resumable?: boolean;
-
-  // Parallel-specific
-  /** Individual results from each parallel skill invocation. */
-  parallel_results?: SkillResult[];
-
-  escalation?: {
-    questions: EscalationQuestion[];
-    unknown_reason?: string;
-    previous_state?: string;
+/** Only parse the bounded terminal projection; never fetch diagnostic contents. */
+export function parseSealDiagnostics(value: unknown): SealDiagnostics {
+  const fields = [
+    "latest_diagnostic_ref",
+    "rejected_draft_ref",
+    "epoch_anchor_ref",
+    "corrections_used",
+    "correction_limit",
+    "disposition",
+  ];
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== fields.length ||
+    fields.some((field) => !Object.hasOwn(value, field)) ||
+    value.epoch_anchor_ref === undefined ||
+    !Number.isSafeInteger(value.corrections_used) ||
+    (value.correction_limit !== null && !Number.isSafeInteger(value.correction_limit)) ||
+    typeof value.corrections_used !== "number" ||
+    (value.correction_limit !== null && typeof value.correction_limit !== "number") ||
+    value.corrections_used < 0 ||
+    (value.correction_limit !== null && value.correction_limit < 0) ||
+    (value.correction_limit !== null && value.corrections_used > value.correction_limit) ||
+    (value.disposition !== "correction_offered" &&
+      value.disposition !== "exhausted" &&
+      value.disposition !== "stalled") ||
+    (value.disposition === "exhausted" &&
+      (value.correction_limit === null || value.corrections_used !== value.correction_limit)) ||
+    (value.disposition === "correction_offered" &&
+      value.correction_limit !== null &&
+      value.corrections_used >= value.correction_limit)
+  ) {
+    throw new TypeError("invalid seal diagnostics");
+  }
+  const latest = parseArtifactRef(value.latest_diagnostic_ref);
+  const rejected = parseArtifactRef(value.rejected_draft_ref);
+  const anchor = value.epoch_anchor_ref === null ? null : parseArtifactRef(value.epoch_anchor_ref);
+  if (
+    latest.kind !== "seal-diagnostic" ||
+    latest.run_id !== rejected.run_id ||
+    (anchor !== null && anchor.run_id !== rejected.run_id)
+  ) {
+    throw new TypeError("invalid seal diagnostic ref binding");
+  }
+  return {
+    latest_diagnostic_ref: latest,
+    rejected_draft_ref: rejected,
+    epoch_anchor_ref: anchor,
+    corrections_used: value.corrections_used,
+    correction_limit: value.correction_limit,
+    disposition: value.disposition,
   };
 }
 
@@ -111,6 +120,7 @@ export interface SkillProgressDetails {
     | "phase_started"
     | "worker_completed"
     | "worker_failed"
+    | "host_operation_progress"
     | "boundary_reached"
     | "composition_started"
     | "item_finished"
@@ -143,27 +153,17 @@ export function isSkillProgressDetails(value: unknown): value is SkillProgressDe
  * prompt) legitimately omit predefined options and rely on the questionnaire's
  * free-text ("Type something") affordance via `allowOther`. Consumers MUST NOT
  * assume `options` is present — use `normalizeEscalationQuestions()`.
+ * Private questionnaire rendering metadata is not part of the current skill-result wire.
  */
-export interface EscalationQuestionOption {
-  value: string;
-  label: string;
-  description?: string;
-}
-
-export interface EscalationQuestion {
-  id: string;
-  label: string;
-  prompt: string;
-  options?: EscalationQuestionOption[];
-  allowOther?: boolean;
-  type?: "single" | "multi";
+export type EscalationQuestion = NonNullable<SkillResult["escalation"]>["questions"][number] & {
   artifact_ref?: Record<string, unknown>;
   approval_challenge?: string;
   approval_run_id?: string;
   approval_gate_id?: string;
   questionnaire_transport_ref?: Record<string, unknown>;
   rendered_questions_digest?: string;
-}
+};
+export type EscalationQuestionOption = NonNullable<EscalationQuestion["options"]>[number];
 
 /**
  * Normalize orchestrator-produced escalation questions into the shape the
@@ -263,9 +263,7 @@ function escapeTerminalDisplayText(value: string): string {
  * reconstructs the normalized payload exactly while the displayed call remains
  * safe for terminals and copy/paste.
  */
-function serializeQuestionnairePayload(
-  payload: { questions: TrustedQuestionnaireQuestion[] } | { trustedTransportCapability: string }
-): string {
+function serializeToolPayload(payload: unknown): string {
   return JSON.stringify(payload, null, 2).replace(
     JSON_LITERAL_TERMINAL_CONTROL_OR_BIDI,
     (character) => {
@@ -299,6 +297,8 @@ export interface ResumeChainStep {
   skill_name: string;
   goal: string;
   input_artifacts?: string[];
+  context_artifacts?: string[];
+  previous_artifact_designation?: "binding" | "context";
   session_id?: string;
   constraints?: Record<string, unknown>;
   model?: string;
@@ -310,6 +310,8 @@ export interface ResumeCheckpointStep {
   skill_name: string;
   goal: string;
   input_artifacts?: string[];
+  context_artifacts?: string[];
+  previous_artifact_designation?: "binding" | "context";
   session_id: string;
   status: "pending" | "running" | "complete" | "failed";
   model?: string;
@@ -317,6 +319,7 @@ export interface ResumeCheckpointStep {
   result_preview?: string;
   output_artifact_ref?: ArtifactRef;
   handoff_artifact_ref?: ArtifactRef;
+  input_assurance?: SkillResult["input_assurance"];
 }
 
 export interface ResumeCheckpointShape {
@@ -326,6 +329,8 @@ export interface ResumeCheckpointShape {
     skill_name: string;
     goal: string;
     input_artifacts?: string[];
+    context_artifacts?: string[];
+    previous_artifact_designation?: "binding" | "context";
     session_id?: string;
     model?: string;
     constraints?: Record<string, unknown>;
@@ -343,6 +348,7 @@ export interface ResumeReconstruction {
     result_preview: string;
     output_artifact_ref?: ArtifactRef;
     handoff_artifact_ref?: ArtifactRef;
+    input_assurance?: SkillResult["input_assurance"];
   }>;
   /** 0-based index of the first step to (re)run. */
   startStep: number;
@@ -384,6 +390,7 @@ export function reconstructResumeChain(
         result_preview: step.result_preview || "",
         output_artifact_ref: step.output_artifact_ref,
         handoff_artifact_ref: step.handoff_artifact_ref,
+        input_assurance: step.input_assurance,
       });
       continue;
     }
@@ -394,7 +401,9 @@ export function reconstructResumeChain(
         skill_name: step.skill_name,
         goal: override?.goal ?? step.goal,
         input_artifacts: step.input_artifacts,
-        constraints: override?.constraints ?? step.constraints ?? {},
+        context_artifacts: step.context_artifacts,
+        previous_artifact_designation: step.previous_artifact_designation,
+        constraints: { ...(step.constraints ?? {}), ...(override?.constraints ?? {}) },
         session_id: step.session_id,
         model: step.model,
       });
@@ -406,6 +415,8 @@ export function reconstructResumeChain(
         skill_name: step.skill_name,
         goal: step.goal,
         input_artifacts: step.input_artifacts,
+        context_artifacts: step.context_artifacts,
+        previous_artifact_designation: step.previous_artifact_designation,
         session_id: step.session_id,
         constraints: step.constraints,
         model: step.model,
@@ -420,6 +431,8 @@ export function reconstructResumeChain(
       skill_name: pending.skill_name,
       goal: pending.goal,
       input_artifacts: pending.input_artifacts,
+      context_artifacts: pending.context_artifacts,
+      previous_artifact_designation: pending.previous_artifact_designation,
       session_id: pending.session_id,
       constraints: pending.constraints,
       model: pending.model,
@@ -450,6 +463,7 @@ export function detectSkillMode(params: {
   skills?: Array<{ skill_name: string; goal: string }>;
   chain?: Array<{ skill_name: string; goal: string }>;
   resume_chain?: string;
+  context_artifacts?: string[];
 }): { mode: "single" | "parallel" | "chain" | "resume"; error?: string } {
   const hasSkills = (params.skills?.length ?? 0) > 0;
   const hasChain = (params.chain?.length ?? 0) > 0;
@@ -474,6 +488,12 @@ export function detectSkillMode(params: {
     };
   }
 
+  if (!hasSingle && params.context_artifacts !== undefined)
+    return {
+      mode: "single",
+      error:
+        "context_artifacts belongs on each parallel/chain step; resume reuses checkpointed inputs",
+    };
   if (hasResumeChain) return { mode: "resume" };
   if (hasChain) return { mode: "chain" };
   if (hasSkills) return { mode: "parallel" };
@@ -505,6 +525,31 @@ function appendExactOutputLines(
   lines.push(theme("muted", `  Read it with artifact_read({"artifact":"${ref.artifact_id}"}).`));
 }
 
+function appendInputAssurance(
+  lines: string[],
+  result: SkillResult,
+  theme: (color: ThemeColor, text: string) => string
+): void {
+  const entries = [
+    ...(result.chain_results ?? result.parallel_results ?? []),
+    ...(result.input_assurance === undefined ? [] : [result]),
+  ];
+  for (const entry of entries) {
+    const assurance = entry.input_assurance;
+    if (assurance === undefined) continue;
+    const label =
+      entry.skill_name === "chain" && entry.chain_error_step !== undefined
+        ? `chain step ${entry.chain_error_step + 1}`
+        : entry.skill_name;
+    lines.push(
+      theme(
+        "muted",
+        `  ${label} input specification assurance: ${assurance.mode}${assurance.specification_artifact_id === null ? " (no SpecificationV1 input)" : ` for ${assurance.specification_artifact_id}`}; record ${assurance.assurance_ref.artifact_id}. This does not certify the output or its earlier ancestors.`
+      )
+    );
+  }
+}
+
 function appendEffectStatus(
   lines: string[],
   result: SkillResult,
@@ -520,30 +565,77 @@ function appendEffectStatus(
   }
 }
 
+function outputLabel(result: SkillResult, ref: ArtifactRef): string | undefined {
+  if (result.success) return undefined;
+  if (result.seal_diagnostics?.rejected_draft_ref.artifact_id === ref.artifact_id) {
+    return "rejected draft — not an accepted product";
+  }
+  if (result.seal_diagnostics?.epoch_anchor_ref?.artifact_id === ref.artifact_id) {
+    return "prior accepted product; best partial";
+  }
+  const kind =
+    result.output_artifact_ref?.artifact_id === ref.artifact_id
+      ? result.result?.["output_kind"]
+      : undefined;
+  if (kind === "rejected_draft" || kind === "rejected_draft_best_partial") {
+    return "rejected draft — not an accepted product";
+  }
+  if (kind === "accepted_product_best_partial") return "accepted product; best partial";
+  if (kind === "unreviewed_best_partial") return "unreviewed best partial";
+  // Historical results may not have a structured output_kind. Do not upgrade
+  // an unknown negative ref to an accepted product by guessing from its name.
+  return "best partial (acceptance not established)";
+}
+
 function appendAllExactOutputs(
   lines: string[],
   result: SkillResult,
   theme: (color: ThemeColor, text: string) => string
 ): void {
   const entries: Array<{ label?: string; ref: ArtifactRef }> = [];
-  if (result.output_artifact_ref) entries.push({ ref: result.output_artifact_ref });
-  for (const [index, ref] of (result.best_partial_artifact_refs ?? []).entries()) {
-    entries.push({ label: `best partial ${index + 1}`, ref });
-  }
-  for (const [index, child] of (result.parallel_results ?? []).entries()) {
-    if (child.output_artifact_ref) {
+  const add = (item: SkillResult, prefix?: string): void => {
+    if (item.output_artifact_ref) {
+      const label = outputLabel(item, item.output_artifact_ref);
       entries.push({
-        label: `parallel ${index + 1}: ${child.skill_name}`,
-        ref: child.output_artifact_ref,
+        ref: item.output_artifact_ref,
+        ...(prefix || label ? { label: [prefix, label].filter(Boolean).join(": ") } : {}),
       });
     }
-  }
-  for (const [index, child] of (result.chain_results ?? []).entries()) {
-    if (child.output_artifact_ref) {
+    for (const [index, ref] of (item.best_partial_artifact_refs ?? []).entries()) {
       entries.push({
-        label: `chain step ${child.chain_step ?? index + 1}: ${child.skill_name}`,
-        ref: child.output_artifact_ref,
+        ref,
+        label: [prefix, `best partial ${index + 1}`, outputLabel(item, ref)]
+          .filter(Boolean)
+          .join(": "),
       });
+    }
+    for (const [index, child] of (item.parallel_results ?? []).entries()) {
+      add(child, `parallel ${index + 1}: ${child.skill_name}`);
+    }
+    for (const [index, child] of (item.chain_results ?? []).entries()) {
+      add(child, `chain step ${(child.chain_step ?? index) + 1}: ${child.skill_name}`);
+    }
+  };
+  // Children precede the aggregate on failures: a chain's legacy output may
+  // alias its rejected step or the last completed product. Preserve its identity
+  // but use the child's more precise label when available.
+  if (result.success) add(result);
+  else {
+    for (const [index, child] of (result.parallel_results ?? []).entries()) {
+      add(child, `parallel ${index + 1}: ${child.skill_name}`);
+    }
+    for (const [index, child] of (result.chain_results ?? []).entries()) {
+      add(child, `chain step ${(child.chain_step ?? index) + 1}: ${child.skill_name}`);
+    }
+    if (result.output_artifact_ref) {
+      const ref = result.output_artifact_ref;
+      const child = result.chain_results?.find(
+        (item) => item.output_artifact_ref?.artifact_id === ref.artifact_id
+      );
+      entries.push({ ref, label: child ? outputLabel(child, ref) : outputLabel(result, ref) });
+    }
+    for (const [index, ref] of (result.best_partial_artifact_refs ?? []).entries()) {
+      entries.push({ ref, label: `best partial ${index + 1}: ${outputLabel(result, ref)}` });
     }
   }
   const seen = new Set<string>();
@@ -554,11 +646,136 @@ function appendAllExactOutputs(
   }
 }
 
+function appendRepairDiagnostics(
+  lines: string[],
+  result: SkillResult,
+  theme: (color: ThemeColor, text: string) => string,
+  label = result.skill_name
+): void {
+  const diagnostic = result.repair_diagnostics;
+  if (diagnostic !== undefined) {
+    lines.push(
+      theme(
+        "warning",
+        `  Repair diagnostics (${label}): ${diagnostic.origin_state}:${diagnostic.feedback_kind}; budget used ${diagnostic.budget.used}/${diagnostic.budget.limit ?? "unlimited"}`
+      )
+    );
+    if (diagnostic.feedback_report_refs.length === 0) {
+      lines.push(theme("muted", "  Feedback report: not available for this receipt."));
+    }
+    for (const ref of diagnostic.feedback_report_refs) {
+      lines.push(`  Feedback report artifact: ${ref.artifact_id}`);
+      lines.push(
+        theme("muted", `  Read feedback with artifact_read({"artifact":"${ref.artifact_id}"}).`)
+      );
+    }
+  }
+  for (const [index, child] of (result.parallel_results ?? []).entries()) {
+    appendRepairDiagnostics(lines, child, theme, `parallel ${index + 1}: ${child.skill_name}`);
+  }
+  for (const [index, child] of (result.chain_results ?? []).entries()) {
+    appendRepairDiagnostics(
+      lines,
+      child,
+      theme,
+      `chain step ${child.chain_step ?? index + 1}: ${child.skill_name}`
+    );
+  }
+}
+
+function appendSealDiagnostics(
+  lines: string[],
+  result: SkillResult,
+  theme: (color: ThemeColor, text: string) => string,
+  label = result.skill_name
+): void {
+  const diagnostic = result.seal_diagnostics;
+  if (!result.success && diagnostic) {
+    const reason =
+      diagnostic.disposition === "exhausted"
+        ? "Draft rejected by deterministic seal; correction allowance exhausted."
+        : diagnostic.disposition === "stalled"
+          ? "Draft rejected by deterministic seal; correction stopped."
+          : "Draft rejected by deterministic seal; correction offered.";
+    lines.push(theme("warning", `  Seal diagnostics (${label}): ${reason}`));
+    lines.push(
+      theme(
+        "muted",
+        `  Corrections used ${diagnostic.corrections_used}/${diagnostic.correction_limit ?? "unlimited"}; diagnostic: ${diagnostic.latest_diagnostic_ref.artifact_id}`
+      )
+    );
+    lines.push(`  Rejected draft artifact: ${diagnostic.rejected_draft_ref.artifact_id}`);
+    if (diagnostic.epoch_anchor_ref === null) {
+      lines.push(theme("warning", "  No accepted sealed product in this run."));
+    } else {
+      lines.push(`  Prior accepted product: ${diagnostic.epoch_anchor_ref.artifact_id}`);
+    }
+  }
+  for (const [index, child] of (result.parallel_results ?? []).entries()) {
+    appendSealDiagnostics(lines, child, theme, `parallel ${index + 1}: ${child.skill_name}`);
+  }
+  for (const [index, child] of (result.chain_results ?? []).entries()) {
+    appendSealDiagnostics(
+      lines,
+      child,
+      theme,
+      `chain step ${(child.chain_step ?? index) + 1}: ${child.skill_name}`
+    );
+  }
+}
+
+export function formatSealDiagnostics(
+  result: SkillResult,
+  theme: (color: ThemeColor, text: string) => string
+): string {
+  const lines: string[] = [];
+  appendSealDiagnostics(lines, result, theme);
+  return lines.join("\n");
+}
+
+function hasSealDiagnostics(result: SkillResult): boolean {
+  return (
+    result.seal_diagnostics !== undefined ||
+    (result.parallel_results ?? []).some(hasSealDiagnostics) ||
+    (result.chain_results ?? []).some(hasSealDiagnostics)
+  );
+}
+
 export function formatResult(
   result: SkillResult,
   theme: (color: ThemeColor, text: string) => string
 ): string {
   const lines: string[] = [];
+
+  if (
+    result.mode === "parallel" &&
+    result.parallel_results?.some((child) => child.continuation !== undefined)
+  ) {
+    const waiting = result.parallel_results.filter(
+      (child) => child.continuation !== undefined
+    ).length;
+    lines.push(
+      theme(
+        result.success ? "success" : "warning",
+        `Parallel: ${result.parallel_results.length} branches; ${waiting} awaiting user input`
+      )
+    );
+    lines.push(`  Session: ${result.session_id}`);
+    lines.push(
+      "  Handle each waiting branch separately; do not rerun successful siblings or resume the aggregate session."
+    );
+    for (const [index, child] of result.parallel_results.entries()) {
+      lines.push("");
+      lines.push(
+        theme(
+          "toolTitle",
+          `Branch ${index + 1}: ${escapeTerminalDisplayText(child.skill_name)} (session ${escapeTerminalDisplayText(child.session_id)})`
+        )
+      );
+      lines.push(formatResult(child, theme));
+    }
+    return lines.join("\n");
+  }
 
   if (result.success) {
     lines.push(theme("success", `✓ ${result.skill_name} completed`));
@@ -689,12 +906,29 @@ export function formatResult(
     }
     lines.push("");
 
+    const continuation = result.continuation;
+    if (continuation !== undefined) {
+      lines.push(
+        `  Paused run: ${escapeTerminalDisplayText(continuation.identity.run_id)}; session: ${escapeTerminalDisplayText(continuation.identity.session_id)}`
+      );
+      lines.push(
+        `  Gate: ${escapeTerminalDisplayText(continuation.gate_id)}; challenge: ${escapeTerminalDisplayText(continuation.challenge)}`
+      );
+    }
+    for (const question of esc.questions) {
+      lines.push(
+        `  [${escapeTerminalDisplayText(question.id)}] ${escapeTerminalDisplayText(question.prompt)}`
+      );
+    }
+
     // ── Explicit questionnaire tool call (copy-pasteable) ──
     // The Apr 17 lesson: behavior must be enforced in tool output format,
     // not just in SKILL.md. Penny sees this text and must copy-paste it.
     lines.push(theme("toolTitle", "  Invoke this questionnaire tool call:"));
-    const questionnaireLiteral = serializeQuestionnairePayload(
-      prepareQuestionnairePayload(esc.questions)
+    const questionnaireLiteral = serializeToolPayload(
+      esc.trustedTransportCapability === undefined
+        ? prepareQuestionnairePayload(esc.questions)
+        : { trustedTransportCapability: esc.trustedTransportCapability }
     );
     const literalLines = questionnaireLiteral.split("\n");
     lines.push(theme("accent", `  questionnaire(${literalLines[0]}`));
@@ -703,6 +937,21 @@ export function formatResult(
     }
     lines.push(theme("accent", "  )"));
     lines.push("");
+    if (esc.trustedTransportCapability !== undefined) {
+      if (continuation?.resume_invocation !== undefined) {
+        lines.push(
+          "  Bound single-step resume data (reference only; native completion owns continuation):"
+        );
+        lines.push(serializeToolPayload(continuation.resume_invocation));
+      }
+      lines.push(
+        theme(
+          "muted",
+          "  Only the actual user may answer. Native completion will report the next step; do not forward model-written answers."
+        )
+      );
+      return lines.join("\n");
+    }
     // NOTE: no orchestrator_state to carry — the engine's durable checkpointer
     // owns all FSM state, keyed by session_id/run_id. Re-invoking with the SAME
     // session_id + constraints.user_response is sufficient: `recover` finds the
@@ -722,6 +971,20 @@ export function formatResult(
         );
       }
       lines.push(theme("muted", "  })"));
+    } else if (continuation?.resume_invocation !== undefined) {
+      const invocation = continuation.resume_invocation;
+      lines.push(
+        theme(
+          "muted",
+          "  After the user responds, resume only this step (replace user_response with the actual questionnaire answer):"
+        )
+      );
+      lines.push(
+        `  skill(${serializeToolPayload({
+          ...invocation,
+          constraints: { ...invocation.constraints, user_response: "<answer from questionnaire>" },
+        })})`
+      );
     } else {
       lines.push(theme("muted", "  After the user responds, re-invoke the skill with:"));
       lines.push(theme("muted", "  skill({"));
@@ -743,13 +1006,19 @@ export function formatResult(
     );
     lines.push(`  State: ${result.state}`);
     lines.push(`  Agents invoked: ${result.agents_invoked.join(" → ") || "none"}`);
-    for (const error of result.errors) {
-      lines.push(`  Error: ${error}`);
+    // A seal failure has its own bounded, body-free reason below. Legacy
+    // unresolved prose may contain authored material; never echo it as a
+    // second unbounded diagnostic in single or aggregate failure output.
+    if (!hasSealDiagnostics(result)) {
+      for (const error of result.errors) lines.push(`  Error: ${error}`);
     }
     appendAllExactOutputs(lines, result, theme);
     appendEffectStatus(lines, result, theme);
   }
 
+  appendInputAssurance(lines, result, theme);
+  appendSealDiagnostics(lines, result, theme);
+  appendRepairDiagnostics(lines, result, theme);
   return lines.join("\n");
 }
 

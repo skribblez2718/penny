@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { PLAYBOOK_REGISTRY } from "../src/index.js";
+import { PLAYBOOK_REGISTRY } from "../dist/index.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SKILL_EXTENSION_ROOT = path.resolve(PACKAGE_ROOT, "..", "..", ".pi", "extensions", "skill");

@@ -58,8 +58,8 @@ async function main(): Promise<void> {
         "  PENNY_STATE_ROOT  Optional absolute override; defaults below Pi's getAgentDir()",
         "",
         "Environment:",
-        "  PENNY_ORCHESTRATION_MAX_STEPS    Maximum steps per run (default: 96)",
-        "  PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS  Host session deadline in ms (default: 900000)",
+        "  PENNY_ORCHESTRATION_MAX_STEPS    Maximum steps per run (default: unlimited)",
+        "  PENNY_ORCHESTRATION_MAX_ITERATIONS    Maximum evaluator attempts (default: unlimited)",
         "  PENNY_ORCHESTRATION_PARALLEL_CONCURRENCY  Parallel branch limit (default: 4)",
         "  PENNY_ORCHESTRATION_MAX_RETAINED_RUNS    Terminal run/worker-session cohort cap (default: 500)",
         "  PENNY_RESEARCH_DEFAULT_MODEL       Default model for all research agents",
@@ -100,6 +100,7 @@ async function main(): Promise<void> {
     const engine = new OrchestrationEngine(checkpointer, {
       projectRoot: config.projectRoot,
       maxSteps: config.maxSteps,
+      maxIterations: config.maxIterations,
       receiptAuthority: ReceiptAuthority.loadExisting(config.receiptKeyPath),
       artifactRevisions: openedArtifacts,
     });
@@ -115,7 +116,6 @@ async function main(): Promise<void> {
       const workers = new WorkerExecutor(client, openedArtifacts, {
         projectRoot: config.projectRoot,
         parallelConcurrency: config.parallelConcurrency,
-        hostOperationDeadlineMs: config.hostOperationDeadlineMs,
         registration: engine.registration,
       });
       result = await new OrchestrationRunner(engine, workers).runUntilBoundary(result);

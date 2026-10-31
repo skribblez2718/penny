@@ -4,8 +4,8 @@ import path from "node:path";
 
 import { Type, type Static } from "typebox";
 
-import { validateContract } from "../../../orchestration/src/contracts.js";
-import { Sha256Schema } from "../../../orchestration/src/skill-contracts/common.js";
+import { validateContract } from "../../../orchestration/dist/contracts.js";
+import { Sha256Schema } from "../../../orchestration/dist/skill-contracts/common.js";
 import { runBoundedScaProcess, type ScaProcessResultV1 } from "../process.js";
 
 const MAX_PATH_BYTES = 4_096;

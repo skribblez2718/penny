@@ -86,7 +86,7 @@ describe("observability detached service startup", () => {
     expect(spawnedEnvironment.TEST_API_KEY).toBeUndefined();
   });
 
-  it("terminates a spawned child that misses the readiness deadline", async () => {
+  it("terminates a spawned child after startup inactivity", async () => {
     const root = temporaryRoot();
     const entry = path.join(root, "unhealthy-service.mjs");
     writeFileSync(
@@ -114,20 +114,22 @@ describe("observability detached service startup", () => {
     expect(() => process.kill(childPid, 0)).toThrow();
   });
 
-  it("marks the service ready only after health confirmation", async () => {
+  it("renews startup inactivity from child progress until health confirmation", async () => {
     const root = temporaryRoot();
     const entry = path.join(root, "waiting-service.mjs");
-    writeFileSync(entry, "setInterval(() => undefined, 1000);\n", { mode: 0o700 });
+    writeFileSync(entry, 'setInterval(() => process.stderr.write("."), 20);\n', {
+      mode: 0o700,
+    });
     let healthChecks = 0;
     const starter = new ObservabilityServiceStarter({
       projectRoot: root,
       baseUrl: "http://127.0.0.1:1",
       entryPath: entry,
-      startupTimeoutMs: 2_000,
-      pollIntervalMs: 10,
+      startupTimeoutMs: 100,
+      pollIntervalMs: 20,
       fetchImplementation: vi.fn(async () => {
         healthChecks += 1;
-        if (healthChecks < 3) throw new Error("not ready");
+        if (healthChecks < 8) throw new Error("not ready");
         return Response.json({ ok: true, service: "penny-observability", schema_version: 1 });
       }),
     });

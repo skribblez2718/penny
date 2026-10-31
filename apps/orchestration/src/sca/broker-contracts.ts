@@ -69,6 +69,11 @@ export const SCA_BROKER_CONTRACT_LIMITS_V1 = Object.freeze({
   max_result_items: 10_000,
 });
 
+export const SCA_BROKER_PROGRESS_LIMITS_V1 = Object.freeze({
+  max_sequence: 1_000_000,
+  max_work_units: 1_000_000,
+});
+
 export const SCA_TOOL_OPERATION_MAP = Object.freeze({
   sca_source_query: "source_query",
   sca_graph_query: "graph_query",
@@ -511,6 +516,100 @@ export const ScaBrokerPollResultV1Schema = Type.Object(
 );
 export type ScaBrokerPollResultV1 = Static<typeof ScaBrokerPollResultV1Schema>;
 
+export const ScaBrokerJobProgressV1Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.sca-broker-job-progress.v1"),
+    schema_version: Type.Literal(1),
+    ...BrokerJobFields,
+    ...BrokerOperationFields,
+    request_sha256: Sha256Schema,
+    sequence: Type.Integer({
+      minimum: 0,
+      maximum: SCA_BROKER_PROGRESS_LIMITS_V1.max_sequence,
+    }),
+    phase: Type.Union([
+      Type.Literal("accepted"),
+      Type.Literal("executing"),
+      Type.Literal("materializing_output"),
+    ]),
+    work_units: Type.Integer({
+      minimum: 0,
+      maximum: SCA_BROKER_PROGRESS_LIMITS_V1.max_work_units,
+    }),
+    output_bytes: Type.Integer({
+      minimum: 0,
+      maximum: SCA_BROKER_CONTRACT_LIMITS_V1.max_output_bytes,
+    }),
+    result_items: Type.Integer({
+      minimum: 0,
+      maximum: SCA_BROKER_CONTRACT_LIMITS_V1.max_result_items,
+    }),
+  },
+  {
+    $id: "penny.sca-broker-job-progress.v1",
+    additionalProperties: false,
+  }
+);
+export type ScaBrokerJobProgressV1 = Static<typeof ScaBrokerJobProgressV1Schema>;
+
+export const ScaBrokerExecuteAcceptedResultV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.sca-broker-execute-accepted-result.v2"),
+    schema_version: Type.Literal(2),
+    ...BrokerJobFields,
+    ...BrokerOperationFields,
+    status: Type.Literal("accepted"),
+    request_sha256: Sha256Schema,
+    accepted_at: Rfc3339UtcSchema,
+    progress: ScaBrokerJobProgressV1Schema,
+  },
+  {
+    $id: "penny.sca-broker-execute-accepted-result.v2",
+    additionalProperties: false,
+  }
+);
+export type ScaBrokerExecuteAcceptedResultV2 = Static<
+  typeof ScaBrokerExecuteAcceptedResultV2Schema
+>;
+
+export const ScaBrokerPollResultV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.sca-broker-poll-result.v2"),
+    schema_version: Type.Literal(2),
+    ...BrokerJobFields,
+    ...BrokerOperationFields,
+    request_sha256: Sha256Schema,
+    status: Type.Union([
+      Type.Literal("accepted"),
+      Type.Literal("running"),
+      ScaBrokerTerminalStatusSchema,
+    ]),
+    progress: ScaBrokerJobProgressV1Schema,
+    partial: Type.Boolean(),
+    truncated: Type.Boolean(),
+    output_refs: Type.Array(ArtifactRefSchema, {
+      maxItems: SCA_BROKER_CONTRACT_LIMITS_V1.max_output_refs,
+    }),
+    result_item_count: Type.Integer({
+      minimum: 0,
+      maximum: SCA_BROKER_CONTRACT_LIMITS_V1.max_result_items,
+    }),
+    failure: NullableTypedErrorSchema,
+    receipt: Type.Union([ScaBrokerReceiptV1Schema, Type.Null()]),
+    observed_at: Rfc3339UtcSchema,
+  },
+  {
+    $id: "penny.sca-broker-poll-result.v2",
+    additionalProperties: false,
+  }
+);
+export type ScaBrokerPollResultV2 = Static<typeof ScaBrokerPollResultV2Schema>;
+
+export type ScaBrokerExecuteAcceptedResult =
+  | ScaBrokerExecuteAcceptedResultV1
+  | ScaBrokerExecuteAcceptedResultV2;
+export type ScaBrokerPollResult = ScaBrokerPollResultV1 | ScaBrokerPollResultV2;
+
 export const ScaBrokerCancelRequestV1Schema = Type.Object(
   {
     schema_id: Type.Literal("penny.sca-broker-cancel-request.v1"),
@@ -634,6 +733,64 @@ export const ScaBrokerSchemaDigestManifestV1Schema = Type.Object(
 );
 export type ScaBrokerSchemaDigestManifestV1 = Static<typeof ScaBrokerSchemaDigestManifestV1Schema>;
 
+const ScaBrokerConsumerExpectationV2Schema = Type.Object(
+  {
+    module_path: Type.Union([
+      Type.Literal("apps/sca-service/src/contracts.ts"),
+      Type.Literal(".pi/extensions/sca/src/contracts.ts"),
+    ]),
+    integration: Type.Literal("generated_digest_lock_v2"),
+    canonical_source: Type.Literal("apps/orchestration/src/sca/broker-contracts.ts"),
+    generated_bundle_export: Type.Literal("SCA_BROKER_SCHEMA_BUNDLE_V2"),
+    manifest_export: Type.Literal("SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2"),
+  },
+  { additionalProperties: false }
+);
+
+export const ScaBrokerSchemaDigestManifestV2Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.sca-broker-schema-digest-manifest.v2"),
+    schema_version: Type.Literal(2),
+    canonical_source: Type.Literal("apps/orchestration/src/sca/broker-contracts.ts"),
+    generated_bundle_export: Type.Literal("SCA_BROKER_SCHEMA_BUNDLE_V2"),
+    semantic_profile: Type.Literal("penny.sca-broker-semantics.v2"),
+    semantic_limits: Type.Object(
+      {
+        max_request_bytes: Type.Integer({ minimum: 1 }),
+        max_input_refs: Type.Integer({ minimum: 1 }),
+        max_output_refs: Type.Integer({ minimum: 1 }),
+        max_selectors: Type.Integer({ minimum: 1 }),
+        max_parameters: Type.Integer({ minimum: 1 }),
+        max_timeout_ms: Type.Integer({ minimum: 1 }),
+        max_poll_timeout_ms: Type.Integer({ minimum: 1 }),
+        max_deadline_window_ms: Type.Integer({ minimum: 1 }),
+        max_output_bytes: Type.Integer({ minimum: 1 }),
+        max_result_items: Type.Integer({ minimum: 1 }),
+        max_progress_sequence: Type.Integer({ minimum: 1 }),
+        max_progress_work_units: Type.Integer({ minimum: 1 }),
+      },
+      { additionalProperties: false }
+    ),
+    tool_operation_map: Type.Array(ScaBrokerToolMappingEntryV1Schema, {
+      minItems: 3,
+      maxItems: 3,
+    }),
+    schema_digests: Type.Array(ScaBrokerSchemaDigestEntryV1Schema, {
+      minItems: 1,
+    }),
+    consumers: Type.Array(ScaBrokerConsumerExpectationV2Schema, {
+      minItems: 2,
+      maxItems: 2,
+    }),
+    manifest_sha256: Sha256Schema,
+  },
+  {
+    $id: "penny.sca-broker-schema-digest-manifest.v2",
+    additionalProperties: false,
+  }
+);
+export type ScaBrokerSchemaDigestManifestV2 = Static<typeof ScaBrokerSchemaDigestManifestV2Schema>;
+
 export const SCA_BROKER_SCHEMA_BUNDLE_V1 = Object.freeze({
   ScaBrokerToolNameSchema,
   ScaBrokerOperationKindSchema,
@@ -655,7 +812,15 @@ export const SCA_BROKER_SCHEMA_BUNDLE_V1 = Object.freeze({
   ScaBrokerSchemaDigestManifestV1Schema,
 });
 
-const SCHEMA_DEFINITIONS = [
+export const SCA_BROKER_SCHEMA_BUNDLE_V2 = Object.freeze({
+  ...SCA_BROKER_SCHEMA_BUNDLE_V1,
+  ScaBrokerJobProgressV1Schema,
+  ScaBrokerExecuteAcceptedResultV2Schema,
+  ScaBrokerPollResultV2Schema,
+  ScaBrokerSchemaDigestManifestV2Schema,
+});
+
+const SCHEMA_DEFINITIONS_V1 = [
   {
     export_name: "ScaBrokerToolNameSchema",
     schema_id: "penny.sca-broker-tool-name.v1",
@@ -752,7 +917,7 @@ const SCHEMA_DEFINITIONS = [
   readonly schema: TSchema;
 }[];
 
-const CONSUMER_EXPECTATIONS = [
+const CONSUMER_EXPECTATIONS_V1 = [
   {
     module_path: "apps/sca-service/src/contracts.ts",
     integration: "generated_digest_lock_v1",
@@ -779,7 +944,7 @@ export function scaBrokerSchemaSha256(schema: TSchema): string {
   return sha256(canonicalJson(schema));
 }
 
-const SCHEMA_MANIFEST_PREIMAGE = {
+const SCHEMA_MANIFEST_PREIMAGE_V1 = {
   schema_id: "penny.sca-broker-schema-digest-manifest.v1",
   schema_version: 1,
   canonical_source: "apps/orchestration/src/sca/broker-contracts.ts",
@@ -787,18 +952,92 @@ const SCHEMA_MANIFEST_PREIMAGE = {
   semantic_profile: "penny.sca-broker-semantics.v1",
   semantic_limits: SCA_BROKER_CONTRACT_LIMITS_V1,
   tool_operation_map: TOOL_OPERATION_ENTRIES,
-  schema_digests: SCHEMA_DEFINITIONS.map((definition) => ({
+  schema_digests: SCHEMA_DEFINITIONS_V1.map((definition) => ({
     export_name: definition.export_name,
     schema_id: definition.schema_id,
     sha256: scaBrokerSchemaSha256(definition.schema),
   })),
-  consumers: CONSUMER_EXPECTATIONS,
+  consumers: CONSUMER_EXPECTATIONS_V1,
 };
 
-export const SCA_BROKER_SCHEMA_MANIFEST_SHA256 = sha256(canonicalJson(SCHEMA_MANIFEST_PREIMAGE));
+export const SCA_BROKER_SCHEMA_MANIFEST_SHA256_V1 = sha256(
+  canonicalJson(SCHEMA_MANIFEST_PREIMAGE_V1)
+);
 
 export const SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1 = Object.freeze({
-  ...SCHEMA_MANIFEST_PREIMAGE,
+  ...SCHEMA_MANIFEST_PREIMAGE_V1,
+  manifest_sha256: SCA_BROKER_SCHEMA_MANIFEST_SHA256_V1,
+});
+
+const SCHEMA_DEFINITIONS_V2 = [
+  ...SCHEMA_DEFINITIONS_V1,
+  {
+    export_name: "ScaBrokerJobProgressV1Schema",
+    schema_id: "penny.sca-broker-job-progress.v1",
+    schema: ScaBrokerJobProgressV1Schema,
+  },
+  {
+    export_name: "ScaBrokerExecuteAcceptedResultV2Schema",
+    schema_id: "penny.sca-broker-execute-accepted-result.v2",
+    schema: ScaBrokerExecuteAcceptedResultV2Schema,
+  },
+  {
+    export_name: "ScaBrokerPollResultV2Schema",
+    schema_id: "penny.sca-broker-poll-result.v2",
+    schema: ScaBrokerPollResultV2Schema,
+  },
+  {
+    export_name: "ScaBrokerSchemaDigestManifestV2Schema",
+    schema_id: "penny.sca-broker-schema-digest-manifest.v2",
+    schema: ScaBrokerSchemaDigestManifestV2Schema,
+  },
+] satisfies readonly {
+  readonly export_name: string;
+  readonly schema_id: string;
+  readonly schema: TSchema;
+}[];
+
+const CONSUMER_EXPECTATIONS_V2 = [
+  {
+    module_path: "apps/sca-service/src/contracts.ts",
+    integration: "generated_digest_lock_v2",
+    canonical_source: "apps/orchestration/src/sca/broker-contracts.ts",
+    generated_bundle_export: "SCA_BROKER_SCHEMA_BUNDLE_V2",
+    manifest_export: "SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2",
+  },
+  {
+    module_path: ".pi/extensions/sca/src/contracts.ts",
+    integration: "generated_digest_lock_v2",
+    canonical_source: "apps/orchestration/src/sca/broker-contracts.ts",
+    generated_bundle_export: "SCA_BROKER_SCHEMA_BUNDLE_V2",
+    manifest_export: "SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2",
+  },
+] as const;
+
+const SCHEMA_MANIFEST_PREIMAGE_V2 = {
+  schema_id: "penny.sca-broker-schema-digest-manifest.v2",
+  schema_version: 2,
+  canonical_source: "apps/orchestration/src/sca/broker-contracts.ts",
+  generated_bundle_export: "SCA_BROKER_SCHEMA_BUNDLE_V2",
+  semantic_profile: "penny.sca-broker-semantics.v2",
+  semantic_limits: {
+    ...SCA_BROKER_CONTRACT_LIMITS_V1,
+    max_progress_sequence: SCA_BROKER_PROGRESS_LIMITS_V1.max_sequence,
+    max_progress_work_units: SCA_BROKER_PROGRESS_LIMITS_V1.max_work_units,
+  },
+  tool_operation_map: TOOL_OPERATION_ENTRIES,
+  schema_digests: SCHEMA_DEFINITIONS_V2.map((definition) => ({
+    export_name: definition.export_name,
+    schema_id: definition.schema_id,
+    sha256: scaBrokerSchemaSha256(definition.schema),
+  })),
+  consumers: CONSUMER_EXPECTATIONS_V2,
+};
+
+export const SCA_BROKER_SCHEMA_MANIFEST_SHA256 = sha256(canonicalJson(SCHEMA_MANIFEST_PREIMAGE_V2));
+
+export const SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2 = Object.freeze({
+  ...SCHEMA_MANIFEST_PREIMAGE_V2,
   manifest_sha256: SCA_BROKER_SCHEMA_MANIFEST_SHA256,
 });
 
@@ -1047,6 +1286,50 @@ function assertJobBinding(
     actual.operation !== expected.operation
   ) {
     fail(label, "job, attempt, idempotency, tool, and operation bindings must match");
+  }
+}
+
+function progressPhaseRank(phase: ScaBrokerJobProgressV1["phase"]): number {
+  switch (phase) {
+    case "accepted":
+      return 0;
+    case "executing":
+      return 1;
+    case "materializing_output":
+      return 2;
+  }
+}
+
+function assertProgressSemantics(progress: ScaBrokerJobProgressV1, label: string): void {
+  if (progress.phase === "accepted") {
+    if (
+      progress.sequence !== 0 ||
+      progress.work_units !== 0 ||
+      progress.output_bytes !== 0 ||
+      progress.result_items !== 0
+    ) {
+      fail(label, "accepted progress must be the zero-valued sequence baseline");
+    }
+    return;
+  }
+  if (progress.sequence < 1) {
+    fail(label, "active progress requires a positive sequence");
+  }
+  if (
+    progress.phase === "executing" &&
+    progress.sequence > 1 &&
+    progress.work_units === 0 &&
+    progress.output_bytes === 0 &&
+    progress.result_items === 0
+  ) {
+    fail(label, "advanced executing progress requires a broker-observed work milestone");
+  }
+  if (
+    progress.phase === "materializing_output" &&
+    progress.output_bytes === 0 &&
+    progress.result_items === 0
+  ) {
+    fail(label, "output progress requires broker-owned output bytes or result items");
   }
 }
 
@@ -1315,6 +1598,62 @@ function assertTerminalTruth(
   }
 }
 
+export function validateScaBrokerJobProgressV1(
+  value: unknown,
+  expected?: ScaBrokerJobBindingV1 & { readonly request_sha256: string }
+): ScaBrokerJobProgressV1 {
+  const progress = parseContract(ScaBrokerJobProgressV1Schema, value, "SCA broker job progress");
+  assertJobIdentity(progress, "SCA broker job progress");
+  assertProgressSemantics(progress, "SCA broker job progress");
+  if (expected !== undefined) {
+    assertJobBinding(progress, expected, "SCA broker job progress");
+    if (progress.request_sha256 !== expected.request_sha256) {
+      fail("SCA broker job progress", "request_sha256 must bind the exact accepted job");
+    }
+  }
+  return progress;
+}
+
+export type ScaBrokerProgressDisposition = "unchanged" | "advanced";
+
+export function classifyScaBrokerJobProgressV1(
+  previousValue: unknown,
+  candidateValue: unknown
+): ScaBrokerProgressDisposition {
+  const previous = validateScaBrokerJobProgressV1(previousValue);
+  const candidate = validateScaBrokerJobProgressV1(candidateValue);
+  assertJobBinding(candidate, previous, "SCA broker job progress");
+  if (candidate.request_sha256 !== previous.request_sha256) {
+    fail("SCA broker job progress", "request_sha256 changed across progress snapshots");
+  }
+  if (candidate.sequence < previous.sequence) {
+    fail("SCA broker job progress", "progress sequence regressed");
+  }
+  if (
+    candidate.work_units < previous.work_units ||
+    candidate.output_bytes < previous.output_bytes ||
+    candidate.result_items < previous.result_items ||
+    progressPhaseRank(candidate.phase) < progressPhaseRank(previous.phase)
+  ) {
+    fail("SCA broker job progress", "progress counters or phase regressed");
+  }
+  if (candidate.sequence === previous.sequence) {
+    if (canonicalJson(candidate) !== canonicalJson(previous)) {
+      fail("SCA broker job progress", "an unchanged sequence must have identical metadata");
+    }
+    return "unchanged";
+  }
+  if (
+    candidate.work_units === previous.work_units &&
+    candidate.output_bytes === previous.output_bytes &&
+    candidate.result_items === previous.result_items &&
+    candidate.phase === previous.phase
+  ) {
+    fail("SCA broker job progress", "a higher sequence requires substantive broker progress");
+  }
+  return "advanced";
+}
+
 export function validateScaBrokerTypedErrorV1(value: unknown): ScaBrokerTypedErrorV1 {
   const error = parseContract(ScaBrokerTypedErrorV1Schema, value, "SCA broker typed error");
   assertTypedError(error, "SCA broker typed error");
@@ -1445,6 +1784,53 @@ export function validateScaBrokerExecuteAcceptedResultV1(
   return result;
 }
 
+export function validateScaBrokerExecuteAcceptedResultV2(
+  value: unknown,
+  expected?: ScaBrokerExecuteRequestV1
+): ScaBrokerExecuteAcceptedResultV2 {
+  const result = parseContract(
+    ScaBrokerExecuteAcceptedResultV2Schema,
+    value,
+    "SCA broker execute accepted result v2"
+  );
+  const legacyProjection = {
+    schema_id: "penny.sca-broker-execute-accepted-result.v1",
+    schema_version: 1,
+    tenant_id: result.tenant_id,
+    project_id: result.project_id,
+    run_id: result.run_id,
+    job_id: result.job_id,
+    attempt: result.attempt,
+    idempotency_key: result.idempotency_key,
+    tool_name: result.tool_name,
+    operation: result.operation,
+    status: result.status,
+    request_sha256: result.request_sha256,
+    accepted_at: result.accepted_at,
+  } as const;
+  validateScaBrokerExecuteAcceptedResultV1(legacyProjection, expected);
+  const progress = validateScaBrokerJobProgressV1(result.progress, result);
+  if (progress.phase !== "accepted") {
+    fail("SCA broker execute accepted result v2", "accepted result requires baseline progress");
+  }
+  return result;
+}
+
+export function validateScaBrokerExecuteAcceptedResult(
+  value: unknown,
+  expected?: ScaBrokerExecuteRequestV1
+): ScaBrokerExecuteAcceptedResult {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "schema_id" in value &&
+    value.schema_id === "penny.sca-broker-execute-accepted-result.v2"
+  ) {
+    return validateScaBrokerExecuteAcceptedResultV2(value, expected);
+  }
+  return validateScaBrokerExecuteAcceptedResultV1(value, expected);
+}
+
 export function validateScaBrokerPollRequestV1(value: unknown): ScaBrokerPollRequestV1 {
   const request = parseContract(ScaBrokerPollRequestV1Schema, value, "SCA broker poll request");
   assertJobIdentity(request, "SCA broker poll request");
@@ -1517,12 +1903,8 @@ export function validateScaBrokerReceiptV1(
     if (acceptedAt < submittedAt || acceptedAt > deadlineAt) {
       fail("SCA broker receipt", "accepted_at falls outside the request window");
     }
-    if (terminalAt > deadlineAt) {
-      fail("SCA broker receipt", "terminal_at exceeds the execute deadline");
-    }
-  }
-  if (terminalAt - acceptedAt > BigInt(receipt.limits.timeout_ms) * 1_000_000n) {
-    fail("SCA broker receipt", "accepted_at-to-terminal duration exceeds limits.timeout_ms");
+    // The execute deadline is an admission window. Once accepted, productive execution may run
+    // beyond it; `limits.timeout_ms` is interpreted by live supervisors as renewable inactivity.
   }
   return receipt;
 }
@@ -1598,6 +1980,73 @@ export function validateScaBrokerPollResultV1(
     "SCA broker poll result"
   );
   return result;
+}
+
+export function validateScaBrokerPollResultV2(
+  value: unknown,
+  expected: ScaBrokerPollRequestV1,
+  expectedExecute?: ScaBrokerExecuteRequestV1
+): ScaBrokerPollResultV2 {
+  const result = parseContract(ScaBrokerPollResultV2Schema, value, "SCA broker poll result v2");
+  const legacyProjection = {
+    schema_id: "penny.sca-broker-poll-result.v1",
+    schema_version: 1,
+    tenant_id: result.tenant_id,
+    project_id: result.project_id,
+    run_id: result.run_id,
+    job_id: result.job_id,
+    attempt: result.attempt,
+    idempotency_key: result.idempotency_key,
+    tool_name: result.tool_name,
+    operation: result.operation,
+    request_sha256: result.request_sha256,
+    status: result.status,
+    partial: result.partial,
+    truncated: result.truncated,
+    output_refs: result.output_refs,
+    result_item_count: result.result_item_count,
+    failure: result.failure,
+    receipt: result.receipt,
+    observed_at: result.observed_at,
+  } as const;
+  validateScaBrokerPollResultV1(legacyProjection, expected, expectedExecute);
+  if (expectedExecute === undefined) {
+    fail("SCA broker poll result v2", "progress requires the exact execute request context");
+  }
+  const executeRequest = validateScaBrokerExecuteRequestV1(expectedExecute);
+  const progress = validateScaBrokerJobProgressV1(result.progress, result);
+  if (progress.request_sha256 !== scaBrokerExecuteRequestSha256(executeRequest)) {
+    fail("SCA broker poll result v2", "progress must bind the exact execute request");
+  }
+  if (
+    progress.output_bytes > executeRequest.limits.max_output_bytes ||
+    progress.result_items > executeRequest.limits.max_result_items
+  ) {
+    fail("SCA broker poll result v2", "progress counters exceed the accepted request limits");
+  }
+  if (result.status === "accepted" && progress.phase !== "accepted") {
+    fail("SCA broker poll result v2", "accepted status requires baseline progress");
+  }
+  if (result.status === "running" && progress.phase === "accepted") {
+    fail("SCA broker poll result v2", "running status requires broker-observed active progress");
+  }
+  return result;
+}
+
+export function validateScaBrokerPollResult(
+  value: unknown,
+  expected: ScaBrokerPollRequestV1,
+  expectedExecute?: ScaBrokerExecuteRequestV1
+): ScaBrokerPollResult {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "schema_id" in value &&
+    value.schema_id === "penny.sca-broker-poll-result.v2"
+  ) {
+    return validateScaBrokerPollResultV2(value, expected, expectedExecute);
+  }
+  return validateScaBrokerPollResultV1(value, expected, expectedExecute);
 }
 
 export function validateScaBrokerCancelRequestV1(value: unknown): ScaBrokerCancelRequestV1 {
@@ -1712,7 +2161,7 @@ export function validateScaBrokerSchemaDigestManifestV1(
   const manifest = parseContract(
     ScaBrokerSchemaDigestManifestV1Schema,
     value,
-    "SCA broker schema digest manifest"
+    "SCA broker schema digest manifest v1"
   );
   const preimage = {
     schema_id: manifest.schema_id,
@@ -1731,6 +2180,37 @@ export function validateScaBrokerSchemaDigestManifestV1(
   if (canonicalJson(manifest) !== canonicalJson(SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V1)) {
     fail(
       "SCA broker schema digest manifest",
+      "manifest does not match the canonical schema bundle and consumer expectations"
+    );
+  }
+  return manifest;
+}
+
+export function validateScaBrokerSchemaDigestManifestV2(
+  value: unknown
+): ScaBrokerSchemaDigestManifestV2 {
+  const manifest = parseContract(
+    ScaBrokerSchemaDigestManifestV2Schema,
+    value,
+    "SCA broker schema digest manifest v2"
+  );
+  const preimage = {
+    schema_id: manifest.schema_id,
+    schema_version: manifest.schema_version,
+    canonical_source: manifest.canonical_source,
+    generated_bundle_export: manifest.generated_bundle_export,
+    semantic_profile: manifest.semantic_profile,
+    semantic_limits: manifest.semantic_limits,
+    tool_operation_map: manifest.tool_operation_map,
+    schema_digests: manifest.schema_digests,
+    consumers: manifest.consumers,
+  };
+  if (sha256(canonicalJson(preimage)) !== manifest.manifest_sha256) {
+    fail("SCA broker schema digest manifest v2", "manifest_sha256 does not match its preimage");
+  }
+  if (canonicalJson(manifest) !== canonicalJson(SCA_BROKER_SCHEMA_DIGEST_MANIFEST_V2)) {
+    fail(
+      "SCA broker schema digest manifest v2",
       "manifest does not match the canonical schema bundle and consumer expectations"
     );
   }

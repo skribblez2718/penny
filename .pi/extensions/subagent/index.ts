@@ -37,7 +37,6 @@ import {
   resolveSkillContext,
   runSingleAgent,
   type SingleResult,
-  type SubagentCatalogDriftError,
   type SubagentDetails,
   type UsageStats,
   ProgressEmitter,
@@ -50,7 +49,6 @@ import {
   type AgentScope,
   discoverAgents,
   formatModelVisibleAgentCatalog,
-  snapshotAgentCatalog,
 } from "./agents.js";
 import {
   ArtifactClientError,
@@ -115,21 +113,19 @@ function optionalNumberArgument(
 
 // ── Tool-specific domain types ─────────────────────────────────────────────
 
-// ── Agent discovery at module load (drives dynamic enum + promptSnippet) ──
-const registeredDiscovery = discoverAgents(process.cwd(), "project");
-const discoveredAgents = registeredDiscovery.agents;
-const registeredCatalogSnapshot = snapshotAgentCatalog(registeredDiscovery);
-const agentNames =
-  discoveredAgents.length > 0 ? discoveredAgents.map((a) => a.name) : ["no-agents-found"];
+// Registration advertises a snapshot; every execution resolves the current local catalog.
+const discoveredAgents = discoverAgents(process.cwd(), "project").agents;
+const agentNames = discoveredAgents.map((agent) => agent.name);
 
-/** Build Pi's Google-compatible TypeBox enum from the discovered string catalog. */
-export function createAgentNameEnumSchema(values: readonly string[]) {
-  return StringEnum(values, {
-    description: "Name of the agent to invoke",
+/** Names are validated against fresh discovery, not a stale provider enum. */
+export function createAgentNameSchema() {
+  return Type.String({
+    minLength: 1,
+    description: "Agent name; resolved against the current project catalog at invocation",
   });
 }
 
-const AgentNameEnum = createAgentNameEnumSchema(agentNames);
+const AgentNameSchema = createAgentNameSchema();
 
 const dynamicPromptSnippet =
   discoveredAgents.length > 0
@@ -302,7 +298,7 @@ const InputArtifactsSchema = Type.Array(ArtifactIdSchema, {
 });
 
 const TaskItem = Type.Object({
-  agent: AgentNameEnum,
+  agent: AgentNameSchema,
   task: Type.String({ description: "Task to delegate to the agent" }),
   input_artifacts: Type.Optional(InputArtifactsSchema),
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
@@ -321,7 +317,7 @@ const TaskItem = Type.Object({
 });
 
 const ChainItem = Type.Object({
-  agent: AgentNameEnum,
+  agent: AgentNameSchema,
   task: Type.String({
     description:
       "Task with optional {previous} placeholder. The owner replaces it with an exact artifact instruction, never prior payload bytes.",
@@ -349,7 +345,7 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 });
 
 const SubagentParams = Type.Object({
-  agent: Type.Optional(AgentNameEnum),
+  agent: Type.Optional(AgentNameSchema),
   task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
   tasks: Type.Optional(
     Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })
@@ -557,11 +553,14 @@ export default function (pi: ExtensionAPI) {
 
   const assertRegisteredProviders = (agents: readonly AgentConfig[], names: readonly string[]) => {
     const registered = readHostToolNames(pi);
-    if (registered === undefined) return;
-    for (const name of WORKER_READ_MEMORY_TOOLS) registered.add(name);
+    if (registered !== undefined) for (const name of WORKER_READ_MEMORY_TOOLS) registered.add(name);
     for (const requested of new Set(names)) {
       const agent = agents.find((candidate) => candidate.name === requested);
-      if (agent === undefined) continue;
+      if (agent === undefined)
+        throw new InputArtifactError(
+          `AGENT_NOT_FOUND: '${requested}' is absent from the current project catalog`
+        );
+      if (registered === undefined) continue;
       const missing = agent.tools.filter((tool) => !registered.has(tool));
       if (missing.length > 0) {
         throw new InputArtifactError(
@@ -580,8 +579,9 @@ export default function (pi: ExtensionAPI) {
       "Do not use for trivial direct work; use the skill tool instead for multi-step workflows with state, gates, retries, or resumability.",
       "Modes: single (agent + task), parallel (isolated tasks array), chain (sequential exact-ID handoff through {previous} plus optional explicit inputs).",
       "Every result names its exact output artifact ID; pass those IDs as input_artifacts to give another agent the exact bytes instead of re-running a producer.",
-      "Agents are discovered from the project's .pi/agents/ directory.",
-      'Use agentScope: "both" to include agents from parent directories.',
+      "Agent names and definitions are resolved from the current project's .pi/agents/ directory for each invocation; edits and additions do not require /reload.",
+      "The catalog descriptions below are a registration-time routing snapshot, not frozen execution configuration.",
+      "All agentScope values resolve the same nearest project catalog; they do not merge parent or global catalogs.",
       "Pass sufficient context because agents cannot see the parent conversation.",
       "Use skillContext for caller-supplied task context (file path or inline); it remains subordinate to system and role policy.",
       dynamicAgentCatalog,
@@ -702,30 +702,6 @@ export default function (pi: ExtensionAPI) {
         return {
           content: [{ type: "text", text: `Delegation preflight failed. ${error.message}` }],
           details: makeDetails(requestedMode)([]),
-          isError: true,
-        };
-      }
-
-      const executionCatalogSnapshot = snapshotAgentCatalog(discovery);
-      if (executionCatalogSnapshot.digest !== registeredCatalogSnapshot.digest) {
-        const error: SubagentCatalogDriftError = {
-          code: "SUBAGENT_RELOAD_REQUIRED",
-          kind: "catalog_drift",
-          retryable: true,
-          registeredCatalogDigest: registeredCatalogSnapshot.digest,
-          executionCatalogDigest: executionCatalogSnapshot.digest,
-        };
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Subagent catalog drift detected. Run /reload before invoking an agent so the registered schema and execution catalog agree.",
-            },
-          ],
-          details: {
-            ...makeDetails(requestedMode)([]),
-            error,
-          },
           isError: true,
         };
       }

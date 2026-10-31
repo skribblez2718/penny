@@ -7,6 +7,12 @@
     "rootDir": "../..",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "vitest.videogen-media-cpu.config.ts",
+    "vitest.videogen-native-cpu.config.ts"
+  ],
   "exclude": ["dist", "node_modules"]
 }

@@ -31,9 +31,20 @@ import {
   OWNER_FILE_MODE,
   pathExistsNoFollow,
 } from "./custody.js";
-import { projectRootCommitment } from "./catalog.js";
-import { resolvePennyProjectState } from "./setup.js";
-import type { ResolvePennyStateRootOptions } from "./paths.js";
+import {
+  ProjectCatalog,
+  PROJECT_CATALOG_SCHEMA_VERSION,
+  projectRootCommitment,
+} from "./catalog.js";
+import { assertSqliteHealthy } from "./sqlite-health.js";
+import { Type, type Static } from "typebox";
+import { validateSkillSchema, Sha256Schema, Rfc3339UtcSchema } from "../skill-contracts/common.js";
+import { initializePennyStateInfrastructure, resolvePennyProjectState } from "./setup.js";
+import {
+  pennyStatePaths,
+  resolvePennyStateRoot,
+  type ResolvePennyStateRootOptions,
+} from "./paths.js";
 
 export const STATE_UPGRADE_BACKUP_SCHEMA_VERSION = 1 as const;
 const BACKUP_DATABASE_NAME = "orchestration-before-upgrade.db";
@@ -51,6 +62,7 @@ export type StateUpgradeFaultPoint =
   | "before-schema-mutation"
   | "after-v11-migration"
   | "after-v12-migration"
+  | "after-v13-migration"
   | "schema-committed";
 
 export interface UpgradePennyStateInput {
@@ -64,6 +76,7 @@ export interface UpgradePennyStateResult extends OrchestrationSchemaUpgradeResul
   readonly projectId: string;
   readonly backupRoot: string | null;
   readonly backupDatabase: string | null;
+  readonly catalogUpgrade: UpgradePennyCatalogResult;
 }
 
 interface UpgradeBackupManifest {
@@ -244,7 +257,22 @@ export async function upgradePennyState(
 ): Promise<UpgradePennyStateResult> {
   if (!path.isAbsolute(input.projectRoot)) throw new Error("project root must be absolute");
   if (!path.isAbsolute(input.backupDirectory)) throw new Error("backup directory must be absolute");
-  const resolved = resolvePennyProjectState(input.projectRoot, input.rootOptions ?? {});
+  const rootOptions = input.rootOptions ?? {};
+  const state = pennyStatePaths(resolvePennyStateRoot(rootOptions));
+  const prospectiveBackup = path.resolve(input.backupDirectory);
+  if (
+    pathsOverlap(prospectiveBackup, state.root) ||
+    pathsOverlap(prospectiveBackup, path.resolve(input.projectRoot))
+  ) {
+    throw new Error("backup directory must not overlap the Penny state root or project root");
+  }
+  assertSafeAncestorChain(input.backupDirectory, "Penny state-upgrade backup parent");
+  const catalogUpgrade = await upgradePennyCatalog({
+    stateRoot: state.root,
+    backupDirectory: prospectiveBackup,
+  });
+  initializePennyStateInfrastructure(rootOptions);
+  const resolved = resolvePennyProjectState(input.projectRoot, rootOptions);
   ArtifactStore.verifyExisting(resolved.paths.artifacts.root, { projectId: resolved.projectId });
   ReceiptAuthority.loadExisting(resolved.paths.orchestration.receiptKey);
   const inspection = Checkpointer.inspectExistingSchema(
@@ -259,21 +287,13 @@ export async function upgradePennyState(
       changed: false,
       backupRoot: null,
       backupDatabase: null,
+      catalogUpgrade,
     };
   }
   if (!inspection.upgradeSupported) {
     throw new Error(
       `orchestration schema ${inspection.actualVersion} has no supported active-project upgrade`
     );
-  }
-
-  assertSafeAncestorChain(input.backupDirectory, "Penny state-upgrade backup parent");
-  const prospectiveBackup = path.resolve(input.backupDirectory);
-  if (
-    pathsOverlap(prospectiveBackup, resolved.state.root) ||
-    pathsOverlap(prospectiveBackup, resolved.canonicalProjectRoot)
-  ) {
-    throw new Error("backup directory must not overlap the Penny state root or project root");
   }
 
   return withUpgradeLock(resolved.state.locks, resolved.projectId, async () => {
@@ -300,7 +320,13 @@ export async function upgradePennyState(
         input.faultInjector?.("before-schema-mutation");
       },
       async (targetVersion) => {
-        input.faultInjector?.(targetVersion === 11 ? "after-v11-migration" : "after-v12-migration");
+        input.faultInjector?.(
+          targetVersion === 11
+            ? "after-v11-migration"
+            : targetVersion === 12
+              ? "after-v12-migration"
+              : "after-v13-migration"
+        );
       }
     );
     input.faultInjector?.("schema-committed");
@@ -325,6 +351,123 @@ export async function upgradePennyState(
       ...result,
       backupRoot,
       backupDatabase,
+      catalogUpgrade,
+    };
+  });
+}
+
+const CATALOG_BACKUP_DATABASE_NAME = "catalog-before-capacity-upgrade.db";
+const CATALOG_BACKUP_MANIFEST_NAME = "catalog-upgrade-backup.json";
+const CatalogUpgradeBackupV1Schema = Type.Object(
+  {
+    schema_id: Type.Literal("penny.catalog-upgrade-backup.v1"),
+    schema_version: Type.Literal(1),
+    source_version: Type.Union([Type.Literal(2), Type.Literal(3)]),
+    target_version: Type.Literal(4),
+    database_file: Type.Literal(CATALOG_BACKUP_DATABASE_NAME),
+    database_sha256: Sha256Schema,
+    created_at: Rfc3339UtcSchema,
+  },
+  { additionalProperties: false }
+);
+type CatalogUpgradeBackupV1 = Static<typeof CatalogUpgradeBackupV1Schema>;
+export interface UpgradePennyCatalogResult {
+  readonly sourceVersion: number;
+  readonly targetVersion: number;
+  readonly changed: boolean;
+  readonly backupDatabase: string | null;
+  readonly backupManifest: string | null;
+  readonly backupSha256: string | null;
+}
+/** Explicit global-catalog upgrade API. Call before project upgrade; never ordinary runtime.
+ * A verified external SQLite backup is durable before any catalog DDL. Policy is NOT installed.
+ * This API intentionally does not activate a service or reinterpret legacy operations. */
+export async function upgradePennyCatalog(input: {
+  readonly stateRoot: string;
+  readonly backupDirectory: string;
+  readonly faultInjector?: (
+    point:
+      | "catalog-backup-created"
+      | "before-capacity-ddl"
+      | "after-capacity-ddl"
+      | "catalog-schema-committed"
+  ) => void;
+}): Promise<UpgradePennyCatalogResult> {
+  if (!path.isAbsolute(input.stateRoot) || !path.isAbsolute(input.backupDirectory))
+    throw new Error("catalog upgrade paths must be absolute");
+  const state = pennyStatePaths(input.stateRoot);
+  if (pathsOverlap(input.backupDirectory, state.root))
+    throw new Error("catalog backup must be outside state root");
+  assertSafeAncestorChain(input.backupDirectory, "catalog backup parent");
+  assertOwnerDirectory(state.root, "catalog state root");
+  ensureOwnerDirectory(state.locks, "catalog upgrade locks");
+  return withUpgradeLock(state.locks, "global-catalog", async () => {
+    const backupState: { database: string | null; manifest: string | null; sha256: string | null } =
+      { database: null, manifest: null, sha256: null };
+    const result = await ProjectCatalog.upgradeCapacitySchema(
+      input.stateRoot,
+      async (sourceVersion) => {
+        const root = createBackupRoot(input.backupDirectory, "global-catalog");
+        const database = path.join(root, CATALOG_BACKUP_DATABASE_NAME);
+        const { DatabaseSync, backup } = sqliteModule();
+        {
+          using source = new DatabaseSync(state.catalogDatabase, { readOnly: true });
+          source.exec("PRAGMA query_only=ON; PRAGMA foreign_keys=ON;");
+          await backup(source, database);
+        }
+        chmodSync(database, OWNER_FILE_MODE);
+        {
+          using target = new DatabaseSync(database);
+          target.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;");
+          assertSqliteHealthy(target, "catalog upgrade backup");
+        }
+        ProjectCatalog.verifyCapacityUpgradeBackup(root, CATALOG_BACKUP_DATABASE_NAME);
+        const databaseSha256 = await sha256File(database);
+        const manifest: CatalogUpgradeBackupV1 = validateSkillSchema(
+          CatalogUpgradeBackupV1Schema,
+          {
+            schema_id: "penny.catalog-upgrade-backup.v1",
+            schema_version: 1,
+            source_version: sourceVersion,
+            target_version: PROJECT_CATALOG_SCHEMA_VERSION,
+            database_file: CATALOG_BACKUP_DATABASE_NAME,
+            database_sha256: databaseSha256,
+            created_at: new Date().toISOString(),
+          },
+          "CatalogUpgradeBackupV1"
+        );
+        const manifestPath = path.join(root, CATALOG_BACKUP_MANIFEST_NAME);
+        writeOwnerJson(manifestPath, manifest);
+        fsyncDirectory(root);
+        // Re-read the complete manifest and backup hash before allowing mutation.
+        const readback = await import("node:fs/promises").then((fs) =>
+          fs.readFile(manifestPath, "utf8")
+        );
+        const parsed: unknown = JSON.parse(readback);
+        if (
+          canonicalJson(
+            validateSkillSchema(CatalogUpgradeBackupV1Schema, parsed, "CatalogUpgradeBackupV1")
+          ) !== canonicalJson(manifest) ||
+          canonicalJson(manifest) + "\n" !== readback ||
+          (await sha256File(database)) !== databaseSha256
+        )
+          throw new Error("catalog upgrade backup readback diverges");
+        backupState.database = database;
+        backupState.manifest = manifestPath;
+        backupState.sha256 = databaseSha256;
+        input.faultInjector?.("catalog-backup-created");
+      },
+      input.faultInjector
+    );
+    if (result.changed && (backupState.database === null || backupState.sha256 === null))
+      throw new Error("catalog upgrade missing verified backup");
+    input.faultInjector?.("catalog-schema-committed");
+    using _verified = new ProjectCatalog(input.stateRoot, { create: false });
+    return {
+      ...result,
+      backupDatabase: backupState.database,
+      backupManifest: backupState.manifest,
+      backupSha256: backupState.sha256,
     };
   });
 }

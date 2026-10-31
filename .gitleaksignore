@@ -1,0 +1,5 @@
+# Historical false positive: a synthetic idempotency identifier in the SCA
+# applicationRequest() test factory, not an authentication credential. This exact
+# commit/file/rule/line fingerprint does not exempt current or future identifiers,
+# other findings in the file, or the generic-api-key rule.
+0e4ece0814f536e668ba5d4bd45f50eabc037911:apps/orchestration/tests/sca-broker-contracts.test.ts:generic-api-key:153

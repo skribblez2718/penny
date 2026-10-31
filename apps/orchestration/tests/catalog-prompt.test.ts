@@ -12,8 +12,8 @@ import {
   taskProjectGuidance,
   transformCatalogFrame,
   verifyPromptDocumentation,
-} from "../src/catalog-prompt.js";
-import { createWorkerResourceLoader } from "../src/model-client.js";
+} from "../dist/catalog-prompt.js";
+import { createWorkerResourceLoader } from "../dist/model-client.js";
 
 let root: string;
 const role =

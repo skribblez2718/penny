@@ -5,14 +5,15 @@ import path from "node:path";
 import {
   resolvePlaybook,
   skillContractSha256,
-  type PlaybookRegistrationV1,
-  type PlaybookRegistryV1,
-} from "@penny/orchestration/source";
+  type PlaybookRegistration,
+  type PlaybookRegistry,
+} from "@penny/orchestration";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { resolveSkillIngress } from "../../skill-ingress.js";
 
 const roots: string[] = [];
+const REPO_ROOT = path.resolve(import.meta.dirname, "../../../../..");
 
 function projectRoot(): string {
   const root = mkdtempSync(path.join(tmpdir(), "penny-skill-ingress-"));
@@ -24,7 +25,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function registration(): PlaybookRegistrationV1 {
+function registration(): PlaybookRegistration {
   const research = resolvePlaybook("research");
   if (research === undefined || research.worker.kind !== "catalog-agent") {
     throw new Error("research registration fixture is unavailable");
@@ -37,10 +38,11 @@ function registration(): PlaybookRegistrationV1 {
     worker: { ...research.worker, workflow_name: name },
     // A synthetic generic ingress is not one of the six authorized child providers.
     generic_child: undefined,
+    seal_policy: undefined,
   };
 }
 
-function registry(item: PlaybookRegistrationV1): PlaybookRegistryV1 {
+function registry(item: PlaybookRegistration): PlaybookRegistry {
   return new Map([[item.name, item]]);
 }
 
@@ -53,7 +55,7 @@ function writeSkillPackage(root: string, name: string, disabled = false): void {
       "---",
       `name: ${name}`,
       "description: Fixture skill. Use when testing generic ingress. Do not use for direct work.",
-      `disable-model-invocation: ${disabled ? "true" : "false"}`,
+      ...(disabled ? ["disable-model-invocation: true"] : []),
       "metadata:",
       "  penny:",
       "    engine: orchestration",
@@ -65,7 +67,7 @@ function writeSkillPackage(root: string, name: string, disabled = false): void {
 }
 
 describe("generic registered skill ingress", () => {
-  it("refuses an unregistered package, including a model-disabled development package", () => {
+  it("refuses a synthetic unregistered model-disabled package", () => {
     const root = projectRoot();
     writeSkillPackage(root, "sca", true);
     expect(resolveSkillIngress({ projectRoot: root, name: "sca", registry: new Map() })).toEqual({
@@ -86,6 +88,20 @@ describe("generic registered skill ingress", () => {
       registration: item,
       contract_sha256: skillContractSha256(item.contract),
     });
+  });
+
+  it("resolves the real hidden imagegen package through the activated registry", () => {
+    const resolution = resolveSkillIngress({ projectRoot: REPO_ROOT, name: "imagegen" });
+    expect(resolution).toMatchObject({ ok: true, registration: { name: "imagegen" } });
+    if (!resolution.ok) throw new Error(resolution.message);
+    expect(resolution.contract_sha256).toBe(skillContractSha256(resolution.registration.contract));
+  });
+
+  it("resolves hidden videogen without adding ordinary generic-child authority", () => {
+    const resolution = resolveSkillIngress({ projectRoot: REPO_ROOT, name: "videogen" });
+    expect(resolution).toMatchObject({ ok: true, registration: { name: "videogen" } });
+    if (!resolution.ok) throw new Error(resolution.message);
+    expect(resolution.registration.generic_child).toBeUndefined();
   });
 
   it("keeps model visibility separate from registered generic execution", () => {

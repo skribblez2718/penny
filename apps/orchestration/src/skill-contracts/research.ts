@@ -6,7 +6,7 @@ import { canonicalJson, sha256 } from "../checkpointer.js";
 import {
   ArtifactRefSchema,
   LivenessPolicyV2Schema,
-  LivenessPolicyV3Schema,
+  LivenessPolicySchema,
   type ArtifactRef,
   type InputArtifacts,
   type JsonValue,
@@ -37,6 +37,17 @@ const MAX_CLAIMS = 512;
 const MAX_SOURCES = 512;
 const MAX_EVIDENCE = 2_048;
 const MAX_FINDINGS = 128;
+/** Mirrors CatalogWorkerContinuityMetadataV1Schema.input_artifacts; contract-tested. */
+export const RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS = 256;
+/** Unchanged GroundedSynthesisV1 active-provenance capacity, not a history window. */
+export const RESEARCH_CORE_MAX_EVIDENCE_ARTIFACTS = 64;
+
+export class ResearchEvidenceCapacityError extends SkillSchemaValidationError {
+  constructor(detail: string) {
+    super("Research evidence capacity", [detail]);
+    this.name = "ResearchEvidenceCapacityError";
+  }
+}
 export const MAX_RESEARCH_SEMANTIC_DRAFT_BYTES = 1_048_576;
 const HOST_LIVENESS_FIELDS = new Set([
   "max_steps",
@@ -89,8 +100,12 @@ const BudgetOverridesSchema = Type.Object(
   {
     max_sub_queries: Type.Optional(Type.Integer({ minimum: 1, maximum: 64 })),
     max_fan_width: Type.Optional(Type.Integer({ minimum: 1, maximum: 64 })),
-    total_research_rounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
-    max_evaluator_attempts_per_loop: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
+    total_research_rounds: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
+    ),
+    max_evaluator_attempts_per_loop: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
+    ),
     critique_passes: Type.Optional(Type.Integer({ minimum: 0, maximum: 2 })),
   },
   { additionalProperties: false }
@@ -190,10 +205,16 @@ export const ResearchCallerConstraintsV1Schema = Type.Object(
     budget_overrides: Type.Optional(BudgetOverridesSchema),
     max_sub_queries: Type.Optional(Type.Integer({ minimum: 1, maximum: 64 })),
     max_fan_width: Type.Optional(Type.Integer({ minimum: 1, maximum: 64 })),
-    total_research_rounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
-    max_research_rounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
-    max_evaluator_attempts_per_loop: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
-    max_iterations: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
+    total_research_rounds: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
+    ),
+    max_research_rounds: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
+    ),
+    max_evaluator_attempts_per_loop: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
+    ),
+    max_iterations: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
     critique_passes: Type.Optional(Type.Integer({ minimum: 0, maximum: 2 })),
     context_bindings: Type.Optional(
       Type.Array(ResearchContextBindingRequestV1Schema, { maxItems: MAX_CONTEXT_BINDINGS })
@@ -417,14 +438,14 @@ function parseBudgetOverrides(
     nested.total_research_rounds,
     "constraints.budget_overrides.total_research_rounds",
     1,
-    16
+    Number.MAX_SAFE_INTEGER
   );
   const roundsAlias = aliasInteger(
     constraints,
     "total_research_rounds",
     "max_research_rounds",
     1,
-    16
+    Number.MAX_SAFE_INTEGER
   );
   if (roundsNested !== undefined && roundsAlias !== undefined && roundsNested !== roundsAlias) {
     throw new SkillSchemaValidationError("research budget overrides", [
@@ -435,14 +456,14 @@ function parseBudgetOverrides(
     nested.max_evaluator_attempts_per_loop,
     "constraints.budget_overrides.max_evaluator_attempts_per_loop",
     1,
-    16
+    Number.MAX_SAFE_INTEGER
   );
   const attemptsAlias = aliasInteger(
     constraints,
     "max_evaluator_attempts_per_loop",
     "max_iterations",
     1,
-    16
+    Number.MAX_SAFE_INTEGER
   );
   if (
     attemptsNested !== undefined &&
@@ -1539,7 +1560,10 @@ const ResearchSemanticDraftSourceV1Schema = Type.Object(
 const ResearchSemanticDraftEvidenceV1Schema = Type.Object(
   {
     source_index: Type.Integer({ minimum: 0, maximum: MAX_SOURCES - 1 }),
-    evidence_artifact_slot: Type.Integer({ minimum: 0, maximum: 63 }),
+    evidence_artifact_slot: Type.Integer({
+      minimum: 0,
+      maximum: RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS - 1,
+    }),
     locator: EvidenceV1Schema.properties.locator,
     excerpt: TextSchema({ minBytes: 1, maxBytes: QUESTION_BYTES, multiline: true }),
     relation: EvidenceV1Schema.properties.relation,
@@ -1847,7 +1871,17 @@ export function researchSemanticDraftPromptContract(): string {
     local_indexes: {
       base: 0,
       ids: "owner-assigned deterministically by array order",
-      evidence_artifact_slot: "owner-selected Echo artifact slot",
+      evidence_artifact_slot:
+        "stable index into the complete owner-supplied considered Echo history",
+    },
+    evidence_working_set: {
+      considered_history:
+        "all exact Echo artifacts, including earlier revisions; no summaries or truncation",
+      active_provenance:
+        "distinct artifacts actually cited by draft evidence slots, in history order",
+      maximum_active_artifacts: RESEARCH_CORE_MAX_EVIDENCE_ARTIFACTS,
+      capacity:
+        "one bounded core, not unlimited partitioning; omit no material conflict or scope obligation to fit",
     },
     owner_fields_forbidden: [
       "request",
@@ -1895,7 +1929,7 @@ export const GroundedSynthesisV1Schema = Type.Object(
         context_trace_sha256: Sha256Schema,
         evidence_artifacts: Type.Array(ArtifactRefSchema, {
           minItems: 1,
-          maxItems: 64,
+          maxItems: RESEARCH_CORE_MAX_EVIDENCE_ARTIFACTS,
         }),
         synthesis_source_artifact: ArtifactRefSchema,
       },
@@ -2037,10 +2071,15 @@ export function projectResearchSemanticDraft(input: {
       "context trace must be a SHA-256 digest",
     ]);
   }
-  if (input.evidenceArtifacts.length < 1 || input.evidenceArtifacts.length > 64) {
+  if (input.evidenceArtifacts.length < 1) {
     throw new SkillSchemaValidationError("ResearchSemanticDraftV1 evidence artifacts", [
-      "owner-selected Echo evidence must contain 1..64 artifacts",
+      "considered Echo history must not be empty",
     ]);
+  }
+  if (input.evidenceArtifacts.length > RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS) {
+    throw new ResearchEvidenceCapacityError(
+      `considered history exceeds the ${RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS}-ref handoff capacity`
+    );
   }
   assertUnique(
     input.evidenceArtifacts.map((artifact) => artifact.artifact_id),
@@ -2065,6 +2104,24 @@ export function projectResearchSemanticDraft(input: {
     throw new SkillSchemaValidationError("ResearchSemanticDraftV1 Synthia lineage", [
       "synthesis source must be the exact Synthia synthesizing artifact",
     ]);
+  }
+  // Resolve every slot before deriving the working set. Never substitute a recent
+  // artifact, trust a model-authored ref, or count repeated citations twice.
+  const citedSlots = new Set<number>();
+  for (const [index, item] of draft.evidence.entries()) {
+    if (input.evidenceArtifacts[item.evidence_artifact_slot] === undefined) {
+      throw new SkillSchemaValidationError(
+        `ResearchSemanticDraftV1.evidence[${index}].evidence_artifact_slot`,
+        ["slot does not resolve to an owner-selected Echo artifact"]
+      );
+    }
+    citedSlots.add(item.evidence_artifact_slot);
+  }
+  const activeEvidence = input.evidenceArtifacts.filter((_artifact, slot) => citedSlots.has(slot));
+  if (activeEvidence.length > RESEARCH_CORE_MAX_EVIDENCE_ARTIFACTS) {
+    throw new ResearchEvidenceCapacityError(
+      `one core cites ${activeEvidence.length} distinct Echo artifacts; active provenance supports at most ${RESEARCH_CORE_MAX_EVIDENCE_ARTIFACTS}. All considered history is retained`
+    );
   }
   const evidenceBytes = new Map<string, Buffer>();
   const evidence = draft.evidence.map((item, index) => {
@@ -2167,7 +2224,7 @@ export function projectResearchSemanticDraft(input: {
     },
     provenance: {
       context_trace_sha256: input.contextTraceSha256,
-      evidence_artifacts: [...input.evidenceArtifacts],
+      evidence_artifacts: activeEvidence,
       synthesis_source_artifact: input.synthesisSourceArtifact,
     },
   });
@@ -2689,9 +2746,15 @@ const ResearchBudgetPresetV3Schema = Type.Object(
   {
     plan_critique: Type.Boolean(),
     quality_critique: Type.Boolean(),
-    total_research_rounds: Type.Integer({ minimum: 1, maximum: 16 }),
-    default_max_evaluator_attempts: Type.Integer({ minimum: 1, maximum: 16 }),
-    liveness: LivenessPolicyV3Schema,
+    total_research_rounds: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    default_max_evaluator_attempts: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    liveness: LivenessPolicySchema,
   },
   { additionalProperties: false }
 );
@@ -2728,11 +2791,20 @@ export const ResearchBudgetAdmissionV3Schema = Type.Object(
     max_sub_queries: Type.Integer({ minimum: 1, maximum: 64 }),
     max_fan_width: Type.Integer({ minimum: 1, maximum: 64 }),
     effective_decomposition_width: Type.Integer({ minimum: 1, maximum: 64 }),
-    total_research_rounds: Type.Integer({ minimum: 1, maximum: 16 }),
-    max_evaluator_attempts_per_loop: Type.Integer({ minimum: 1, maximum: 16 }),
-    max_semantic_repairs_per_loop: Type.Integer({ minimum: 0, maximum: 15 }),
+    total_research_rounds: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    max_evaluator_attempts_per_loop: Type.Union([
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    max_semantic_repairs_per_loop: Type.Union([
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER - 1 }),
+      Type.Null(),
+    ]),
     critique_passes: Type.Integer({ minimum: 0, maximum: 2 }),
-    liveness: LivenessPolicyV3Schema,
+    liveness: LivenessPolicySchema,
   },
   { additionalProperties: false }
 );
@@ -2754,9 +2826,9 @@ export const ResearchBudgetSnapshotV3Schema = Type.Object(
 export type ResearchBudgetSnapshotV3 = Static<typeof ResearchBudgetSnapshotV3Schema>;
 
 export function makeResearchBudgetPolicy(input: {
-  readonly quick: Static<typeof LivenessPolicyV3Schema>;
-  readonly standard: Static<typeof LivenessPolicyV3Schema>;
-  readonly deep: Static<typeof LivenessPolicyV3Schema>;
+  readonly quick: Static<typeof LivenessPolicySchema>;
+  readonly standard: Static<typeof LivenessPolicySchema>;
+  readonly deep: Static<typeof LivenessPolicySchema>;
 }): ResearchBudgetPolicyV3 {
   return validateSkillSchema(
     ResearchBudgetPolicyV3Schema,
@@ -2767,22 +2839,22 @@ export function makeResearchBudgetPolicy(input: {
         quick: {
           plan_critique: false,
           quality_critique: false,
-          total_research_rounds: 2,
-          default_max_evaluator_attempts: 3,
+          total_research_rounds: null,
+          default_max_evaluator_attempts: null,
           liveness: input.quick,
         },
         standard: {
           plan_critique: false,
           quality_critique: false,
-          total_research_rounds: 2,
-          default_max_evaluator_attempts: 3,
+          total_research_rounds: null,
+          default_max_evaluator_attempts: null,
           liveness: input.standard,
         },
         deep: {
           plan_critique: true,
           quality_critique: true,
-          total_research_rounds: 3,
-          default_max_evaluator_attempts: 3,
+          total_research_rounds: null,
+          default_max_evaluator_attempts: null,
           liveness: input.deep,
         },
       },
@@ -2846,7 +2918,7 @@ export function resolveResearchBudgetAdmission(
       total_research_rounds:
         request.budget_overrides.total_research_rounds ?? preset.total_research_rounds,
       max_evaluator_attempts_per_loop: evaluatorAttempts,
-      max_semantic_repairs_per_loop: evaluatorAttempts - 1,
+      max_semantic_repairs_per_loop: evaluatorAttempts === null ? null : evaluatorAttempts - 1,
       critique_passes: request.budget_overrides.critique_passes ?? (preset.plan_critique ? 2 : 0),
       liveness: preset.liveness,
     },

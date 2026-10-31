@@ -72,6 +72,11 @@ export function runPreflight({ projectRoot, profile }) {
       throw new Error(`Node ${metadata.minimumNode.join(".")} or newer is required`);
     }
     checks.push({ component: "node", status: "ready", version: nodeVersion.join(".") });
+    const sqliteVersion = parseVersion(process.versions.sqlite ?? "", "bundled SQLite");
+    if (compareVersion(sqliteVersion, [3, 51, 3]) < 0) {
+      throw new Error("SQLite 3.51.3 or newer is required; use .nvmrc and restart Pi");
+    }
+    checks.push({ component: "sqlite", status: "ready", version: sqliteVersion.join(".") });
 
     if (profile === "core" || profile === "javascript") {
       const bunText = commandVersion("bun", ["--version"], "Bun");

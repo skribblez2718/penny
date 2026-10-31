@@ -4,11 +4,11 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer, canonicalJson } from "../src/checkpointer.js";
-import type { Directive, RunIdentity } from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
-import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer, canonicalJson } from "../dist/checkpointer.js";
+import type { Directive, RunIdentity } from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../dist/model-client.js";
 import {
   hasApprovedPromotionCompletion,
   hasExternalStartOperationGroup,
@@ -19,10 +19,10 @@ import {
   hasReviewInvalidation,
   hasRoutingRepair,
   hasStateAwareRepair,
-} from "../src/playbooks/playbook.js";
-import { PLAYBOOK_REGISTRY, type PlaybookRegistryV1 } from "../src/playbooks/registry.js";
-import { WorkerExecutor } from "../src/worker.js";
-import { validateGroundedSynthesis } from "../src/skill-contracts/research.js";
+} from "../dist/playbooks/playbook.js";
+import { PLAYBOOK_REGISTRY, type PlaybookRegistry } from "../dist/playbooks/registry.js";
+import { WorkerExecutor } from "../dist/worker.js";
+import { validateGroundedSynthesis } from "../dist/skill-contracts/research.js";
 import {
   CORE_ONLY_PLAYBOOK_NAME,
   CORE_ONLY_REGISTRATION,
@@ -53,7 +53,7 @@ function identity(runId: string): RunIdentity {
   };
 }
 
-function registry(): PlaybookRegistryV1 {
+function registry(): PlaybookRegistry {
   return new Map([[CORE_ONLY_REGISTRATION.name, CORE_ONLY_REGISTRATION]]);
 }
 

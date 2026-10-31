@@ -2,7 +2,6 @@
  * Agent discovery and configuration
  */
 
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
@@ -25,11 +24,6 @@ export interface AgentConfig {
 export interface AgentDiscoveryResult {
   agents: AgentConfig[];
   projectAgentsDir: string | null;
-}
-
-export interface AgentCatalogSnapshot {
-  digest: string;
-  agentNames: string[];
 }
 
 export const MODEL_VISIBLE_AGENT_LIMIT = 24;
@@ -169,37 +163,6 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
     if (parentDir === currentDir) return null;
     currentDir = parentDir;
   }
-}
-
-/**
- * Capture the exact catalog state used for tool registration.
- *
- * The digest includes provider-visible metadata and execution-affecting agent
- * configuration. If any of it changes after registration, execution must wait
- * for Pi to reload and re-register the tool rather than using stale schema.
- */
-export function snapshotAgentCatalog(discovery: AgentDiscoveryResult): AgentCatalogSnapshot {
-  const agents = discovery.agents
-    .map((agent) => ({
-      name: agent.name,
-      description: agent.description,
-      tools: agent.tools,
-      model: agent.model ?? null,
-      provider: agent.provider ?? null,
-      thinking: agent.thinking ?? null,
-      systemPrompt: agent.systemPrompt,
-      source: agent.source,
-      filePath: path.resolve(agent.filePath),
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name) || a.filePath.localeCompare(b.filePath));
-  const canonical = JSON.stringify({
-    projectAgentsDir: discovery.projectAgentsDir ? path.resolve(discovery.projectAgentsDir) : null,
-    agents,
-  });
-  return {
-    digest: `sha256:${createHash("sha256").update(canonical).digest("hex")}`,
-    agentNames: agents.map((agent) => agent.name),
-  };
 }
 
 export function discoverAgents(cwd: string, _scope: AgentScope): AgentDiscoveryResult {

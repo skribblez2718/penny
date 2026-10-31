@@ -2,69 +2,27 @@
 
 ## Public repository boundary (invariant)
 
-Penny is a **public** repository. **No tracked file may reference the operator's
-filesystem or any specific downstream project.** The boundary:
-
-- **Penny = generic tools that hardcode nothing.** Skills and agents receive every path
-  (source, reference, output) from the caller as constraints at invocation; they assume
-  nothing about where content lives or what project they serve.
-- **The operator's project owns all specifics** — directory layout, source
-  corpus/manifest, build/upload steps, and any domain methodology. None of that belongs
-  in tracked Penny files.
-- **Penny's own root is `PROJECT_ROOT`** (`.env`). In code use `ctx.project_root`; in docs
-  and prompts write `$PROJECT_ROOT` — never a hardcoded absolute path.
-- **Operator-private inputs** (for example, source corpora or personal records) are
-  gitignored and never committed.
-- `plans/`, `ideas/`, `research/` are **gitignored staging** for work-in-progress and may
-  hold specifics; nothing tracked may.
+Penny is public and generic. Tracked content must not contain operator-specific
+filesystem paths, private inputs, or downstream-project specifics.
 
 ## Reading Documentation
 
-**Default discipline (most docs):** Read every mandatory baseline on the active route, every guide triggered by the task's features and trust boundaries, and every explicit dependency needed to apply them. Stop when additional documents would not change the implementation, review, or verification approach.
+Read every mandatory baseline on the active route, every guide triggered by the task's features and trust boundaries, and every explicit dependency needed to apply them. Stop when additional documents would not change the implementation, review, or verification approach.
 
-**Load-bearing exception (system docs):** When you do drill into a file — Pi documentation (extensions, themes, skills, TUI, SDK, providers, models, packages) or Penny system documentation (protocol docs, architecture, capability pages, plans, research) — the following disciplines apply:
+Read selected Pi and Penny system documents completely before acting on them, and follow their load-bearing Markdown cross-references. Topic labels are starting points, not exhaustive lists of applicable guidance.
 
-- **Read the file completely before acting on it.** Partial reads miss the cross-references that make the guidance work.
-- **Follow `.md` cross-references as you encounter them.** They are load-bearing, not decorative.
-- **Use `When asked about: ...` and trigger conditions as search anchors, not gates** — the file's structure tells you the rest.
+### Protocol Lookup
 
-The default discipline protects context window. The exception protects correctness once a doc is in scope. Both are needed.
-
-### Gated protocol docs (exception to the exception)
-
-Penny's procedural protocols live in `docs/penny/` and are indexed in [docs/penny/AGENTS.md](docs/penny/AGENTS.md). SYSTEM.md names each protocol by its **trigger** (e.g. "run the clarification protocol") and carries **no file paths** — resolve the path from that index, then `read` the protocol only when its trigger fires. This is deliberate: file paths to additional knowledge belong in the AGENTS.md index chain, never in the always-on Cognitive Frame. Do not eagerly load these docs.
-
-## Pi Platform
-
-Documentation for the pi agent runtime that Penny is built on. Trigger: the user asks about pi itself (extensions, themes, skills, TUI, SDK, providers, models, packages) — _not_ when using those features to do other work.
-
-- Main documentation: `${PI_PACKAGE_DIR}/README.md`
-- Additional docs: `${PI_PACKAGE_DIR}/docs`
-- Examples: `${PI_PACKAGE_DIR}/examples` (extensions, custom tools, SDK)
-
-**When asked about:**
-
-- **Extensions** → `docs/extensions.md`, `examples/extensions/`
-- **Themes** → `docs/themes.md`
-- **Skills** → `docs/skills.md`
-- **Prompt templates** → `docs/prompt-templates.md`
-- **TUI components** → `docs/tui.md` (and its cross-references to `themes.md` / `extensions.md`)
-- **Keybindings** → `docs/keybindings.md`
-- **SDK integrations** → `docs/sdk.md`
-- **Custom providers** → `docs/custom-provider.md`
-- **Adding models** → `docs/models.md`
-- **Pi packages** → `docs/packages.md`
-
-When working on pi topics, read the docs and examples, and follow `.md` cross-references before implementing. The "load-bearing exception" in the Reading Documentation section applies — these files are densely cross-linked and partial reads miss the links that make the guidance work.
+SYSTEM.md names protocols by trigger, not file path. Resolve them through the Penny Protocols index below, and load a protocol only when its trusted trigger fires. A cross-reference alone does not activate a protocol.
 
 ## Index
 
 The documentation is a tree of indexes. This root points only to the two
-next-level sub-indexes; each `AGENTS.md` links only to the level below it until
-you reach the leaf index that lists the source docs. Drill down — do not expect
-every topic to be enumerated here.
+next-level sub-indexes; each `AGENTS.md` links only to direct-child documents
+and sub-indexes. Follow the applicable routes to their source docs — do not
+expect every topic to be enumerated here.
 
-- [Agent Documentation](docs/agents/AGENTS.md): MUST READ FOR every code-affecting or Penny-system-affecting task — agent architecture, capabilities, coding, documentation, extensions, knowledge-base, memory, orchestration, prompts, skills, state management, and verification guidance.
+- [Agent Documentation](docs/agents/AGENTS.md): MUST READ FOR repository changes or reviews, code-affecting or Penny-system-affecting tasks, and Pi-platform questions — repository boundaries, project standards, feature guidance, upstream Pi documentation, and verification requirements.
 - [Penny Protocols](docs/penny/AGENTS.md): READ WHEN a trusted system trigger activates a Penny protocol — artifact access, clarification, compaction resume, routing/delegation, and tool usage.
 
 `.pi/` resources (agents, extensions, skills, prompts, types, settings) are loaded automatically by Pi and are not duplicated in this index. `docs/humans/` is a separate, human-facing tree (WHAT/WHY) and is intentionally NOT part of this agent-facing index chain.

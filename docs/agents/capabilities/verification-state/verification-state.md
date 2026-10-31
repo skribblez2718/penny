@@ -13,16 +13,14 @@ fabricated pass.
 2. Evidence-required fields must be non-empty.
 3. `PASS`/`FAIL` vocabularies are contractual, not inferred from prose.
 4. A failure routes to the producer that can repair it.
-5. Repairs are bounded and re-enter verification.
+5. Repairs follow actual operator policy and re-enter verification; an unspecified allowance is not a finite default.
 6. Model diversity is supplementary; tests, tools, and sources remain the proof.
 7. Human approval is separate from objective verification.
 
 ## Research example
 
 The `validating` state requires `verdict`, `unsupported_claims`, and non-empty `evidence`;
-`evidence_needed` may name researchable gaps. PASS advances to report writing. A researchable
-gap returns to Echo, another grounding problem returns to Synthia, and exhaustion proceeds
-with `grounded: false` plus unresolved claims.
+`evidence_needed` may name researchable gaps. PASS advances to any required same-core critique and host rendering. A researchable gap returns to Echo and another grounding problem returns to Synthia; every changed core re-enters Vera. Actual policy exhaustion preserves best partials and unresolved claims as `incomplete/met:false`, never a fabricated verification pass.
 
 ## KB example
 

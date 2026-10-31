@@ -11,14 +11,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
 import {
   CheckpointIdentityError,
   Checkpointer,
   ReceiptConflictError,
   canonicalJson,
-} from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
+} from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
 import {
   ConfidenceSchema,
   PhaseResultSchema,
@@ -27,14 +27,14 @@ import {
   type PhaseResult,
   type RunIdentity,
   validateContract,
-} from "../src/contracts.js";
-import { OrchestrationEngine } from "../src/engine.js";
+} from "../dist/contracts.js";
+import { OrchestrationEngine } from "../dist/engine.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
-import { LivenessController, researchLivenessPolicy } from "../src/liveness.js";
-import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
-import { researchSummarySchema } from "../src/playbooks/research.js";
-import { resolvePlaybook } from "../src/playbooks/registry.js";
-import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
+import { LivenessController, researchLivenessPolicy } from "../dist/liveness.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../dist/model-client.js";
+import { researchSummarySchema } from "../dist/playbooks/research.js";
+import { resolvePlaybook } from "../dist/playbooks/registry.js";
+import { OrchestrationRunner, WorkerExecutor } from "../dist/worker.js";
 import { researchSemanticDraftFixture } from "./helpers/research-semantic-draft.js";
 
 interface ResearchContractFixture {
@@ -775,72 +775,46 @@ describe("research behavioral parity", () => {
     checkpointer.close();
   });
 
-  it("reissues a crash but terminalizes a durable worker timeout", async () => {
-    for (const failure of ["crash", "timeout"] as const) {
-      const root = tempRoot(`penny-${failure}-`);
-      const { artifacts, checkpointer, engine } = runtime(root);
-      const runIdentity = identity(`${failure}-replay`);
-      const pending = engine.handle(start(root, runIdentity, { mode: "quick" }));
-      let observedThinkingLevel: AgentInvocation["thinkingLevel"];
-      const client: ModelClient = {
-        async runAgent(invocation) {
-          observedThinkingLevel = invocation.thinkingLevel;
-          if (failure === "crash") {
-            throw new Error("simulated worker crash");
-          }
-          await new Promise<void>((_resolve, reject) => {
-            invocation.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
-              once: true,
-            });
-          });
-          throw new Error("unreachable");
-        },
-      };
-      const runner = new OrchestrationRunner(
-        engine,
-        new WorkerExecutor(client, artifacts, {
-          projectRoot: root,
-          parallelConcurrency: 1,
-          workerTimeoutMs: 10,
-        })
-      );
-      if (failure === "crash") {
-        await expect(runner.runUntilBoundary(pending)).rejects.toThrow("simulated worker crash");
-        expect(
-          engine.handle({
-            schema_version: 2,
-            action: "recover",
-            identity: runIdentity,
-          })
-        ).toEqual(pending);
-      } else {
-        const exhausted = await runner.runUntilBoundary(pending);
-        expect(exhausted.action).toBe("incomplete");
-        if (exhausted.action === "incomplete") {
-          expect(exhausted.result.terminal_reason).toBe("worker_wall_clock_exhausted");
-        }
-        expect(
-          engine.handle({
-            schema_version: 2,
-            action: "recover",
-            identity: runIdentity,
-          })
-        ).toEqual(exhausted);
-      }
-      expect(observedThinkingLevel).toBe("low");
-      expect(engine.liveness.policy(runIdentity.run_id)).toMatchObject({
-        schema_version: 3,
-        preset: "quick",
-        renewal_policy: "trusted_host_activity_or_convergence_v1",
-        unknown_provider_phase_inactivity_ms: 10 * 60_000,
-      });
-      expect(
-        checkpointer
-          .events(runIdentity.run_id)
-          .some((event) => event.eventType === "liveness_worker_ended")
-      ).toBe(true);
-      checkpointer.close();
-    }
+  it("reissues a crashed worker without converting elapsed time into a terminal budget", async () => {
+    const root = tempRoot("penny-crash-");
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const runIdentity = identity("crash-replay");
+    const pending = engine.handle(start(root, runIdentity, { mode: "quick" }));
+    let observedThinkingLevel: AgentInvocation["thinkingLevel"];
+    const client: ModelClient = {
+      async runAgent(invocation) {
+        observedThinkingLevel = invocation.thinkingLevel;
+        throw new Error("simulated worker crash");
+      },
+    };
+    const runner = new OrchestrationRunner(
+      engine,
+      new WorkerExecutor(client, artifacts, {
+        projectRoot: root,
+        parallelConcurrency: 1,
+      })
+    );
+    await expect(runner.runUntilBoundary(pending)).rejects.toThrow("simulated worker crash");
+    expect(
+      engine.handle({
+        schema_version: 2,
+        action: "recover",
+        identity: runIdentity,
+      })
+    ).toEqual(pending);
+    expect(observedThinkingLevel).toBe("low");
+    expect(engine.liveness.policy(runIdentity.run_id)).toMatchObject({
+      schema_version: 3,
+      preset: "quick",
+      renewal_policy: "trusted_host_activity_or_convergence_v1",
+      unknown_provider_phase_inactivity_ms: 10 * 60_000,
+    });
+    expect(
+      checkpointer
+        .events(runIdentity.run_id)
+        .some((event) => event.eventType === "liveness_worker_ended")
+    ).toBe(true);
+    checkpointer.close();
   });
 
   it("enforces the configured parallel concurrency bound", async () => {

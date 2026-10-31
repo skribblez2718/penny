@@ -1,4 +1,10 @@
-import { ArtifactStore, resolvePennyRuntimeState } from "@penny/orchestration";
+import {
+  ArtifactStore,
+  PngMediaError,
+  canonicalPngImageContent,
+  isSqliteCorruption,
+  resolvePngMediaLimits,
+} from "@penny/orchestration";
 
 import {
   DEFAULT_TOOL_RESULT_BUDGET,
@@ -11,8 +17,9 @@ import {
   isUtf8Boundary,
   measureToolResult,
   resolveToolResultBudget,
+  type TextToolResult,
 } from "../lib/tool-result-budget.js";
-import { resolveArtifactRoot } from "./owner-client.js";
+import { ArtifactClientError, resolveArtifactState } from "./owner-client.js";
 import {
   ARTIFACT_SCHEMA_VERSION,
   ArtifactReadError,
@@ -30,17 +37,26 @@ export function loadArtifactRuntimeConfig(
   env: Readonly<Record<string, string | undefined>>
 ): ArtifactRuntimeConfig {
   let budget;
+  let pngLimits;
   try {
     budget = resolveToolResultBudget(env);
+    pngLimits = resolvePngMediaLimits(env);
   } catch (error) {
-    if (error instanceof ToolResultBudgetConfigError) {
+    if (
+      error instanceof ToolResultBudgetConfigError ||
+      (error instanceof PngMediaError && error.code === "PNG_CONFIG_INVALID")
+    ) {
       throw new ArtifactReadError("ARTIFACT_CONFIG_INVALID", error.message);
     }
     throw error;
   }
-  const artifactRoot = resolveArtifactRoot(projectRoot, env);
-  const state = resolvePennyRuntimeState(projectRoot, { env });
-  return { artifactRoot, projectId: state.projectId, budget };
+  const state = resolveArtifactState(projectRoot, env);
+  return {
+    artifactRoot: state.paths.artifacts.root,
+    projectId: state.projectId,
+    budget,
+    pngLimits,
+  };
 }
 
 function validateRange(
@@ -70,7 +86,7 @@ function errorExecution(
   code: ArtifactErrorCode,
   message: string,
   budget = DEFAULT_TOOL_RESULT_BUDGET
-): ArtifactExecution {
+): ArtifactExecution & { result: TextToolResult } {
   const result = createTextToolResult(
     {
       schema_version: ARTIFACT_SCHEMA_VERSION,
@@ -95,6 +111,28 @@ function errorExecution(
 
 function mapStoreError(error: unknown): ArtifactReadError {
   if (error instanceof ArtifactReadError) return error;
+  if (error instanceof PngMediaError) {
+    if (error.code === "PNG_NOT_CANONICAL") {
+      return new ArtifactReadError("ARTIFACT_IMAGE_NOT_CANONICAL", error.message);
+    }
+    if (
+      error.code === "PNG_SOURCE_TOO_LARGE" ||
+      error.code === "PNG_ANCILLARY_TOO_LARGE" ||
+      error.code === "PNG_DIMENSIONS_EXCEEDED" ||
+      error.code === "PNG_PIXELS_EXCEEDED" ||
+      error.code === "PNG_COMPRESSED_TOO_LARGE" ||
+      error.code === "PNG_DECOMPRESSED_TOO_LARGE"
+    ) {
+      return new ArtifactReadError("ARTIFACT_IMAGE_LIMIT_EXCEEDED", error.message);
+    }
+    return new ArtifactReadError("ARTIFACT_IMAGE_INVALID", error.message);
+  }
+  if (isSqliteCorruption(error)) {
+    return new ArtifactReadError(
+      "ARTIFACT_STORE_CORRUPT",
+      error instanceof Error ? error.message : "Artifact database is damaged"
+    );
+  }
   if (error instanceof ToolResultBudgetError) {
     return new ArtifactReadError(
       "ARTIFACT_RESULT_BUDGET_EXCEEDED",
@@ -118,6 +156,25 @@ function mapStoreError(error: unknown): ArtifactReadError {
   return new ArtifactReadError("ARTIFACT_MISSING", "Artifact could not be read");
 }
 
+function mediaTypeEssence(mediaType: string): string {
+  return mediaType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+function isTextualMediaType(mediaType: string): boolean {
+  const essence = mediaTypeEssence(mediaType);
+  return (
+    essence.startsWith("text/") ||
+    essence === "application/json" ||
+    essence.endsWith("+json") ||
+    essence === "application/xml" ||
+    essence.endsWith("+xml") ||
+    essence === "application/javascript" ||
+    essence === "application/yaml" ||
+    essence === "application/x-yaml" ||
+    essence === "application/toml"
+  );
+}
+
 export async function executeArtifactRead(
   config: ArtifactRuntimeConfig,
   params: ArtifactReadParams,
@@ -139,6 +196,61 @@ export async function executeArtifactRead(
       throw new ArtifactReadError("ARTIFACT_MISSING", "Artifact is absent from the manifest");
     }
     const content = store.readById(artifactId);
+    if (ref.media_type === "image/png") {
+      if (params.range !== undefined) {
+        throw new ArtifactReadError(
+          "ARTIFACT_RANGE_UNSUPPORTED",
+          "Byte ranges are unsupported for PNG image artifacts"
+        );
+      }
+      const image = canonicalPngImageContent(content, config.pngLimits);
+      const metadataResult = createTextToolResult({
+        schema_version: ARTIFACT_SCHEMA_VERSION,
+        ok: true,
+        type: "artifact_image",
+        artifact_ref: ref,
+        phase: ref.phase,
+        kind: ref.kind,
+        producer: ref.producer,
+        media_type: ref.media_type,
+        total_bytes: ref.byte_length,
+        content_digest: ref.content_digest,
+        image: {
+          width: image.info.width,
+          height: image.info.height,
+          channels: image.info.channels,
+          pixel_count: image.info.pixelCount,
+          decoded_bytes: image.info.decodedBytes,
+        },
+      });
+      const measurement = enforceToolResultBudget(metadataResult, config.budget);
+      const result = {
+        content: [...metadataResult.content, image.content],
+      };
+      telemetry?.info("artifact_read_succeeded", {
+        artifactId,
+        runId: ref.run_id,
+        phase: ref.phase,
+        version: ref.version,
+        mediaType: ref.media_type,
+        contentDigest: ref.content_digest,
+        totalBytes: ref.byte_length,
+        width: image.info.width,
+        height: image.info.height,
+        pixelCount: image.info.pixelCount,
+        serializedMetadataBytes: measurement.bytes,
+        estimatedMetadataTokens: measurement.estimatedTokens,
+        releaseHeadroom: assessReleaseHeadroom(measurement.estimatedTokens),
+        durationMs: Date.now() - startedAt,
+      });
+      return { result, code: "OK" };
+    }
+    if (!isTextualMediaType(ref.media_type)) {
+      throw new ArtifactReadError(
+        "ARTIFACT_MEDIA_UNSUPPORTED",
+        `Artifact media type '${ref.media_type}' is unsupported`
+      );
+    }
     try {
       new TextDecoder("utf-8", { fatal: true }).decode(content);
     } catch {
@@ -203,6 +315,9 @@ export async function executeArtifactRead(
 }
 
 export function configurationErrorResult(error: unknown): ArtifactExecution {
+  if (error instanceof ArtifactClientError && error.code === "ARTIFACT_STORE_CORRUPT") {
+    return errorExecution("ARTIFACT_STORE_CORRUPT", error.message);
+  }
   const message =
     error instanceof ArtifactReadError ? error.message : "Artifact configuration is invalid";
   return errorExecution("ARTIFACT_CONFIG_INVALID", message);

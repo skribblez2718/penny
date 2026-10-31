@@ -18,7 +18,7 @@ The lesson has a second, deeper half that's easy to miss: Sutton doesn't say _bu
 
 ## Why it's Penny's core doctrine
 
-Penny is a layer of human knowledge — prompts, rules, skills, orchestration — wrapped around a model whose capability rises for reasons entirely outside Penny's control. Every quarter, the model underneath gets better, and nobody on Penny's side did anything to cause it.
+Penny is a layer of human knowledge — prompts, rules, skills, orchestration — wrapped around a model whose capability rises for reasons entirely outside Penny's control. Model upgrades can improve the underlying capability independently of changes to Penny.
 
 That makes **every mechanism in Penny a bet** about what the model can't do on its own. Some of those bets stay good for years. Some go bad the day a new model ships — and worse than merely useless, stale scaffolding actively fights the better model, capping it at last year's cleverness. The doctrine exists so those bets are made deliberately, tracked honestly, and unwound on schedule instead of quietly rotting.
 
@@ -34,13 +34,13 @@ The first two are what Penny keeps. The third is the standing target of pruning.
 
 ## The hard part: how do you improve without freezing?
 
-Penny has a safety net that prevents regressions — a ratchet that blocks changes which make things measurably worse. But a naive ratchet has a fatal flaw: it protects _everything that passes today's tests_, which means it locks in the knowledge-constraint scaffolding too, because that scaffolding passes today. You'd get ossification with a green check mark.
+Penny's doctrine calls for a safety net against regressions — a ratchet that blocks changes which make protected outcomes measurably worse. This is a policy goal, not a claim that every named capability already has a passing executable gate. But a naive ratchet has a fatal flaw: it protects _everything that passes today's tests_, which means it locks in the knowledge-constraint scaffolding too, because that scaffolding passes today. You'd get ossification with a green check mark.
 
 The rule that resolves this is the heart of the doctrine:
 
 > **Ratchet on capabilities and outcomes, never on implementations.**
 
-In plain terms: **any mechanism may be replaced or deleted freely; a change is blocked only if a protected _capability_ gets worse.** The guard is deliberately _asymmetric_. Rip out a hand-coded framework-detection table and the system still builds, serves, and tests the project? That change **passes** — even though it deleted working code. Quietly weaken the evidence behind a verification step? That **fails** — even if every benchmark still looks fine.
+In plain terms: **an authorized mechanism change is judged by its protected outcomes, not loyalty to the old implementation.** The guard is deliberately _asymmetric_. Rip out a hand-coded framework-detection table and the system still builds, serves, and tests the project? That change **passes** — even though it deleted working code. Quietly weaken the evidence behind a verification step? That **fails** — even if every benchmark still looks fine.
 
 This is what lets the principle be core without making Penny rigid. It protects the _scaling properties_ while it keeps pruning the _constraints_.
 
@@ -54,11 +54,11 @@ The doctrine names a specific set of **capabilities** — not implementations �
 - **Durable memory** — decisions and context survive across sessions and can be retrieved.
 - **Human oversight at high-stakes gates** — irreversible or high-consequence actions pause for a human.
 - **Resumability** — long runs are durable and can pick up where they left off.
-- **Safety guards** — least-privilege tool allowlists, scope limits, and the trust and action boundaries — protected as capabilities, with runtime controls preferred over prompt prose. All agent-invocation paths (primary, direct-subagent, and skill-invoked) currently rely on tool allowlists and the host boundary; the Bubblewrap filesystem sandbox that previously ran under skill-invoked agents was removed 2026-08-06 after testing showed it did not address the runtime failure mode it had been introduced to mitigate. A containerized replacement is planned but not yet implemented.
+- **Safety guards** — authorized tool surfaces, scope limits and trust/action boundaries, with runtime controls preferred over prompt prose. [Runtime tool selection](../../agents/agents/discovery-and-tools.md#binding-runtime-rule) does not provide filesystem/process isolation; untrusted work needs an independent containment boundary.
 - **Current retrieval where freshness matters** — fetch live information rather than trusting a frozen snapshot when the answer can have changed.
 - **Honest limitation reporting** — unknowns, partial results, and unverified claims are stated as such.
 
-Notice the shape of these: they're all either _leverage_ (they scale with the model) or _safety_ (they exist for human reasons). _How_ each is implemented can change any time; _that_ the capability holds is what's guarded.
+These are required outcomes, not universal enforcement claims. Schemas check structure, exact-byte custody checks identity, and evidence fields can require content without proving its truth. Independent evidence and path-specific tests remain necessary. Prompt prose is policy; tool lists are not a filesystem/process sandbox. The [agent-facing capability map](../../agents/architecture/bitter-lesson.md#capability-invariants-the-protected-set) identifies current tracked owners and evidence limits.
 
 ## What Penny deliberately throws away
 
@@ -79,7 +79,7 @@ So the only genuinely permanent thing is a **ritual**, not a list — a periodic
 1. **Re-audit** the system and re-sort every mechanism into leverage / safety / knowledge-constraint.
 2. **Confirm** the ratchet still guards every protected capability; add a guard for any newly-earned one.
 3. **Identify** the constraint-debt that's accrued since last time and queue the worst offenders for removal.
-4. **Refresh** the disposable inventory and hand off a short "prune next" list to the normal change process.
+4. **Record** dated source/evidence locations and gaps in the caller-authorized audit output, then hand off a short "prune next" list. An existing caller-supplied inventory is optional, not a clean-checkout prerequisite.
 
 Crucially, the pass **proposes; measurement disposes.** Nothing is deleted on taste — every prune candidate goes through the same evidence-and-ratchet gate as any other change. The cadence is roughly quarterly, and _always_ right after a major model upgrade — because a stronger model is exactly when scaffolding becomes newly obsolete.
 
@@ -98,5 +98,5 @@ The doctrine's discipline is _directional_, not absolute: lean toward general me
 
 - [Atomic Loop Components](atomic-loop-components.md) — the doctrine made buildable: what a "leverage" capability and a "knowledge-constraint" look like as concrete parts, and how to assemble loops that comply by construction.
 - [Agentic Loops](../skills/loops.md) — how these ideas show up in the loops that run Penny's skills.
-- Agent-facing doctrine (the operational version, with the capability-invariant table and enforcement wiring): `docs/agents/architecture/bitter-lesson.md`.
-- The original source and Penny's full audit: Richard Sutton, _The Bitter Lesson_ (2019); `research/bitter-lesson/` and `research/atomic-loop-components/`.
+- [Agent-facing doctrine](../../agents/architecture/bitter-lesson.md) — protected outcomes, tracked contracts and verification limits.
+- Richard Sutton, _The Bitter Lesson_ (2019). Caller-supplied research inventories are dated supporting evidence, not required guidance or change authority.

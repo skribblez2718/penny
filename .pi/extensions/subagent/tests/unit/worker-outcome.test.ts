@@ -73,6 +73,18 @@ describe("worker terminal outcome matrix", () => {
       "caller_cancelled",
     ],
     [
+      "owner inactivity termination",
+      result({ wasAborted: true, inactivityExpired: true, exitCode: 143, stopReason: "error" }),
+      "failed",
+      "process_lifecycle",
+    ],
+    [
+      "owner inactivity overrides assistant abort",
+      result({ wasAborted: true, inactivityExpired: true, messages: [assistant("aborted")] }),
+      "failed",
+      "process_lifecycle",
+    ],
+    [
       "assistant cancellation",
       result({ stopReason: "cancelled", messages: [assistant("cancelled")] }),
       "cancelled",
@@ -203,6 +215,29 @@ describe("worker terminal outcome matrix", () => {
     });
     expect(workerOutcomeSummaryHasError(summary)).toBe(true);
     expect(formatWorkerOutcomeSummaryBoundary(summary)).toContain("aggregate=failed");
+  });
+
+  it("keeps inactivity failure and required delivery failure independent", () => {
+    const fixture = result({
+      wasAborted: true,
+      inactivityExpired: true,
+      errorMessage: "Agent inactivity lease expired without trusted progress",
+      outputArtifactRequired: true,
+      outputArtifactState: "failed",
+      outputArtifactError: "ARTIFACT_PERSIST_FAILED: synthetic",
+    });
+    expect(classifyWorkerResult(fixture)).toMatchObject({
+      status: "failed",
+      reason: "process_lifecycle",
+    });
+    expect(classifyWorkerDelivery(fixture)).toMatchObject({ status: "failed" });
+    expect(summarizeWorkerResults([fixture])).toMatchObject({
+      status: "failed",
+      failed: 1,
+      cancelled: 0,
+      succeeded: 0,
+      deliveryFailed: 1,
+    });
   });
 
   it("leads with execution failure while retaining a separate delivery failure", () => {

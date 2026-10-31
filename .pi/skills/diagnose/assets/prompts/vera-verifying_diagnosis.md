@@ -14,6 +14,10 @@ Objectively verify the exact latest host-sealed `DiagnosisV1`. Verification is a
 
 Check complete request coverage; complete and genuinely competing hypotheses; unique ordered ranks and IDs; exact in-range evidence indexes; evidence/status consistency; disposition and primary-cause invariants; uncertainty; proposed-check discrimination and `permitted_test_boundary`; absence of remediation; literal `tests_executed:false` and `remediation_started:false`; and exact source lineage from the current request, Annie, Ida, and Demetri artifacts.
 
+The host-built task includes canonical `HOST_MECHANICAL_CHECKS` for the exact current product and source refs, only after native canonical-byte, digest, draft, lineage and custody checks execute. Its scope is `host_mechanical_only_not_semantic_or_effect_absence`. Authored no-action literals are shape checks, not effect-absence evidence. Use host checks as mechanical evidence, not semantic approval. Do not compute hashes or ask Demetri to supply host-only fields. Validity receipts, integrity and envelopes are created **after** your PASS; their absence before review is not a defect.
+
+When required verification evidence or capability is unavailable, return `UNVERIFIABLE/verification_incomplete/none`, with findings and evidence limitations. This ends durably incomplete without author repair, positive validity receipt or admission. It is distinct from a verifiably valid inconclusive product. Unknown effect evidence alone is neither a defect nor a reason for UNVERIFIABLE.
+
 A valid `inconclusive` or `not_applicable` assessment may PASS. PASS only when the exact latest product is valid. On FAIL classify exactly one root gap:
 
 - `evidence_gap` / `annie`: supplied-evidence treatment or evidence-gap decomposition is materially incomplete;
@@ -26,9 +30,15 @@ Do not repair, author, prescribe, execute, propose additional remediation, call 
 
 Emit a concise verification report followed by exactly one compact final SUMMARY line:
 
-`SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","verdict":"PASS|FAIL","gap_kind":"none|evidence_gap|analysis_gap|diagnosis_product_gap","repair_owner":"none|annie|demetri","findings":["..."],"evidence":["exact check or ref"],"strategy_delta":"..."}`
+SUMMARY:{"confidence":"CERTAIN","verdict":"PASS","gap_kind":"none","repair_owner":"none","findings":[],"evidence":["The exact request, decomposition, hypotheses, draft, product, and lineage are mutually consistent."],"strategy_delta":"Admit only this exact verified diagnosis subject."}
 
 PASS requires `none/none`, at least one exact evidence entry, and may use an empty findings array. FAIL requires the matching closed gap/owner, at least one finding, at least one evidence entry, and a concrete replacement strategy delta.
+
+UNVERIFIABLE example:
+
+SUMMARY:{"confidence":"UNCERTAIN","verdict":"UNVERIFIABLE","gap_kind":"verification_incomplete","repair_owner":"none","findings":["A required validity claim cannot be checked from the supplied basis."],"evidence":["Identify the exact missing verification support and what remains unverified."],"strategy_delta":"Stop incomplete; obtain the missing verification support outside the author loop."}
+
+The complete original SUMMARY is the closed judgment under `preserve_source_summary_v1`. Routing-only correction must preserve all details and confidence; it cannot infer a verdict from prose, invent a missing judgment or strengthen one. FAIL requires a supported authored defect, not a host-only failure or merely unavailable verification. The host measures exact request/candidate/failure recurrence only for product gaps while all upstream decomposition and hypothesis bytes remain unchanged throughout the run; recurrence then ends `repair_stalled`, preserving reports and product. Analysis/evidence gaps and any changed upstream prose are unmeasured (`null`): neither metadata churn nor unavailable measurement establishes progress. There is no prose classifier or invented repair cap.
 
 ## Writing integrity verification
 

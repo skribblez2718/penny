@@ -11,17 +11,20 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { ASSESS_FLOW } from "../src/playbooks/assess.js";
-import { DECIDE_FLOW } from "../src/playbooks/decide.js";
-import { DIAGNOSE_FLOW } from "../src/playbooks/diagnose.js";
+import { ASSESS_FLOW } from "../dist/playbooks/assess.js";
+import { DECIDE_FLOW } from "../dist/playbooks/decide.js";
+import { DEFINE_FLOW } from "../dist/playbooks/define.js";
+import { DIAGNOSE_FLOW } from "../dist/playbooks/diagnose.js";
+import { IMAGEGEN_FLOW } from "../dist/playbooks/imagegen.js";
 import {
   KB_AGENT_PHASES,
   KB_FLOW,
   KNOWLEDGE_BASE_SKILL_CONTRACT,
-} from "../src/playbooks/knowledge-base.js";
-import { PLAN_FLOW } from "../src/playbooks/plan.js";
-import { PRODUCE_FLOW } from "../src/playbooks/produce.js";
-import { RESEARCH_FLOW } from "../src/playbooks/research.js";
+} from "../dist/playbooks/knowledge-base.js";
+import { PLAN_FLOW } from "../dist/playbooks/plan.js";
+import { PRODUCE_FLOW } from "../dist/playbooks/produce.js";
+import { RESEARCH_FLOW } from "../dist/playbooks/research.js";
+import { SCA_FLOW } from "../dist/playbooks/sca.js";
 
 type EdgeKind = "fwd" | "gate" | "loop" | "exit" | "abort" | "esc";
 
@@ -74,10 +77,13 @@ const EXPECTED: Readonly<Record<string, ExpectedFlow>> = {
     edges: KB_FLOW.edges.map(edgeKey),
   },
   decide: tupleFlow(DECIDE_FLOW),
+  define: tupleFlow(DEFINE_FLOW),
   plan: tupleFlow(PLAN_FLOW),
   diagnose: tupleFlow(DIAGNOSE_FLOW),
   produce: tupleFlow(PRODUCE_FLOW),
   assess: tupleFlow(ASSESS_FLOW),
+  imagegen: tupleFlow(IMAGEGEN_FLOW),
+  sca: tupleFlow(SCA_FLOW),
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -213,11 +219,6 @@ describe("flow-diagrams", () => {
         .map((entry) => entry.skill)
         .sort()
     ).toEqual(Object.keys(EXPECTED).sort());
-  });
-
-  it("permits an unregistered model-disabled development flow to receive static validation only", () => {
-    expect(allSkillFlows().map((entry) => entry.skill)).toContain("sca");
-    expect(EXPECTED["sca"]).toBeUndefined();
   });
 
   for (const { skill, source } of allSkillFlows()) {

@@ -30,8 +30,3 @@ Changing security-sensitive services, credentials, sessions, privileged surfaces
 
 - [Secrets](secrets.md), [session security](session-security.md), and [supply chain](supply-chain.md) own key containment surfaces.
 - [Logging and monitoring](logging-monitoring.md) supplies detection evidence.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

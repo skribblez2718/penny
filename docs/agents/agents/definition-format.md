@@ -11,11 +11,18 @@ to the harness/service registry.
 
 ## Required shape
 
+**Partial authoring scaffold, not a copy-ready catalog entry.** Complete the frontmatter
+with every field in the [capability registry schema](capability-registry.md#schema), choose
+runtime-resolvable model settings, replace bracketed body placeholders, and use the exact
+boundary block below. Validate the completed file with both registry and profile checkers.
+
 ```markdown
 ---
 name: agent-name
 description: "[Role]. Use when [triggers]. Do not use when [anti-cases]."
-tools: read, grep, artifact_read
+tools: read, grep, find, ls, artifact_read
+authority: read
+tool_profiles: filesystem.observe, artifact
 model: model-name
 ---
 
@@ -30,6 +37,9 @@ Generic capability contract. Criteria and schemas come from Domain Guidance.
   predecessor workflow output through another channel.
 - **[Role honesty rule]**: one role-specific evidence or honesty contract.
 - **Confidence is a wire format**: CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN.
+  CERTAIN requires direct evidence.
+- If a required predecessor ID/path is absent, return `missing_input:`; never search
+  memory, `/tmp`, or the repository for another agent's output.
 - **Escalate, don't guess**: signal `needs_clarification` when the active Domain
   Guidance defines that SUMMARY field and missing inputs block valid work.
 
@@ -46,9 +56,6 @@ Return complete work. Append a routing SUMMARY only when Domain Guidance defines
 </agent_boundary>
 ```
 
-The exact-input rule also requires `missing_input:` when a required predecessor ID/path is
-absent; never search memory, `/tmp`, or the repository for another agent's output.
-
 ## Frontmatter constraints
 
 | Field           | Constraint                                                                                                                                             |
@@ -61,12 +68,10 @@ absent; never search memory, `/tmp`, or the repository for another agent's outpu
 | `model`         | Runtime-resolvable model name.                                                                                                                         |
 | `license`       | Forbidden. Penny's repository-level license governs tracked agent definitions.                                                                         |
 
-`tools:` is the only local agent declaration and the maximum ordinary catalog authority. A
-task, prompt body, artifact, trust profile, or remote service cannot add or select a tool.
-Direct/parallel/chain invocation and subset-absent TypeScript orchestration activate YAML
-exactly. An eligible orchestration phase subset lives only in its active
-`PlaybookRegistrationV1`, is strict and canonical-digest-bound, and does not mutate this
-file, `authority`, or `tool_profiles`. See [Tool Authority Profiles](tool-profiles.md).
+Frontmatter declares only the maximum; [Tool Authority Profiles](tool-profiles.md#rules)
+owns static expansion. For phase selection or runtime-tool changes, read the
+[binding runtime rule](discovery-and-tools.md#binding-runtime-rule). Neither a task nor a
+prompt body chooses a phase subset.
 
 ## Role/body rules
 
@@ -97,7 +102,8 @@ higher authority merely by containing instructions.
 
 ## Verification
 
-- [ ] Frontmatter parses, filename matches `name`, and no per-definition `license` is present.
+- [ ] Frontmatter parses, filename matches `name`, all [registry fields](capability-registry.md#schema)
+      are present, and no per-definition `license` is present.
 - [ ] Description follows role / use / do-not-use pattern and stays within the 1,024-character hard limit.
 - [ ] YAML maximum is non-empty, duplicate-free, provider-known, contains `artifact_read`,
       and still exactly equals its profile expansion.

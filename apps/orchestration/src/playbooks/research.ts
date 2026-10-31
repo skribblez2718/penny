@@ -15,6 +15,19 @@ import {
 import path from "node:path";
 import { Type, type TSchema } from "typebox";
 
+import { sealAttempt } from "./seal-attempt.js";
+import {
+  sealDiagnosticsProjection,
+  sealPolicySha256,
+  validateSealDiagnostic,
+  validateSealPolicy,
+  type SealDiagnosticV1,
+  type SealIssueV1,
+  type SealPolicyV1,
+} from "../skill-contracts/sealing.js";
+import { SkillSchemaValidationError } from "../skill-contracts/common.js";
+import { validateSourceRoutingSummary } from "../source-routing-summary.js";
+
 import type {
   ArtifactHostStore,
   ArtifactReader,
@@ -25,17 +38,25 @@ import { canonicalJson, sha256, type Checkpointer } from "../checkpointer.js";
 import type {
   FanAggregateCapabilityV1,
   StateAwareRepairCapabilityV1,
+  RepairProgressCapabilityV1,
   RoutingRepairCapabilityV1,
   LivenessTerminalCapabilityV1,
-  PlaybookCoreV1,
+  PlaybookCore,
   CompletionReceiptPredicateV1,
   HostContinuationCapabilityV1,
   HostContinuationStepV1,
-  PlaybookStepOutcomeV1,
+  PlaybookStepOutcome,
 } from "./playbook.js";
-import { positiveIntegerConstraint, RunContext, type PendingBranch } from "../context.js";
+import {
+  optionalCycleLimit,
+  positiveIntegerConstraint,
+  RunContext,
+  type PendingBranch,
+} from "../context.js";
 import {
   RESEARCH_PORTS,
+  RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS,
+  ResearchEvidenceCapacityError,
   productReceiptId,
   projectResearchSemanticDraft,
   researchSemanticDraftPromptContract,
@@ -64,7 +85,7 @@ import {
   type Directive,
   type InputArtifacts,
   type JsonValue,
-  type EvaluationResultV2,
+  type EvaluationResult,
   type LivenessSnapshotV1,
   type LivenessTerminalReason,
   type OutputArtifactMetadata,
@@ -78,6 +99,21 @@ const DEFAULT_MODE = "standard";
 const MAX_BRANCHES = 64;
 const RENDERER_ID = "penny.research.compat-markdown.v1" as const;
 const RENDER_NAMES = ["report", "sources", "readme"] as const;
+
+/** No invented seal allowance. Explicit host or admitted evaluator policy remains enforceable. */
+export const RESEARCH_SEAL_POLICY: SealPolicyV1 = Object.freeze({
+  schema_id: "penny.seal-policy.v1",
+  schema_version: 1,
+  skill: "research",
+  draft_phase: "synthesizing",
+  seal_phase: "sealing_core",
+  draft_schema: "penny.research-semantic-draft.v1",
+  draft_schema_version: 1,
+  draft_kind: "agent-output",
+  product_kind: "semantic-core",
+  correction_limit: null,
+  diagnostic_schema: "penny.seal-diagnostic.v1",
+});
 
 export class ResearchHostInterruptionError extends Error {
   constructor(readonly faultPoint: string) {
@@ -129,20 +165,33 @@ const SynthesisSummarySchema = Type.Object(
   },
   { additionalProperties: false }
 );
-const ValidationSummarySchema = Type.Object(
-  {
-    verdict: Type.String({ pattern: "^(PASS|FAIL)$" }),
-    unsupported_claims: Type.Array(Type.String({ maxLength: 4_096 }), {
-      maxItems: 128,
-    }),
-    evidence: Type.Array(Type.Unknown(), { minItems: 1, maxItems: 256 }),
-    evidence_needed: Type.Optional(
-      Type.Array(Type.String({ maxLength: 4_096 }), { maxItems: 128 })
-    ),
-    ...ClarificationFields,
-  },
-  { additionalProperties: false }
-);
+const ValidationFields = {
+  unsupported_claims: Type.Array(Type.String({ maxLength: 4_096 }), { maxItems: 128 }),
+  evidence: Type.Array(Type.Unknown(), { minItems: 1, maxItems: 256 }),
+};
+const ValidationSummarySchema = Type.Union([
+  Type.Object(
+    {
+      verdict: Type.String({ pattern: "^(PASS|FAIL)$" }),
+      ...ValidationFields,
+      evidence_needed: Type.Optional(
+        Type.Array(Type.String({ maxLength: 4_096 }), { maxItems: 128 })
+      ),
+      ...ClarificationFields,
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      verdict: Type.Literal("UNVERIFIABLE"),
+      gap_kind: Type.Literal("verification_incomplete"),
+      repair_owner: Type.Literal("none"),
+      ...ValidationFields,
+      ...ClarificationFields,
+    },
+    { additionalProperties: false }
+  ),
+]);
 export const AGENT_BY_STATE = {
   planning: "piper",
   critiquing_plan: "carren",
@@ -244,12 +293,11 @@ function sameIssues(left: readonly string[], right: readonly string[]): boolean 
 
 function modeBudget(mode: string): {
   critiquePasses: number;
-  maxResearchRounds: number;
 } {
   if (mode === "deep") {
-    return { critiquePasses: 2, maxResearchRounds: 3 };
+    return { critiquePasses: 2 };
   }
-  return { critiquePasses: 0, maxResearchRounds: 2 };
+  return { critiquePasses: 0 };
 }
 
 function boundedConstraint(
@@ -261,7 +309,7 @@ function boundedConstraint(
   return Math.min(positiveIntegerConstraint(context.constraints[name], fallback), ceiling);
 }
 
-function reportDirectory(context: RunContext): string {
+function reportDirectory(context: RunContext, legacy = false): string {
   const normalized = context.goal
     .toLocaleLowerCase("en-US")
     .replace(/[^\p{L}\p{N}\s-]/gu, "")
@@ -269,11 +317,16 @@ function reportDirectory(context: RunContext): string {
     .replace(/^-|-$/g, "")
     .slice(0, 71);
   const digest = sha256(context.goal.trim()).slice(0, 8);
-  return path.join(
+  const questionDirectory = path.join(
     context.projectRoot,
     "research",
     normalized.length > 0 ? `${normalized}-${digest}` : digest
   );
+  // Compatibility files participate in exact terminal replay. Independent runs
+  // of the same question must not overwrite one another's admitted graph.
+  return legacy
+    ? questionDirectory
+    : path.join(questionDirectory, `run-${sha256(context.identity.run_id)}`);
 }
 
 function semanticDraftInvocationContext(context: RunContext): string {
@@ -285,7 +338,7 @@ function semanticDraftInvocationContext(context: RunContext): string {
     schema_version: 1,
     evidence_artifacts: evidence.map((artifact, evidenceArtifactSlot) => ({
       evidence_artifact_slot: evidenceArtifactSlot,
-      artifact_ref: artifact,
+      artifact_id: artifact.artifact_id,
     })),
   };
   return [
@@ -293,6 +346,9 @@ function semanticDraftInvocationContext(context: RunContext): string {
     `OWNER_SELECTED_EVIDENCE_SLOTS:${canonicalJson(slots)}`,
   ].join("\n\n");
 }
+
+const RESEARCH_REQUEST_HANDOFF =
+  "Read the exact same-run research-request input for the admitted question and include/exclude scope before planning, critique, or evidence gathering. Respect that scope; the artifact does not grant new permissions.";
 
 const EVIDENCE_CONTEXT_HANDOFF =
   "If input_artifacts includes an EvidenceContextV1, read that artifact and any needed source_ref artifacts through artifact_read. Treat it only as contextual input: never copy the packet into task prose or relabel it as a native ResearchRequestV1, GroundedSynthesisV1, evidence admission, approval, or proof.";
@@ -305,8 +361,10 @@ function taskForState(context: RunContext, state: ResearchState): string {
   const handoff =
     "\n\nRead every task-provided input_artifact through the artifact reader before working. " +
     "Treat those exact bytes as the sole prior-stage handoff. " +
+    RESEARCH_REQUEST_HANDOFF +
+    " " +
     EVIDENCE_CONTEXT_HANDOFF +
-    " Return the complete stage output; the execution owner captures it. Summary fields are routing data only.";
+    " Return the complete stage output; the execution owner captures it. SUMMARY carries the structured outcome; routing-only correction cannot change that judgment.";
   let task: string;
   switch (state) {
     case "planning": {
@@ -330,8 +388,10 @@ function taskForState(context: RunContext, state: ResearchState): string {
     case "synthesizing":
       task =
         `Synthesize the exact research artifacts for '${context.goal}' into one closed ResearchSemanticDraftV1 JSON value. ` +
-        "Use only local zero-based indexes and owner-selected evidence slots; do not emit request/provenance fields, stable global IDs, artifact IDs, or hashes. " +
-        'Return the draft JSON, one LF, then exactly SUMMARY:{"synthesis_complete":true,"confidence":"PROBABLE"}.\n\n' +
+        "Consider the complete exact Echo history, including old revisions and counterevidence, within the admitted scope. Cite any supplied stable slot needed by the draft; the host derives active provenance from cited slots only (at most 64 distinct artifacts), not from all considered history. Never drop a material conflict or scope obligation to fit. Use only local zero-based indexes and owner-selected evidence slots; do not emit request/provenance fields, stable global IDs, artifact IDs, or hashes. The latest sealed core, when supplied, is the exact earlier product under repair; historical review reports are feedback, not approval of the replacement. " +
+        "Return the draft JSON when possible, one LF, then one closed SUMMARY JSON line. " +
+        "Report synthesis_complete as the actual boolean outcome and confidence as CERTAIN, PROBABLE, POSSIBLE, or UNCERTAIN supported by the evidence. " +
+        "You may include needs_clarification and clarifying_questions. If a coherent draft is not possible, report synthesis_complete:false or request clarification; do not invent a draft or announce success.\n\n" +
         semanticDraftInvocationContext(context);
       if (research.report_revision > 0) {
         task += `\n\nAddress critique issues: ${research.report_critique_issues.join("; ")}.`;
@@ -343,12 +403,12 @@ function taskForState(context: RunContext, state: ResearchState): string {
     case "critiquing_report":
       task =
         `Critique the latest exact Vera-verified semantic core for '${context.goal}' for report quality, ` +
-        "overclaiming, bias, fairness, and uncertainty. APPROVE only that exact core.";
+        "overclaiming, bias, fairness, and uncertainty. Compare the admitted scope and ALL supplied exact Echo history against this core, including uncited counterevidence; active provenance lists only cited artifacts, not all considered history. Reject material omissions or hidden conflicts. Earlier Carren feedback, when supplied, is regression context only; prior approval cannot approve the current core. APPROVE only that exact core.";
       break;
     case "validating":
       task =
         `Verify every material claim in the latest exact sealed semantic core for '${context.goal}' is supported by a captured cited source. ` +
-        "PASS only when all material claims and qualifications are grounded; otherwise FAIL and identify unsupported claims and researchable evidence gaps.";
+        "Compare the admitted scope and ALL supplied exact Echo history against this core, including uncited counterevidence; active provenance lists only cited artifacts, not all considered history. Reject material omissions or hidden conflicts. Earlier Vera feedback, when supplied, is regression context only; a prior PASS cannot validate the current core. PASS only when all material claims and qualifications are grounded in this core; otherwise FAIL for a supported product defect and identify unsupported claims and researchable evidence gaps. If the required verification cannot be performed, return UNVERIFIABLE/verification_incomplete/none with exact evidence limitations, not an author-repair request. A valid disclosed unresolved research outcome is not itself verification incapability.";
       break;
   }
   return `${task}${handoff}${clarification}`;
@@ -365,9 +425,45 @@ function isEvidenceContextRef(artifact: ArtifactRef): boolean {
 function selectedInputRefs(
   context: RunContext,
   state: ResearchState,
-  contextOwner?: ResearchContextOwnerV2
+  contextOwner?: ResearchContextOwnerV2,
+  sealCorrection?: { readonly ref: ArtifactRef; readonly diagnostic: SealDiagnosticV1 } | null
 ): ArtifactRef[] {
   const phases = new Set(INPUT_PHASES_BY_STATE[state]);
+  // The core under repair/review is the latest host-sealed core from this run,
+  // not every historical core or a cross-run imported semantic product.
+  const latestCore = ["researching", "synthesizing", "validating", "critiquing_report"].includes(
+    state
+  )
+    ? selectedLatest(
+        context,
+        (artifact) =>
+          artifact.run_id === context.identity.run_id &&
+          artifact.kind === "semantic-core" &&
+          artifact.phase === "sealing_core"
+      )
+    : undefined;
+  const priorReview =
+    state === "validating" || state === "critiquing_report"
+      ? selectedLatest(
+          context,
+          (artifact) =>
+            artifact.run_id === context.identity.run_id &&
+            artifact.kind === "agent-output" &&
+            artifact.phase === state
+        )
+      : undefined;
+  const priorValidation =
+    state === "critiquing_report"
+      ? selectedLatest(
+          context,
+          (artifact) =>
+            artifact.run_id === context.identity.run_id &&
+            artifact.kind === "agent-output" &&
+            artifact.phase === "validating"
+        )
+      : undefined;
+  if (latestCore !== undefined) phases.add("sealing_core");
+  if (priorReview !== undefined) phases.add(state);
   // Entry states consume every cross-run exact input directly. Subsequent phases
   // inherit that information through accepted current-run outputs.
   if (state === "planning" || state === "researching") phases.add("chain_input");
@@ -379,9 +475,17 @@ function selectedInputRefs(
         : artifact.kind === "context-source-ref"
           ? contextOwner?.acceptsState(artifact, state) === true
           : artifact.kind === "research-request"
-            ? ["synthesizing", "validating", "critiquing_report"].includes(state)
-            : phases.has(artifact.phase) ||
-              (entryState && artifact.run_id !== context.identity.run_id)
+            ? artifact.run_id === context.identity.run_id && artifact.phase === "intake"
+            : artifact.phase === "sealing_core"
+              ? (entryState && artifact.run_id !== context.identity.run_id) ||
+                artifact.artifact_id === latestCore?.artifact_id ||
+                artifact.artifact_id === sealCorrection?.ref.artifact_id
+              : artifact.phase === state && priorReview !== undefined
+                ? artifact.artifact_id === priorReview.artifact_id
+                : state === "critiquing_report" && artifact.phase === "validating"
+                  ? artifact.artifact_id === priorValidation?.artifact_id
+                  : phases.has(artifact.phase) ||
+                    (entryState && artifact.run_id !== context.identity.run_id)
     )
     .sort((left, right) =>
       `${left.phase}/${left.branch_id ?? ""}/${left.version}/${left.artifact_id}`.localeCompare(
@@ -398,11 +502,7 @@ function restoreEvidenceContextRefs(context: RunContext, store?: ArtifactHostSto
   }
 }
 
-function inputArtifacts(
-  context: RunContext,
-  _state: ResearchState,
-  refs: readonly ArtifactRef[]
-): InputArtifacts {
+function inputArtifacts(_state: ResearchState, refs: readonly ArtifactRef[]): InputArtifacts {
   return {
     schema_version: 2,
     artifacts: refs.map((ref, index) => ({
@@ -436,6 +536,11 @@ function outputArtifactMetadata(
     branchId,
     upstreamRefs,
     ...(revisions ? { revisions } : {}),
+    // This worker artifact includes the typed draft and the routing footer. The
+    // identity labels the transport, not a claim that the body is already valid.
+    ...(state === "synthesizing"
+      ? { contentSchema: { schema_id: "penny.research-semantic-draft.v1", schema_version: 1 } }
+      : {}),
   });
 }
 
@@ -478,9 +583,13 @@ function bestResearchPartialRefs(context: RunContext): {
   artifacts: ArtifactRef[];
   output: ArtifactRef | null;
 } {
-  const latestCore = [...context.selectedArtifacts]
-    .filter((artifact) => artifact.kind === "semantic-core" && artifact.phase === "sealing_core")
-    .sort((left, right) => right.version - left.version)[0];
+  const latestCore = selectedLatest(
+    context,
+    (artifact) =>
+      artifact.run_id === context.identity.run_id &&
+      artifact.kind === "semantic-core" &&
+      artifact.phase === "sealing_core"
+  );
   const precedence = ["synthesizing", "researching", "planning"] as const;
   const highest = precedence.find((phase) =>
     context.selectedArtifacts.some(
@@ -661,20 +770,29 @@ export const RESEARCH_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<
  */
 export class ResearchPlaybook
   implements
-    PlaybookCoreV1,
+    PlaybookCore,
     FanAggregateCapabilityV1,
     RoutingRepairCapabilityV1,
     LivenessTerminalCapabilityV1,
     StateAwareRepairCapabilityV1,
-    HostContinuationCapabilityV1
+    HostContinuationCapabilityV1,
+    RepairProgressCapabilityV1
 {
   constructor(
     private readonly revisions?: ArtifactRevisionLookup,
     private readonly contextOwner?: ResearchContextOwnerV2,
     private readonly artifactStore?: ArtifactHostStore,
     private readonly checkpointer?: Checkpointer,
-    private readonly researchHostFault?: (point: string) => void
-  ) {}
+    private readonly researchHostFault?: (point: string) => void,
+    private readonly registeredSealPolicy: SealPolicyV1 = RESEARCH_SEAL_POLICY
+  ) {
+    if (
+      canonicalJson(validateSealPolicy(registeredSealPolicy)) !==
+      canonicalJson(RESEARCH_SEAL_POLICY)
+    ) {
+      throw new Error("research seal policy diverges from its registration");
+    }
+  }
 
   /**
    * Returns the recoverable directive with its output-artifact spec re-bound to
@@ -692,6 +810,22 @@ export class ResearchPlaybook
     }
     if (pending.action === "invoke_agent") {
       if (pending.execution_purpose === "routing_repair") return pending;
+      if (pending.state_id === "validating" || pending.state_id === "critiquing_report") {
+        try {
+          if (this.artifactStore === undefined) throw new Error("research store is absent");
+          const checks = pending.task
+            .split("\n")
+            .filter((line) => line.startsWith("HOST_MECHANICAL_CHECKS:"));
+          if (
+            checks.length !== 1 ||
+            checks[0] !==
+              `HOST_MECHANICAL_CHECKS:${researchMechanicalChecks(context, this.artifactStore)}`
+          )
+            throw new Error("frozen research mechanical evidence diverged");
+        } catch {
+          return this.mechanicalValidationFailure(context);
+        }
+      }
       return validateDirective({
         ...pending,
         output_artifact: outputArtifactMetadata(
@@ -772,8 +906,70 @@ export class ResearchPlaybook
     }
     const state = context.stateId;
     const attempt = context.stepCount;
-    const refs = selectedInputRefs(context, state, this.contextOwner);
-    const artifacts = inputArtifacts(context, state, refs);
+    const anchor =
+      selectedLatest(
+        context,
+        (ref) =>
+          ref.run_id === context.identity.run_id &&
+          ref.kind === "semantic-core" &&
+          ref.phase === "sealing_core"
+      ) ?? null;
+    const sealCorrection =
+      state === "synthesizing" && this.artifactStore !== undefined
+        ? currentResearchSealDiagnostic(
+            context,
+            this.artifactStore,
+            this.sealPolicyForRun(context),
+            anchor
+          )
+        : null;
+    const refs = selectedInputRefs(context, state, this.contextOwner, sealCorrection);
+    if (
+      sealCorrection !== null &&
+      !refs.some(
+        (ref) => ref.artifact_id === sealCorrection.diagnostic.rejected_draft_ref.artifact_id
+      )
+    )
+      throw new Error("research seal correction omits its exact rejected draft");
+    if (state === "researching" && anchor !== null && this.artifactStore !== undefined) {
+      const review = selectedLatest(
+        context,
+        (ref) =>
+          ref.run_id === context.identity.run_id &&
+          ref.kind === "agent-output" &&
+          ref.phase === "validating"
+      );
+      if (
+        review !== undefined &&
+        !this.artifactStore
+          .metadata(review)
+          .upstream_refs.some((ref) => canonicalJson(ref) === canonicalJson(anchor))
+      )
+        throw new Error("research evidence repair review does not bind the latest sealed core");
+    }
+    // This is the existing shared catalog handoff capacity, including request,
+    // context, draft/core and review refs, not a quota of recent evidence.
+    if (refs.length > RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS) {
+      return this.terminal(context, "incomplete", false, [
+        `Research evidence capacity exceeded: ${refs.length} exact inputs exceed the ${RESEARCH_HISTORY_HANDOFF_MAX_ARTIFACTS}-ref shared handoff capacity. All evidence history is retained; no evidence was discarded.`,
+      ]);
+    }
+    let task = taskForState(context, state);
+    if (state === "validating" || state === "critiquing_report") {
+      try {
+        if (this.artifactStore === undefined) throw new Error("research store is absent");
+        task += `\n\nHOST_MECHANICAL_CHECKS:${researchMechanicalChecks(context, this.artifactStore)}`;
+      } catch {
+        return this.mechanicalValidationFailure(context);
+      }
+    }
+    // Preserve the existing directive task bound as well as the ref-count bound.
+    if (task.length > 32_768) {
+      return this.terminal(context, "incomplete", false, [
+        "Research evidence capacity exceeded: complete exact-history task metadata exceeds the existing 32768-character transport bound. All evidence history is retained; no evidence was discarded.",
+      ]);
+    }
+    const artifacts = inputArtifacts(state, refs);
     const modelOverride = this.modelForState(context, state);
     const branchTasks = state === "researching" ? this.researchBranchTasks(context) : [];
     let next: Directive;
@@ -824,7 +1020,7 @@ export class ResearchPlaybook
         attempt,
         trust_profile: context.trustProfile,
         ...(modelOverride ? { model_override: modelOverride } : {}),
-        task: taskForState(context, state),
+        task,
         input_artifacts: artifacts,
         output_artifact: outputArtifactMetadata(
           context,
@@ -854,8 +1050,33 @@ export class ResearchPlaybook
     context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResultV2 | null {
-    if (details.verdict === "PASS" || details.verdict === "APPROVE") return null;
+  ): EvaluationResult | null {
+    if (
+      details.verdict === "UNVERIFIABLE" ||
+      details.verdict === "PASS" ||
+      details.verdict === "APPROVE" ||
+      details.needs_clarification === true
+    )
+      return null;
+    // Typed repair is evaluated before acceptSummary. Keep Research's native
+    // UNCERTAIN clarification route from being swallowed by a valid FAIL.
+    if ((state === "validating" || state === "critiquing_report") && this.artifactStore) {
+      const source = selectedLatest(
+        context,
+        (ref) =>
+          ref.run_id === context.identity.run_id &&
+          ref.phase === state &&
+          ref.kind === "agent-output"
+      );
+      if (
+        source !== undefined &&
+        validateSourceRoutingSummary(
+          this.artifactStore.readById(source.artifact_id),
+          researchSummarySchema(state)
+        )?.confidence === "UNCERTAIN"
+      )
+        return null;
+    }
     if (state === "critiquing_report") {
       const findings = stringArray(details.issues).slice(0, 32);
       return {
@@ -870,7 +1091,9 @@ export class ResearchPlaybook
     if (state !== "validating") return null;
     const needed = stringArray(details.evidence_needed);
     const evidenceShort =
-      needed.length > 0 && context.research.research_round < context.research.max_research_rounds;
+      needed.length > 0 &&
+      (context.research.max_research_rounds === null ||
+        context.research.research_round < context.research.max_research_rounds);
     const findings = stringArray(details.unsupported_claims).slice(0, 32);
     return {
       schema_version: 2,
@@ -885,7 +1108,68 @@ export class ResearchPlaybook
     };
   }
 
-  repairBudgetUsed(context: RunContext, state: string, _evaluation: EvaluationResultV2): number {
+  repairProgressFingerprint(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>
+  ): string | null {
+    if (state !== "validating" && state !== "critiquing_report") return null;
+    const store = this.artifactStore;
+    if (store === undefined) throw new Error("research store is absent");
+    const { draft, evidence } = validatedResearchSubject(context, store);
+    // Only semantic draft values and captured evidence bodies count. Slot/ref identities,
+    // synthesis/reviewer framing and routing strategy cannot manufacture progress.
+    const contentHashes = evidence.map((ref) => researchEvidenceContentSha256(store, ref));
+    const candidate = {
+      ...draft,
+      evidence: draft.evidence.map(({ evidence_artifact_slot, ...item }) => ({
+        ...item,
+        evidence_content_sha256: contentHashes[evidence_artifact_slot],
+      })),
+    };
+    const { strategy_delta: _strategy, ...failure } = details;
+    return sha256(
+      canonicalJson({
+        candidate,
+        considered_evidence: [...new Set(contentHashes)].sort(),
+        failure,
+      })
+    );
+  }
+
+  terminalizeRepairStall(
+    context: RunContext,
+    state: string,
+    evaluation: EvaluationResult
+  ): Directive {
+    return this.terminal(
+      context,
+      "incomplete",
+      false,
+      [`repair stalled at ${state}:${evaluation.kind}`, ...evaluation.findings],
+      undefined,
+      undefined,
+      {
+        incomplete_reason: "repair_stalled",
+        stalled: true,
+        stall_reason: "exact_candidate_and_failure_repeated",
+      }
+    );
+  }
+
+  private mechanicalValidationFailure(context: RunContext): Directive {
+    return this.terminal(
+      context,
+      "incomplete",
+      false,
+      ["Host pre-review mechanical validation failed; no author repair is authorized."],
+      undefined,
+      undefined,
+      { incomplete_reason: "host_mechanical_validation_failed" }
+    );
+  }
+
+  repairBudgetUsed(context: RunContext, state: string, _evaluation: EvaluationResult): number {
     const events = this.checkpointer?.events(context.identity.run_id) ?? [];
     return events.filter((event) => {
       const raw = event.payload.feedback_route_evidence_v1;
@@ -903,7 +1187,7 @@ export class ResearchPlaybook
     context: RunContext,
     state: string,
     details: Record<string, JsonValue>,
-    evaluation: EvaluationResultV2,
+    evaluation: EvaluationResult,
     disposition: "repair" | "exhausted"
   ): void {
     const research = context.research;
@@ -976,7 +1260,7 @@ export class ResearchPlaybook
     ) {
       throw new Error("routing_repair_binding_invalid");
     }
-    if (context.stepCount >= context.maxSteps) {
+    if (context.maxSteps !== null && context.stepCount >= context.maxSteps) {
       throw new Error(`run exceeded max_steps=${context.maxSteps}`);
     }
     const branchId = malformed.branch_id ?? null;
@@ -1040,12 +1324,39 @@ export class ResearchPlaybook
     context: RunContext,
     details: Record<string, JsonValue>,
     confidence: Confidence
-  ): PlaybookStepOutcomeV1 {
+  ): PlaybookStepOutcome {
     if (!isResearchState(context.stateId)) {
       throw new Error(`unexpected result for state '${context.stateId}'`);
     }
     const state = context.stateId;
     const summary = details;
+    // Verification incapability is a negative terminal even at UNCERTAIN confidence;
+    // it is not a synthesis defect or a request for user-only clarification.
+    if (state === "validating" && summary.verdict === "UNVERIFIABLE") {
+      context.research.validation_verdict = "UNVERIFIABLE";
+      return this.terminal(
+        context,
+        "incomplete",
+        false,
+        ["Vera could not perform the required verification of the current research core."],
+        undefined,
+        undefined,
+        {
+          incomplete_reason: "verification_incomplete",
+          reviewed_core_ref: latestSemanticCore(context),
+          verification_report_ref:
+            selectedLatest(
+              context,
+              (ref) =>
+                ref.run_id === context.identity.run_id &&
+                ref.kind === "agent-output" &&
+                ref.phase === "validating"
+            ) ?? null,
+          verification_evidence_limitations: summary.evidence ?? [],
+          unsupported_claims: summary.unsupported_claims ?? [],
+        }
+      );
+    }
     const clarificationReason = this.progressProblem(context, state, summary, confidence);
     if (clarificationReason !== null) {
       return this.awaitUser(context, clarificationReason, summary);
@@ -1147,73 +1458,133 @@ export class ResearchPlaybook
     this.fault(faultPoint);
   }
 
+  private sealPolicyForRun(context: RunContext): SealPolicyV1 {
+    // Unspecified means unlimited. An explicit evaluator policy still reserves the initial draft.
+    return validateSealPolicy({
+      ...this.registeredSealPolicy,
+      correction_limit:
+        context.sealCorrectionLimit ??
+        (context.maxIterations === null ? null : context.maxIterations - 1),
+    });
+  }
+
   private continueCoreSealing(
     context: RunContext,
     store: ArtifactHostStore,
-    checkpointer: Checkpointer
+    _checkpointer: Checkpointer
   ): HostContinuationStepV1 {
-    try {
-      const sealed = sealLatestSemanticCore(context, store);
-      if (sealed.added) this.fault("sealing_core:artifact-persistence");
-      context.research.validation_verdict = "";
-      context.research.validation_issues = [];
-      context.transition("validating");
-      const next = this.dispatch(context);
+    const synthesis = selectedLatest(
+      context,
+      (ref) => ref.kind === "agent-output" && ref.phase === "synthesizing"
+    );
+    if (synthesis === undefined) throw new Error("Synthia semantic draft artifact is absent");
+    const anchor =
+      selectedLatest(
+        context,
+        (ref) =>
+          ref.run_id === context.identity.run_id &&
+          ref.kind === "semantic-core" &&
+          ref.phase === "sealing_core"
+      ) ?? null;
+    // A previously selected core is a custody operand, not an authored draft.
+    if (anchor !== null)
+      validateCanonicalGroundedSynthesisBytes(store.readById(anchor.artifact_id), anchor);
+    const policy = this.sealPolicyForRun(context);
+    const previous = currentResearchSealDiagnostic(context, store, policy, anchor);
+    const projection = projectLatestResearchCore(context, store, synthesis);
+    if (projection.status === "capacity_refused") {
+      const next = this.terminal(context, "incomplete", false, [
+        `${projection.detail}. No evidence was discarded; this is one bounded core, not unlimited partitioning.`,
+      ]);
       return {
-        event_type: "research_semantic_core_sealed",
-        payload: {
-          run_id: context.identity.run_id,
-          core_artifact_id: sealed.artifact.artifact_id,
-          core_sha256: sealed.artifact.content_digest,
-          core_version: sealed.artifact.version,
-          next_action: next.action,
-        },
+        event_type: "research_evidence_capacity_refused",
+        payload: { run_id: context.identity.run_id, draft_artifact_id: synthesis.artifact_id },
         directive: next,
       };
-    } catch (error) {
-      if (error instanceof ResearchHostInterruptionError) throw error;
-      const detail = error instanceof Error ? error.message : "unknown semantic-core defect";
-      const errorSha = sha256(detail);
-      const failures = checkpointer
-        .events(context.identity.run_id)
-        .filter((event) => event.eventType === "research_semantic_core_rejected");
-      const repeated = failures.some((event) => event.payload.error_sha256 === errorSha);
-      const repairBudget = Math.max(0, context.maxIterations - 1);
-      context.research.validation_issues = [detail.slice(0, 4_096)];
-      if (repeated || failures.length >= repairBudget) {
-        context.research.validation_exhausted = true;
-        context.research.warnings.push(
-          `semantic-core sealing exhausted: ${detail.slice(0, 1_024)}`
+    }
+    if (projection.status === "rejected") {
+      const attempt = sealAttempt({
+        store,
+        policy,
+        registered_policy_sha256: sealPolicySha256(policy),
+        run_id: context.identity.run_id,
+        branch_id: null,
+        phase: "sealing_core",
+        draft_ref: synthesis,
+        epoch_anchor_ref: anchor,
+        previous_diagnostic_ref: previous?.ref ?? null,
+        rejection_ordinal: previous?.diagnostic.rejection_ordinal ?? 0,
+        project: () => projection,
+        validate_product_bytes: () => {
+          throw new Error("rejected draft cannot validate as a product");
+        },
+      });
+      if (attempt.status !== "rejected") {
+        throw new Error(
+          `research seal diagnostic host fault: ${attempt.status === "fault" ? attempt.code : "unexpected product"}`
         );
-        const next = this.terminal(context, "incomplete", false, [
-          repeated
-            ? "semantic-core sealing repeated the same deterministic defect"
-            : "semantic-core sealing repair budget exhausted",
-        ]);
-        return {
-          event_type: "research_semantic_core_rejected",
-          payload: {
-            run_id: context.identity.run_id,
-            error_sha256: errorSha,
-            disposition: "exhausted",
-          },
-          directive: next,
-        };
       }
-      context.research.validation_revision = failures.length + 1;
+      // Diagnostic addresses are per draft, not a single revision-chain selector.
+      // The checkpoint's exact ref order is authoritative for this history.
+      const added = addSelectedArtifact(context, attempt.diagnostic_ref);
+      if (added) this.fault("sealing_core:diagnostic-persistence");
+      context.research.validation_issues = attempt.diagnostic.issues.map((issue) => issue.detail);
+      const payload = {
+        run_id: context.identity.run_id,
+        diagnostic_artifact_id: attempt.diagnostic_ref.artifact_id,
+        rejected_draft_artifact_id: synthesis.artifact_id,
+        failure_class: attempt.diagnostic.failure_class,
+        issue_keys_sha256: sha256(
+          canonicalJson(
+            attempt.diagnostic.issues.map((issue) => [
+              issue.code,
+              issue.path,
+              issue.source_ordinals,
+            ])
+          )
+        ),
+        corrections_used: attempt.diagnostic.corrections_used,
+        correction_limit: attempt.diagnostic.correction_limit,
+        disposition: attempt.diagnostic.disposition,
+      };
+      if (attempt.diagnostic.disposition === "exhausted") {
+        context.research.validation_exhausted = true;
+        const next = this.terminal(
+          context,
+          "incomplete",
+          false,
+          [`semantic-core sealing exhausted: ${attempt.diagnostic.failure_class}`],
+          undefined,
+          sealDiagnosticsProjection(attempt.diagnostic, attempt.diagnostic_ref, policy)
+        );
+        return { event_type: "research_semantic_core_rejected", payload, directive: next };
+      }
+      context.research.validation_revision = attempt.diagnostic.rejection_ordinal;
       context.transition("synthesizing");
       const next = this.dispatch(context);
       return {
         event_type: "research_semantic_core_rejected",
-        payload: {
-          run_id: context.identity.run_id,
-          error_sha256: errorSha,
-          disposition: "repair",
-          next_action: next.action,
-        },
+        payload: { ...payload, next_action: next.action },
         directive: next,
       };
     }
+    const sealed = sealProjectedResearchCore(context, store, projection);
+    if (sealed.added) this.fault("sealing_core:artifact-persistence");
+    context.research.validation_verdict = "";
+    context.research.validation_issues = [];
+    context.transition("validating");
+    const next = this.dispatch(context);
+    return {
+      event_type: "research_semantic_core_sealed",
+      payload: {
+        run_id: context.identity.run_id,
+        core_artifact_id: sealed.artifact.artifact_id,
+        core_sha256: sealed.artifact.content_digest,
+        core_version: sealed.artifact.version,
+        next_action: next.action,
+      },
+      directive: next,
+    };
   }
 
   private continueRendering(
@@ -1403,7 +1774,7 @@ export class ResearchPlaybook
       });
       verifyRenderedFiles(context, intent.intent, orderedRenders);
       context.research.report_written = true;
-      context.research.report_dir = reportDirectory(context);
+      context.research.report_dir = path.join(context.projectRoot, intent.intent.target_directory);
       context.research.report_files = ["report.md", "sources.md", "README.md"].map((file) =>
         path.join(context.research.report_dir, file)
       );
@@ -1448,12 +1819,9 @@ export class ResearchPlaybook
       context.constraints.critique_passes,
       preset.critiquePasses
     );
-    context.research.max_research_rounds = Math.max(
-      1,
-      positiveIntegerOrZeroConstraint(
-        context.constraints.max_research_rounds,
-        preset.maxResearchRounds
-      )
+    context.research.max_research_rounds = optionalCycleLimit(
+      context.constraints.max_research_rounds,
+      "max_research_rounds"
     );
   }
 
@@ -1472,7 +1840,7 @@ export class ResearchPlaybook
         : `Research this sub-query for '${context.goal}'. Sub-query:`;
       return {
         branchId: `sq${branchNumber}`,
-        task: `${prefix} ${query}\n\n${EVIDENCE_CONTEXT_HANDOFF}`,
+        task: `${prefix} ${query}\n\n${RESEARCH_REQUEST_HANDOFF}\n\n${EVIDENCE_CONTEXT_HANDOFF}`,
       };
     });
     context.research.echo_branches_dispatched = Math.max(
@@ -1556,7 +1924,10 @@ export class ResearchPlaybook
         if (summary.verdict === "APPROVE") {
           this.endPlanLoop(context);
           context.transition("researching");
-        } else if (context.iteration + 1 < context.maxIterations) {
+        } else if (
+          context.maxIterations === null ||
+          context.iteration + 1 < context.maxIterations
+        ) {
           this.recordIteration(context, issues);
           context.iteration += 1;
           research.plan_revision = context.iteration;
@@ -1657,7 +2028,9 @@ export class ResearchPlaybook
     status: "complete" | "incomplete" | "cancelled",
     met: boolean,
     unresolved: string[],
-    liveness?: { reason: LivenessTerminalReason; snapshot: LivenessSnapshotV1 }
+    liveness?: { reason: LivenessTerminalReason; snapshot: LivenessSnapshotV1 },
+    sealDiagnostics?: ReturnType<typeof sealDiagnosticsProjection>,
+    reasonEvidence: Readonly<Record<string, JsonValue>> = {}
   ): Directive {
     context.previousState = context.stateId;
     context.stateId = status === "cancelled" ? "cancelled" : "complete";
@@ -1672,8 +2045,16 @@ export class ResearchPlaybook
     if (met && positiveProduct === undefined) {
       throw new Error("positive research terminal lacks the complete latest-core product graph");
     }
-    const outputArtifact = positiveProduct?.core ?? partials.output;
-    const terminalArtifacts = positiveProduct?.artifacts ?? partials.artifacts;
+    const outputArtifact =
+      sealDiagnostics?.rejected_draft_ref ?? positiveProduct?.core ?? partials.output;
+    const terminalArtifacts =
+      sealDiagnostics === undefined
+        ? (positiveProduct?.artifacts ?? partials.artifacts)
+        : [
+            ...partials.artifacts,
+            sealDiagnostics.rejected_draft_ref,
+            sealDiagnostics.latest_diagnostic_ref,
+          ];
     const next = directive({
       schema_version: 2,
       action: status,
@@ -1693,6 +2074,13 @@ export class ResearchPlaybook
         sub_queries: research.sub_queries,
         output_artifact_ref: outputArtifact,
         ...(!met ? { best_partial_artifact_refs: partials.semantic } : {}),
+        ...(sealDiagnostics === undefined
+          ? {}
+          : {
+              seal_diagnostics: sealDiagnostics,
+              output_kind: "rejected_draft",
+              rejected_draft_ref: sealDiagnostics.rejected_draft_ref,
+            }),
         ...(met
           ? {
               qualified: qualifiedResearchCore(positiveProduct?.coreValue),
@@ -1707,6 +2095,7 @@ export class ResearchPlaybook
         report_critique_exhausted: research.report_critique_exhausted,
         validation_exhausted: research.validation_exhausted,
         unresolved_issues: unresolved,
+        ...reasonEvidence,
       },
       artifacts: terminalArtifacts,
       unresolved,
@@ -1787,12 +2176,18 @@ function posture(core: GroundedSynthesisV1): "Complete" | "Qualified complete" {
 export function renderResearchCompatibility(input: {
   readonly core: GroundedSynthesisV1;
   readonly semanticCore: SemanticCoreRefV1;
+  /** Exact historical v1 bytes remain readable for persisted intents/terminals. */
+  readonly layout?: "legacy" | "claim-navigation";
 }): Readonly<Record<RenderName, string>> {
   const core = validateGroundedSynthesis(input.core);
   const semanticCore = validateSemanticCoreRef(input.semanticCore);
   if (semanticCore.sha256 !== sha256(canonicalJson(core))) {
     throw new Error("renderer semantic-core digest mismatch");
   }
+  const navigation = input.layout !== "legacy";
+  // These IDs are validated fixed-prefix numeric IDs, not caller-authored URLs/HTML.
+  const links = (ids: readonly string[], file: string) =>
+    ids.map((id) => `[\`${id}\`](${file}#${id})`).join(", ");
   const report: string[] = [`# ${core.title}`, "", core.executive_summary, "", "## Narrative"];
   for (const section of core.narrative.sections) {
     report.push(
@@ -1801,10 +2196,29 @@ export function renderResearchCompatibility(input: {
       "",
       section.body,
       "",
-      `**Claims:** ${inlineIds(section.claim_ids)}`,
+      `**Claims:** ${navigation ? links(section.claim_ids, "report.md") : inlineIds(section.claim_ids)}`,
       "",
-      `**Evidence:** ${inlineIds(section.evidence_ids)}`
+      `**Evidence:** ${navigation ? links(section.evidence_ids, "sources.md") : inlineIds(section.evidence_ids)}`
     );
+  }
+  if (navigation) {
+    report.push("", "## Claim and support index");
+    for (const claim of [...core.claims].sort((a, b) => a.claim_id.localeCompare(b.claim_id))) {
+      report.push(
+        "",
+        `<a id="${claim.claim_id}"></a>`,
+        "",
+        `### \`${claim.claim_id}\``,
+        "",
+        claim.statement,
+        "",
+        `- Kind: \`${claim.claim_kind}\``,
+        `- Support: \`${claim.support_status}\``,
+        `- Confidence: ${claim.confidence}`,
+        `- Evidence: ${links(claim.evidence_ids, "sources.md") || "None."}`,
+        ...claim.qualifications.map((qualification) => `- Qualification: ${qualification}`)
+      );
+    }
   }
   report.push("", "## Qualifications", "");
   const qualifications = core.claims.flatMap((claim) =>
@@ -1845,6 +2259,7 @@ export function renderResearchCompatibility(input: {
   )) {
     sources.push(
       "",
+      ...(navigation ? [`<a id="${source.source_id}"></a>`, ""] : []),
       `## \`${source.source_id}\``,
       "",
       `- Kind: \`${source.source_kind}\``,
@@ -1852,6 +2267,18 @@ export function renderResearchCompatibility(input: {
       `- Tier: ${source.tier}`,
       `- Title: ${source.title}`,
       `- Locator: ${source.locator}`,
+      ...(navigation
+        ? [
+            `- Evidence: ${
+              links(
+                core.evidence
+                  .filter((item) => item.source_id === source.source_id)
+                  .map((item) => item.evidence_id),
+                "sources.md"
+              ) || "None."
+            }`,
+          ]
+        : []),
       ...(source.published_at === undefined ? [] : [`- Published at: \`${source.published_at}\``]),
       ...(source.observed_at === undefined ? [] : [`- Observed at: \`${source.observed_at}\``])
     );
@@ -1862,10 +2289,23 @@ export function renderResearchCompatibility(input: {
   )) {
     sources.push(
       "",
+      ...(navigation ? [`<a id="${evidence.evidence_id}"></a>`, ""] : []),
       `## \`${evidence.evidence_id}\``,
       "",
       `- Relation: \`${evidence.relation}\``,
-      `- Source: \`${evidence.source_id}\``,
+      `- Source: ${navigation ? links([evidence.source_id], "sources.md") : `\`${evidence.source_id}\``}`,
+      ...(navigation
+        ? [
+            `- Claims: ${
+              links(
+                core.claims
+                  .filter((claim) => claim.evidence_ids.includes(evidence.evidence_id))
+                  .map((claim) => claim.claim_id),
+                "report.md"
+              ) || "None."
+            }`,
+          ]
+        : []),
       `- Locator: ${evidence.locator}`,
       `- Excerpt SHA-256: \`${evidence.excerpt_sha256}\``,
       `- Evidence artifact ID: \`${evidence.evidence_artifact_id}\``
@@ -1900,8 +2340,12 @@ export function renderResearchCompatibility(input: {
     "",
     "## Files",
     "",
-    "- `report.md` — grounded narrative and qualifications",
-    "- `sources.md` — ordered source and evidence index",
+    navigation
+      ? "- [report.md](report.md) — grounded narrative, complete claim/support index and qualifications"
+      : "- `report.md` — grounded narrative and qualifications",
+    navigation
+      ? "- [sources.md](sources.md) — linked evidence/source index and captured locators"
+      : "- `sources.md` — ordered source and evidence index",
     "- `README.md` — product summary and semantic-core binding",
   ];
   return {
@@ -1919,9 +2363,9 @@ function selectedLatest(
   context: RunContext,
   predicate: (artifact: ArtifactRef) => boolean
 ): ArtifactRef | undefined {
-  return [...context.selectedArtifacts]
-    .filter(predicate)
-    .sort((left, right) => right.version - left.version)[0];
+  // Owner checkpoint selection order is authoritative for host operations with
+  // independent per-draft addresses; artifact version is not a cross-operation clock.
+  return [...context.selectedArtifacts].reverse().find(predicate);
 }
 
 function addSelectedArtifact(context: RunContext, artifact: ArtifactRef): boolean {
@@ -2032,7 +2476,10 @@ function persistVersionedHostArtifact(input: {
 function latestSemanticCore(context: RunContext): ArtifactRef {
   const core = selectedLatest(
     context,
-    (artifact) => artifact.kind === "semantic-core" && artifact.phase === "sealing_core"
+    (artifact) =>
+      artifact.run_id === context.identity.run_id &&
+      artifact.kind === "semantic-core" &&
+      artifact.phase === "sealing_core"
   );
   if (core === undefined) throw new Error("latest semantic core is absent");
   return core;
@@ -2049,10 +2496,10 @@ function semanticCoreRef(artifact: ArtifactRef): SemanticCoreRefV1 {
 }
 
 function exactResearchEvidence(context: RunContext): ArtifactRef[] {
-  return latestPerOperationBranch(
-    context.selectedArtifacts.filter(
-      (artifact) => artifact.kind === "agent-output" && artifact.phase === "researching"
-    )
+  // selectedArtifacts is append-only accepted history. Do not collapse revisions
+  // or re-sort branches: adding evidence must never renumber an earlier slot.
+  return context.selectedArtifacts.filter(
+    (artifact) => artifact.kind === "agent-output" && artifact.phase === "researching"
   );
 }
 
@@ -2088,21 +2535,57 @@ function canonicalResearchRequest(
   return request;
 }
 
+class ResearchDraftRejection extends Error {
+  constructor(
+    readonly failureClass: SealDiagnosticV1["failure_class"],
+    readonly issue: SealIssueV1
+  ) {
+    super(issue.detail);
+  }
+}
+
+function draftIssue(
+  failureClass: SealDiagnosticV1["failure_class"],
+  detail: string
+): ResearchDraftRejection {
+  return new ResearchDraftRejection(failureClass, {
+    code: `research_${failureClass.toLowerCase()}`,
+    path: "/semantic_draft",
+    detail:
+      Buffer.byteLength(detail, "utf8") <= 512
+        ? detail
+        : "Research draft failed bounded validation",
+    source_ordinals: [],
+  });
+}
+
 function extractSemanticDraft(bytes: Buffer) {
   const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) {
+    throw draftIssue("FRAMING_INVALID", "Synthia draft transport is not UTF-8");
+  }
   const marker = "\nSUMMARY:";
   const index = text.lastIndexOf(marker);
   if (index <= 0 || text.indexOf(marker) !== index) {
-    throw new Error("Synthia output must contain one final SUMMARY after the semantic draft JSON");
+    throw draftIssue(
+      "FRAMING_INVALID",
+      "Synthia output must contain one final SUMMARY after the semantic draft JSON"
+    );
   }
   const candidate = Buffer.from(text.slice(0, index), "utf8");
   let value: unknown;
   try {
     value = JSON.parse(candidate.toString("utf8"));
   } catch {
-    throw new Error("Synthia semantic draft is not JSON");
+    throw draftIssue("JSON_INVALID", "Synthia semantic draft is not JSON");
   }
-  return validateResearchSemanticDraft(value, candidate.length);
+  try {
+    return validateResearchSemanticDraft(value, candidate.length);
+  } catch (error) {
+    if (error instanceof SkillSchemaValidationError)
+      throw draftIssue("SCHEMA_INVALID", error.message);
+    throw error;
+  }
 }
 
 function exactContextRefs(context: RunContext): ArtifactRef[] {
@@ -2111,37 +2594,222 @@ function exactContextRefs(context: RunContext): ArtifactRef[] {
     .sort((left, right) => left.artifact_id.localeCompare(right.artifact_id));
 }
 
-function sealLatestSemanticCore(
+function currentResearchSealDiagnostic(
   context: RunContext,
-  store: ArtifactHostStore
-): { readonly core: GroundedSynthesisV1; readonly artifact: ArtifactRef; readonly added: boolean } {
-  const synthesis = selectedLatest(
-    context,
-    (artifact) => artifact.kind === "agent-output" && artifact.phase === "synthesizing"
-  );
-  if (synthesis === undefined) {
-    throw new Error("Synthia semantic draft artifact is absent");
+  store: ArtifactHostStore,
+  policy: SealPolicyV1,
+  anchor: ArtifactRef | null
+): { readonly ref: ArtifactRef; readonly diagnostic: SealDiagnosticV1 } | null {
+  const anchorIndex =
+    anchor === null
+      ? -1
+      : context.selectedArtifacts.findIndex((ref) => ref.artifact_id === anchor.artifact_id);
+  const diagnostics = context.selectedArtifacts
+    .slice(anchorIndex + 1)
+    .filter(
+      (ref) =>
+        ref.run_id === context.identity.run_id &&
+        ref.phase === "sealing_core" &&
+        ref.kind === "seal-diagnostic"
+    );
+  let previous: { readonly ref: ArtifactRef; readonly diagnostic: SealDiagnosticV1 } | null = null;
+  for (const ref of diagnostics) {
+    if (canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref)) {
+      throw new Error("research seal diagnostic custody mismatch");
+    }
+    const bytes = store.readById(ref.artifact_id);
+    const value: unknown = JSON.parse(bytes.toString("utf8"));
+    const diagnostic = validateSealDiagnostic(value, policy);
+    if (
+      bytes.toString("utf8") !== canonicalJson(diagnostic) ||
+      ref.content_digest !== sha256(bytes) ||
+      diagnostic.rejected_draft_ref.run_id !== context.identity.run_id ||
+      canonicalJson(diagnostic.epoch_anchor_ref) !== canonicalJson(anchor) ||
+      canonicalJson(diagnostic.previous_diagnostic_ref) !== canonicalJson(previous?.ref ?? null) ||
+      diagnostic.rejection_ordinal !== (previous?.diagnostic.rejection_ordinal ?? 0) + 1
+    ) {
+      throw new Error("research seal diagnostic epoch chain is invalid");
+    }
+    previous = { ref, diagnostic };
   }
-  const draft = extractSemanticDraft(store.readById(synthesis.artifact_id));
+  return previous;
+}
+
+type ResearchCoreProjection =
+  | {
+      readonly status: "sealed";
+      readonly core: GroundedSynthesisV1;
+      readonly upstreamRefs: readonly ArtifactRef[];
+    }
+  | { readonly status: "capacity_refused"; readonly detail: string }
+  | {
+      readonly status: "rejected";
+      readonly failure_class: SealDiagnosticV1["failure_class"];
+      readonly issues: readonly SealIssueV1[];
+    };
+
+function projectLatestResearchCore(
+  context: RunContext,
+  store: ArtifactHostStore,
+  synthesis: ArtifactRef
+): ResearchCoreProjection {
+  if (
+    synthesis.run_id !== context.identity.run_id ||
+    synthesis.producer !== "agent:synthia" ||
+    synthesis.content_schema?.schema_id !== "penny.research-semantic-draft.v1" ||
+    synthesis.content_schema.schema_version !== 1 ||
+    canonicalJson(store.refById(synthesis.artifact_id)) !== canonicalJson(synthesis)
+  )
+    throw new Error("Synthia draft custody or registered transport is invalid");
   const requestArtifact = admittedResearchRequestArtifact(context);
   const request = canonicalResearchRequest(store, context);
   const evidence = exactResearchEvidence(context);
   const contextRefs = exactContextRefs(context);
-  const synthesisUpstreams = new Set(
-    store.metadata(synthesis).upstream_refs.map((artifact) => artifact.artifact_id)
-  );
   const requiredUpstreams = [requestArtifact, ...contextRefs, ...evidence];
-  if (requiredUpstreams.some((artifact) => !synthesisUpstreams.has(artifact.artifact_id))) {
+  const synthesisUpstreams = new Set(
+    store.metadata(synthesis).upstream_refs.map((ref) => ref.artifact_id)
+  );
+  if (requiredUpstreams.some((ref) => !synthesisUpstreams.has(ref.artifact_id))) {
     throw new Error("Synthia semantic draft lineage omits admitted request, context, or evidence");
   }
-  const core = projectResearchSemanticDraft({
-    draft,
-    request,
-    contextTraceSha256: exactContextTrace(context),
-    evidenceArtifacts: evidence,
-    synthesisSourceArtifact: synthesis,
-    readEvidenceArtifact: (artifact) => store.readById(artifact.artifact_id),
+  const evidenceIds = new Set(evidence.map((ref) => ref.artifact_id));
+  for (const ref of [...requiredUpstreams, synthesis]) {
+    if (canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref))
+      throw new Error("research seal input custody mismatch");
+  }
+  const bytes = store.readById(synthesis.artifact_id);
+  let draft: ReturnType<typeof validateResearchSemanticDraft>;
+  try {
+    draft = extractSemanticDraft(bytes);
+  } catch (error) {
+    if (error instanceof ResearchDraftRejection)
+      return { status: "rejected", failure_class: error.failureClass, issues: [error.issue] };
+    throw error;
+  }
+  try {
+    const core = projectResearchSemanticDraft({
+      draft,
+      request,
+      contextTraceSha256: exactContextTrace(context),
+      evidenceArtifacts: evidence,
+      synthesisSourceArtifact: synthesis,
+      readEvidenceArtifact: (ref) => {
+        if (!evidenceIds.has(ref.artifact_id))
+          throw new Error("research evidence slot was not admitted");
+        // Projection caches only the cited working set. Exact uncited history
+        // remains in the store and in the complete synthesis/review handoff.
+        return store.readById(ref.artifact_id);
+      },
+    });
+    validateCanonicalGroundedSynthesisBytes(Buffer.from(canonicalJson(core)));
+    return {
+      status: "sealed",
+      core,
+      // The draft's upstreams retain considered history; the sealed core's direct
+      // evidence lineage is precisely its cited active provenance.
+      upstreamRefs: [
+        requestArtifact,
+        ...contextRefs,
+        synthesis,
+        ...core.provenance.evidence_artifacts,
+      ],
+    };
+  } catch (error) {
+    if (error instanceof ResearchEvidenceCapacityError) {
+      return { status: "capacity_refused", detail: error.message };
+    }
+    if (error instanceof SkillSchemaValidationError) {
+      const issue = draftIssue("PROJECTION_INVALID", error.message);
+      return { status: "rejected", failure_class: issue.failureClass, issues: [issue.issue] };
+    }
+    throw error;
+  }
+}
+
+/** Replay the native projector: a sealed label alone is not pre-review evidence. */
+function validatedResearchSubject(context: RunContext, store: ArtifactHostStore) {
+  const product = latestSemanticCore(context);
+  const synthesis = selectedLatest(
+    context,
+    (ref) =>
+      ref.run_id === context.identity.run_id &&
+      ref.kind === "agent-output" &&
+      ref.phase === "synthesizing"
+  );
+  if (synthesis === undefined) throw new Error("research review draft is absent");
+  const evidence = exactResearchEvidence(context);
+  const sources = [
+    admittedResearchRequestArtifact(context),
+    ...exactContextRefs(context),
+    ...evidence,
+    synthesis,
+  ];
+  for (const ref of [product, ...sources]) {
+    const bytes = store.readById(ref.artifact_id);
+    if (
+      canonicalJson(store.refById(ref.artifact_id)) !== canonicalJson(ref) ||
+      bytes.length !== ref.byte_length ||
+      sha256(bytes) !== ref.content_digest
+    )
+      throw new Error("research review source custody diverged");
+  }
+  const core = validateCanonicalGroundedSynthesisBytes(
+    store.readById(product.artifact_id),
+    product
+  );
+  const projection = projectLatestResearchCore(context, store, synthesis);
+  if (
+    product.producer !== "host:core-sealer" ||
+    projection.status !== "sealed" ||
+    canonicalJson(projection.core) !== canonicalJson(core) ||
+    canonicalJson(store.metadata(product).upstream_refs) !== canonicalJson(projection.upstreamRefs)
+  )
+    throw new Error("research current core projection or source lineage diverged");
+  return {
+    product,
+    sources,
+    evidence,
+    draft: extractSemanticDraft(store.readById(synthesis.artifact_id)),
+  };
+}
+
+function researchMechanicalChecks(context: RunContext, store: ArtifactHostStore): string {
+  const { product, sources } = validatedResearchSubject(context, store);
+  return canonicalJson({
+    schema_version: 1,
+    product_ref: product,
+    // Full refs are already exact input operands. Compact content bindings avoid
+    // duplicating history metadata into the bounded task and narrowing research breadth.
+    source_refs: sources.map(({ artifact_id, content_digest }) => ({
+      artifact_id,
+      content_digest,
+    })),
+    checks: [
+      "exact_source_ref_and_byte_custody",
+      "canonical_admitted_request",
+      "typed_semantic_draft_and_relations",
+      "captured_excerpt_containment_and_hashes",
+      "canonical_core_bytes_and_digest",
+      "exact_core_projection_and_source_lineage",
+      "considered_history_and_cited_active_provenance",
+    ],
+    scope: "host_mechanical_only_not_semantic_or_effect_absence",
   });
+}
+
+function researchEvidenceContentSha256(store: ArtifactHostStore, ref: ArtifactRef): string {
+  const bytes = store.readById(ref.artifact_id);
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) throw new Error("research evidence is not UTF-8");
+  const footer = text.lastIndexOf("\nSUMMARY:");
+  return sha256(footer < 0 ? text : text.slice(0, footer));
+}
+
+function sealProjectedResearchCore(
+  context: RunContext,
+  store: ArtifactHostStore,
+  projection: Extract<ResearchCoreProjection, { readonly status: "sealed" }>
+): { readonly artifact: ArtifactRef; readonly added: boolean } {
   const persisted = persistVersionedHostArtifact({
     context,
     store,
@@ -2152,14 +2820,14 @@ function sealLatestSemanticCore(
     producer: "host:core-sealer",
     mediaType: "application/json",
     contentSchema: { schema_id: "penny.grounded-synthesis.v1", schema_version: 1 },
-    upstreamRefs: [requestArtifact, ...contextRefs, synthesis, ...evidence],
-    content: canonicalJson(core),
+    upstreamRefs: projection.upstreamRefs,
+    content: canonicalJson(projection.core),
   });
   validateCanonicalGroundedSynthesisBytes(
     store.readById(persisted.artifact.artifact_id),
     persisted.artifact
   );
-  return { core, ...persisted };
+  return persisted;
 }
 
 function eventString(value: JsonValue | undefined): string | undefined {
@@ -2338,8 +3006,8 @@ function ensureAgentProductReceipt(input: {
   return { ...persisted, receipt: reread };
 }
 
-function relativeReportDirectory(context: RunContext): string {
-  const relative = path.relative(context.projectRoot, reportDirectory(context));
+function relativeReportDirectory(context: RunContext, legacy = false): string {
+  const relative = path.relative(context.projectRoot, reportDirectory(context, legacy));
   if (
     relative.length === 0 ||
     path.isAbsolute(relative) ||
@@ -2434,7 +3102,7 @@ function parseRenderIntent(bytes: Buffer): ResearchRenderIntentV1 {
 
 function assertIntentMatchesCurrent(input: {
   readonly context: RunContext;
-  readonly store: ArtifactHostStore;
+  readonly store: Pick<ArtifactReader, "readById">;
   readonly intent: ResearchRenderIntentV1;
 }): void {
   const coreArtifact = latestSemanticCore(input.context);
@@ -2443,13 +3111,19 @@ function assertIntentMatchesCurrent(input: {
     coreArtifact
   );
   const coreRef = semanticCoreRef(coreArtifact);
-  const rendered = renderResearchCompatibility({ core, semanticCore: coreRef });
+  const matchesLayout = (["claim-navigation", "legacy"] as const).some((layout) => {
+    const rendered = renderResearchCompatibility({ core, semanticCore: coreRef, layout });
+    return input.intent.targets.every((target) => target.content === rendered[target.render_name]);
+  });
   if (
     canonicalJson(input.intent.semantic_core) !== canonicalJson(coreRef) ||
-    input.intent.target_directory !== relativeReportDirectory(input.context) ||
+    ![
+      relativeReportDirectory(input.context),
+      relativeReportDirectory(input.context, true),
+    ].includes(input.intent.target_directory) ||
     input.intent.operation_identity !==
       `research-render:${sha256(input.context.identity.run_id).slice(0, 32)}:${coreArtifact.artifact_id}` ||
-    input.intent.targets.some((target) => target.content !== rendered[target.render_name])
+    !matchesLayout
   ) {
     throw new Error("render intent does not match the latest semantic core");
   }
@@ -3041,14 +3715,36 @@ function verifyTerminalRenderedFiles(input: {
   readonly envelope: ResearchProductEnvelopeV1;
   readonly reader: ArtifactReader;
 }): void {
-  const rendered = renderResearchCompatibility({
-    core: input.core,
-    semanticCore: input.coreRef,
-  });
-  const directory = ensureRenderDirectory(
-    input.context.projectRoot,
-    relativeReportDirectory(input.context)
+  // An old immutable terminal must replay its exact historical layout, not be
+  // silently rewritten. Require a complete set matching one deterministic layout.
+  const variants = (["claim-navigation", "legacy"] as const).map((layout) =>
+    renderResearchCompatibility({ core: input.core, semanticCore: input.coreRef, layout })
   );
+  const rendered = variants.find((variant) =>
+    input.envelope.renders.every(
+      (render) => render.content_sha256 === sha256(variant[render.render_name])
+    )
+  );
+  if (rendered === undefined)
+    throw new Error("terminal render layout does not match the latest core");
+  // Replay the frozen exact intent, including the historical question-only
+  // directory when present. New intents are run-scoped; no replay relocates files.
+  const intentArtifact = selectedLatest(
+    input.context,
+    (artifact) =>
+      artifact.run_id === input.context.identity.run_id &&
+      artifact.phase === "rendering" &&
+      artifact.kind === "render-intent"
+  );
+  if (intentArtifact === undefined) throw new Error("terminal render intent is absent");
+  const intent = parseRenderIntent(input.reader.readById(intentArtifact.artifact_id));
+  assertIntentMatchesCurrent({ context: input.context, store: input.reader, intent });
+  if (
+    input.context.research.report_dir !==
+    path.join(input.context.projectRoot, intent.target_directory)
+  )
+    throw new Error("terminal render directory differs from its frozen intent");
+  const directory = ensureRenderDirectory(input.context.projectRoot, intent.target_directory);
   for (const render of input.envelope.renders) {
     const expected = Buffer.from(rendered[render.render_name], "utf8");
     const artifactBytes = input.reader.readById(render.artifact_ref.artifact_id);

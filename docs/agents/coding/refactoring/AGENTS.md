@@ -1,0 +1,8 @@
+# Refactoring Guidance Index
+
+- [Safe Structural Change](safe-change.md): MUST READ FOR performing or reviewing behavior-preserving structural changes — scope, characterization, compatibility, reversible change, stopping, and verification.
+- [Diagnose Structural Friction](smells.md): READ WHEN investigating difficult-to-change code or assessing a proposed structural improvement — observed change costs, competing explanations, invariant boundaries, and evidence for intervention.
+- [Local Extraction, Inlining and Movement](local-transformations.md): READ WHEN performing or reviewing extraction or inlining of expressions, routines, or classes, replacing algorithms, moving behavior or state, or reshaping delegation and local library extensions — meaningful boundaries, caller knowledge, evaluation hazards, and evidence.
+- [Data, Identity and Mutation](data-models.md): READ WHEN performing or reviewing changes to field or collection encapsulation, value/entity representation, type codes, reference identity, associations, or synchronized presentation data — invariant-preserving migration, equality, lifecycle, and boundary compatibility.
+- [Conditions and Call Contracts](conditions-and-calls.md): READ WHEN performing or reviewing structural changes to branches, loops, absence or error handling, signatures, visibility, or construction contracts — use conditions, atomicity, evaluation, failure, and caller migration.
+- [Generalization and Larger Restructuring](generalization.md): READ WHEN performing or reviewing movement of members across type hierarchies, extracting or collapsing abstractions, replacing inheritance or delegation, or separating intertwined responsibilities — real shared contracts, alternatives, migration, and substitution evidence.

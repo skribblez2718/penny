@@ -6,13 +6,14 @@ import {
   type Directive,
   type JsonValue,
   type SkillContract,
-} from "../../src/contracts.js";
-import type { RunContext } from "../../src/context.js";
-import type { PlaybookCoreV1 } from "../../src/playbooks/playbook.js";
+} from "../../dist/contracts.js";
+import type { RunContext } from "../../dist/context.js";
+import { ordinaryLivenessPolicy } from "../../dist/liveness.js";
+import type { PlaybookCore } from "../../dist/playbooks/playbook.js";
 import {
   passthroughStartAdmission,
-  type PlaybookRegistrationV1,
-} from "../../src/playbooks/registry.js";
+  type PlaybookRegistration,
+} from "../../dist/playbooks/registry.js";
 
 export const CORE_ONLY_PLAYBOOK_NAME = "core-only-fixture";
 const CORE_ONLY_STATE = "planning";
@@ -141,8 +142,8 @@ function terminal(
   return next;
 }
 
-/** Mandatory PlaybookCoreV1 only: no fan, repair, liveness, gate, or host capability. */
-export class CoreOnlyPlaybook implements PlaybookCoreV1 {
+/** Mandatory PlaybookCore only: no fan, repair, liveness, gate, or host capability. */
+export class CoreOnlyPlaybook implements PlaybookCore {
   initialize(context: RunContext): Directive {
     context.transition(CORE_ONLY_STATE);
     return this.dispatch(context);
@@ -211,7 +212,7 @@ const CORE_ONLY_START_ADMISSION = passthroughStartAdmission({
   schema_version: 1,
 });
 
-export const CORE_ONLY_REGISTRATION: PlaybookRegistrationV1 = {
+export const CORE_ONLY_REGISTRATION: PlaybookRegistration = {
   name: CORE_ONLY_PLAYBOOK_NAME,
   contract: CORE_ONLY_CONTRACT,
   ingress: "skill",
@@ -227,18 +228,7 @@ export const CORE_ONLY_REGISTRATION: PlaybookRegistrationV1 = {
   liveness: {
     resolver_id: "fixtureResolver",
     resolve: () => ({
-      schema_version: 1,
-      scope: CORE_ONLY_PLAYBOOK_NAME,
-      preset: "fixture",
-      total_phase_repair_invocations: 4,
-      model_turns_per_worker: 4,
-      model_turns_per_run: 8,
-      tool_calls_per_worker: 4,
-      tool_calls_per_run: 8,
-      external_calls_per_worker: 0,
-      external_calls_per_run: 0,
-      worker_wall_clock_ms: 120_000,
-      run_wall_clock_ms: 240_000,
+      ...ordinaryLivenessPolicy({ scope: CORE_ONLY_PLAYBOOK_NAME, preset: "fixture" }),
       malformed_results_per_state_branch: 2,
       identical_malformed_digest_limit: 2,
       protocol_errors_per_worker: 4,
@@ -248,7 +238,6 @@ export const CORE_ONLY_REGISTRATION: PlaybookRegistrationV1 = {
         model_turns_per_worker: 4,
         tool_calls_per_worker: 2,
         external_calls_per_worker: 0,
-        worker_wall_clock_ms: 120_000,
       },
     }),
     thinking_policy: "agent_ssot",

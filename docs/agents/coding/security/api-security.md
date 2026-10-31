@@ -31,8 +31,3 @@ Adding or changing endpoints, RPC handlers, webhooks, machine interfaces, object
 
 - [Authorization](authorization.md), [input validation](input-validation.md), [resource limits](resource-limits.md), and [anti-automation](anti-automation.md) own their detailed controls.
 - [Logging and monitoring](logging-monitoring.md) and [error handling](error-handling.md) cover operational behavior.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

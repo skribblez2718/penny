@@ -439,6 +439,35 @@ describe("automatic primary-session diary scheduling", () => {
     ).toEqual([]);
   });
 
+  it("does not convert a slow productive evaluation into a shutdown-time wall-clock failure", async () => {
+    const fixture = sessionFixture("session-slow-evaluation");
+    fixture.setCompleteImplementation(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      return modelToolResponse({
+        disposition: "skip",
+        assessment: "The interaction was routine and has no reusable future-session value.",
+      });
+    });
+    const state = recorder(fixture, ["read", "sentinel"]);
+    const recorded = telemetryRecorder();
+    createMemoryExtension({
+      env: extensionEnv({ PENNY_MEMORY_AUTO_DIARY_SHUTDOWN_TIMEOUT_MS: "100" }),
+      telemetry: recorded.telemetry,
+    })(asMemoryExtensionApi(state.pi));
+    await start(state, fixture);
+    await addUserActivity(state, fixture, "Potential future preference.");
+
+    await settle(state, fixture);
+
+    expect(eventOf(recorded.events, "primary_auto_diary_evaluation")).toMatchObject({
+      level: "info",
+      context: { disposition: "skip", reasonCode: "candidate_skip" },
+    });
+    expect(
+      recorded.events.some((event) => event.context.reasonCode === "model_evaluation_timeout")
+    ).toBe(false);
+  });
+
   it("cancels and settles isolated evaluation before admitting a primary turn", async () => {
     const fixture = sessionFixture("session-turn-cancellation");
     let markStarted = (): void => {};

@@ -3,15 +3,14 @@
 ## What
 
 When a worker cannot proceed honestly, a playbook emits an `await_user` directive and the
-TypeScript engine checkpoints it. The same exact run resumes only through a matching
-`respond` request. This is a control boundary, not a model-authored state blob.
+TypeScript engine checkpoints it. A generic clarification gate resumes the same exact run only through a matching `respond` request. This is a control boundary, not a model-authored state blob. Host-owned approval gates use their registered decision service instead; the gate type does not grant generic response authority.
 
 ## Triggers
 
 - routing result sets `needs_clarification: true`;
 - a required stage-complete field is false;
 - confidence is `UNCERTAIN` where the playbook permits escalation;
-- a bounded repair stalls or repeats the same unresolved gap;
+- a repair stalls or repeats the same unresolved gap;
 - a planned gate reaches its review boundary.
 
 ## Resume
@@ -32,6 +31,7 @@ synthesis/critique/validation blockers at synthesizing.
 4. Keep predecessor refs checkpointed; never ask the user to resend payload text.
 5. Planned approval and unplanned clarification may share `await_user`, but their
    decision vocabularies and authority remain distinct.
+6. KB ingest/save decisions require the authenticated host content-review callback; generic engine `respond` is refused. Promotion uses its separate signed approval service. Public KB `resume` remains decision-free; see [Privacy and Promotion](../../knowledge-base/privacy-and-promotion.md#content-review-authentication) when handling those gates.
 
 ## Verification
 

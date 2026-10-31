@@ -11,6 +11,10 @@ const REGISTRY_SOURCE = readFileSync(
   new URL("../src/playbooks/registry.ts", import.meta.url),
   "utf8"
 );
+const REGISTRATION_DIGEST_SOURCE = readFileSync(
+  new URL("../src/playbooks/runtime-registration-digest.ts", import.meta.url),
+  "utf8"
+);
 const DIRECT_AGENT_RUNNER_SOURCE = readFileSync(
   new URL("../../../.pi/extensions/subagent/agent-runner.ts", import.meta.url),
   "utf8"
@@ -33,7 +37,7 @@ describe("W6 closed catalog tool-authority seam", () => {
 
   it("permits orchestration narrowing only through active registration metadata", () => {
     expect(REGISTRY_SOURCE).toContain("readonly allowed_tools?: readonly string[];");
-    expect(REGISTRY_SOURCE).toContain("allowed_tools: phase.allowed_tools ?? null");
+    expect(REGISTRATION_DIGEST_SOURCE).toContain("allowed_tools: phase.allowed_tools ?? null");
     expect(WORKER_SOURCE).toContain(
       'const allowedTools = "allowed_tools" in phase ? phase.allowed_tools : undefined;'
     );

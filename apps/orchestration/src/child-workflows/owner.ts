@@ -3,17 +3,35 @@ import { randomUUID } from "node:crypto";
 import { ArtifactStore } from "../artifact-store.js";
 import { canonicalJson, sha256 } from "../canonical-json.js";
 import { SEMANTIC_PRODUCT_VALIDATORS } from "../composition.js";
+import {
+  assertExistingStartAssurance,
+  requireMaterializedAssurance,
+  validateCompositionAssurance,
+  selectedCompositionAssurance,
+  type CompositionAdmissionInput,
+} from "../composition-assurance.js";
 import type { ArtifactRef, Directive, StartRequest } from "../contracts.js";
 import { RunContext } from "../context.js";
+import { ProjectedChildResponseV1Schema, projectChildGate } from "./gates.js";
+import {
+  assertImagegenChildAuthority,
+  imagegenChildStartParts,
+  imagegenChildOutput,
+  type ImagegenChildRuntimeAuthority,
+} from "./imagegen.js";
+import { IMAGEGEN_CHILD_OUTPUT, validateImagegenChildPolicy } from "./imagegen-policy.js";
+import { validateContract } from "../contracts.js";
 import type { OrchestrationEngine } from "../engine.js";
+import { childExecutionProgressLeaseBinding } from "../liveness-profiles.js";
 import {
   bindGenericChildYamlAuthority,
   genericChildStartParts,
   isGenericChildWorkflowEligible,
+  PLAYBOOK_REGISTRY,
   runtimeRegistrationSha256,
   skillContractSha256,
-  type PlaybookRegistrationV1,
-  type PlaybookRegistryV1,
+  type PlaybookRegistration,
+  type PlaybookRegistry,
 } from "../playbooks/registry.js";
 import type {
   OrchestrationProgressEvent,
@@ -83,26 +101,27 @@ export class ChildWorkflowStateOwner {
 /** Child engines are assembled by the service with the same project-bound durable owners. */
 export interface ChildWorkflowEngineFactory {
   create(input: {
-    readonly registration: PlaybookRegistrationV1;
-    /** Present only when replaying a historical timing-bound V1 call. */
-    readonly maxSteps?: number;
-    /** Present only when replaying a historical timing-bound V1 call. */
-    readonly wallClockMs?: number;
+    readonly registration: PlaybookRegistration;
+    /** Finite historical step allocation; elapsed-time fields are replay telemetry only. */
+    readonly maxSteps?: number | null;
+    readonly parentRunId?: string;
   }): {
     readonly engine: OrchestrationEngine;
     readonly runner: OrchestrationRunner;
-    readonly maxSteps: number;
+    readonly maxSteps: number | null;
   };
 }
 
 export interface ChildWorkflowRuntimeOwnerOptions {
   readonly checkpointer: Checkpointer;
   readonly artifacts: ArtifactStore;
-  readonly registry: PlaybookRegistryV1;
+  readonly registry: PlaybookRegistry;
   readonly projectRoot: string;
   /** Explicit host-owned activation. The owner remains internal and depth-one. */
   readonly executionEnabled: true;
   readonly engines: ChildWorkflowEngineFactory;
+  readonly imagegenChildren?: ImagegenChildRuntimeAuthority;
+  readonly imagegenChildrenForRun?: (parentRunId: string) => ImagegenChildRuntimeAuthority;
 }
 
 function utcNow(): string {
@@ -219,7 +238,119 @@ export class ChildWorkflowRuntimeOwner {
     this.state = new ChildWorkflowStateOwner(options.checkpointer, options.artifacts);
   }
 
-  private boundRegistry(): PlaybookRegistryV1 {
+  /** Prepare the exact prospective child start before a run or worker is created. */
+  private preflightCompositionStart(
+    registration: PlaybookRegistration,
+    record: ChildWorkflowCallRecord,
+    start: StartRequest,
+    nativeRequest: unknown
+  ): ArtifactRef | undefined {
+    if (registration.name !== "define" && registration.name !== "plan") return undefined;
+    const admission = registration.start_admission;
+    if (admission === undefined) throw new Error("child composition admission is unavailable");
+    const consumer = {
+      run_id: record.child_identity.run_id,
+      registration_name: registration.name,
+      contract_sha256: skillContractSha256(registration.contract),
+      registration_sha256: runtimeRegistrationSha256(registration),
+    };
+    const defineTemplate = PLAYBOOK_REGISTRY.get("define");
+    const defineRegistration =
+      defineTemplate === undefined
+        ? undefined
+        : bindGenericChildYamlAuthority(defineTemplate, this.options.projectRoot);
+    const assurance = {
+      artifacts: this.options.artifacts,
+      checkpointer: this.options.checkpointer,
+      project_id: record.policy_binding.project_id,
+      project_root: this.options.projectRoot,
+      consumer,
+      supported_define_registration_sha256:
+        defineRegistration === undefined ? null : runtimeRegistrationSha256(defineRegistration),
+    };
+    const prepared = admission.prepare(start, {
+      assurance,
+      artifactReader: this.options.artifacts,
+    });
+    const data = prepared.admission_data;
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      !("native" in data) ||
+      canonicalJson(data.native) !== canonicalJson(nativeRequest)
+    ) {
+      throw new Error("child native request and prospective start diverged");
+    }
+    const specificationRefs = record.input_artifacts.artifacts
+      .map((binding) => binding.ref)
+      .filter((ref) => ref.content_schema?.schema_id === "penny.specification.v1");
+    if (specificationRefs.length > 1) throw new Error("SPECIFICATION_ASSURANCE_BINDING_INVALID");
+    const policy = start.constraints.specification_assurance;
+    const mode: CompositionAdmissionInput["mode"] =
+      specificationRefs.length === 0
+        ? "not_applicable"
+        : policy === "reviewed_definition"
+          ? "reviewed_definition"
+          : "semantic_only";
+    const input = {
+      ...assurance,
+      invocation: start.constraints,
+      request_bytes: canonicalJson(data.native),
+      request_schema: {
+        schema_id:
+          registration.name === "define" ? "penny.definition-request.v1" : "penny.plan-request.v1",
+        schema_version: 1,
+      },
+      specification_ref: specificationRefs[0] ?? null,
+      mode,
+    };
+    if (this.options.checkpointer.runExists(record.child_identity.run_id)) {
+      return assertExistingStartAssurance(input);
+    }
+    if (!("assurance" in data)) throw new Error("SPECIFICATION_ASSURANCE_BINDING_INVALID");
+    return requireMaterializedAssurance(input, validateCompositionAssurance(data.assurance));
+  }
+
+  private assertTerminalCompositionAssurance(
+    record: ChildWorkflowCallRecord,
+    registration: PlaybookRegistration,
+    terminal: ReturnType<typeof terminalAction>
+  ): void {
+    if (registration.name !== "define" && registration.name !== "plan") return;
+    const context = this.options.checkpointer.loadRun(record.child_identity);
+    const { ref, value } = selectedCompositionAssurance(context, this.options.artifacts);
+    const request = validateCanonicalChildWorkflowRequestBytes(
+      this.options.artifacts.read(record.request_ref),
+      record.request_ref
+    );
+    const selected = record.input_artifacts.artifacts
+      .map((binding) => binding.ref)
+      .filter((input) => input.content_schema?.schema_id === "penny.specification.v1");
+    const mode =
+      selected.length === 0
+        ? "not_applicable"
+        : (request.invocation_policy?.specification_assurance ?? "semantic_only");
+    const start = genericChildStartParts(
+      record.parent_identity.playbook,
+      request,
+      this.boundRegistry(),
+      this.options.projectRoot
+    );
+    if (
+      selected.length > 1 ||
+      value.invocation_sha256 !== sha256(canonicalJson(start.constraints)) ||
+      !terminal.artifacts.some((item) => canonicalJson(item) === canonicalJson(ref)) ||
+      value.mode !== mode ||
+      canonicalJson(value.specification_ref) !== canonicalJson(selected[0] ?? null)
+    ) {
+      throw new Error("SPECIFICATION_ASSURANCE_BINDING_INVALID: child terminal policy");
+    }
+  }
+
+  private imageAuthority(runId: string): ImagegenChildRuntimeAuthority | undefined {
+    return this.options.imagegenChildren ?? this.options.imagegenChildrenForRun?.(runId);
+  }
+  private boundRegistry(): PlaybookRegistry {
     return new Map(
       [...this.options.registry.entries()].map(([name, registration]) => [
         name,
@@ -249,6 +380,46 @@ export class ChildWorkflowRuntimeOwner {
     this.activeParentCancellation
       .get(parentRunId)
       ?.abort(new Error("parent child-workflow execution was cancelled"));
+    for (const record of this.options.checkpointer.childWorkflowCallsForParent(parentRunId)) {
+      if (record.lifecycle !== "waiting_user") continue;
+      const registration = this.boundRegistry().get(record.child_identity.playbook);
+      if (
+        registration === undefined ||
+        runtimeRegistrationSha256(registration) !== record.child_registration_sha256
+      )
+        throw new Error("cancelled child registration is unavailable or drifted");
+      const child = this.options.engines.create({
+        registration,
+        parentRunId: record.parent_identity.run_id,
+        ...(record.schema_version === 1 ? { maxSteps: record.budget.max_steps } : {}),
+      });
+      const terminal = terminalAction(
+        child.engine.handle({
+          schema_version: 2,
+          action: "cancel",
+          identity: record.child_identity,
+          reason: "parent cancelled while child awaited a user",
+        })
+      );
+      this.state.transition({
+        call_id: record.call_id,
+        from: "waiting_user",
+        next: encodeChildWorkflowCallRecord({
+          ...record,
+          lifecycle: "cancelled",
+          terminal_action: terminal.action,
+          terminal_sha256: sha256(canonicalJson(terminal)),
+          usage: {
+            schema_version: 1,
+            ...child.engine.liveness.resourceUsage(record.child_identity.run_id),
+            steps: this.options.checkpointer.loadRun(record.child_identity).stepCount,
+            output_bytes: 0,
+            unknown_usage: false,
+          },
+          updated_at: utcNow(),
+        }).record,
+      });
+    }
   }
 
   async dispatch(
@@ -295,21 +466,46 @@ export class ChildWorkflowRuntimeOwner {
     if (childRegistration === undefined) {
       throw new Error(`child workflow '${value.child_name}' is not registered`);
     }
+    const imagePolicy =
+      value.child_name === "imagegen" ? parentEngine.registration.imagegen_child : undefined;
+    const controlledImage = imagePolicy !== undefined;
+    const imageAuthority = controlledImage
+      ? this.imageAuthority(parent.identity.run_id)
+      : undefined;
+    if (controlledImage)
+      assertImagegenChildAuthority(
+        imageAuthority,
+        this.options.artifacts,
+        this.options.checkpointer
+      );
     if (
-      !isGenericChildWorkflowEligible(
+      !controlledImage &&
+      (!isGenericChildWorkflowEligible(
         parent.identity.playbook,
         value.child_name,
         registry,
         this.options.projectRoot
-      )
+      ) ||
+        (parentEngine.registration.information_child !== undefined &&
+          !parentEngine.registration.information_child.parent_states.some(
+            (state) => state === value.state_id
+          )))
     ) {
       throw new Error(
         `child workflow '${parent.identity.playbook}->${value.child_name}' is not eligible`
       );
     }
-    const target = parentEngine.registration.generic_child?.parent_policy.targets.find(
-      (candidate) => candidate.child_name === value.child_name
-    );
+    const target =
+      imagePolicy === undefined
+        ? (
+            parentEngine.registration.generic_child?.parent_policy ??
+            parentEngine.registration.information_child?.parent_policy
+          )?.targets.find((candidate) => candidate.child_name === value.child_name)
+        : {
+            schema_version: 2 as const,
+            expected_output: IMAGEGEN_CHILD_OUTPUT,
+            progress_lease: validateImagegenChildPolicy(imagePolicy).progress_lease,
+          };
     if (
       target === undefined ||
       target.schema_version !== (value.schema_version === 3 ? 2 : 1) ||
@@ -322,7 +518,11 @@ export class ChildWorkflowRuntimeOwner {
     ) {
       throw new Error("child workflow directive diverges from the registered parent target");
     }
-    const policy = parentEngine.registration.generic_child?.parent_policy;
+    const policy =
+      imagePolicy === undefined
+        ? (parentEngine.registration.generic_child?.parent_policy ??
+          parentEngine.registration.information_child?.parent_policy)
+        : { ...validateImagegenChildPolicy(imagePolicy), schema_version: 2 as const };
     if (
       policy === undefined ||
       policy.max_nesting_depth !== 1 ||
@@ -332,7 +532,9 @@ export class ChildWorkflowRuntimeOwner {
     ) {
       throw new Error("parent registration has no executable depth-one child policy");
     }
-    const calls = this.options.checkpointer.childWorkflowCallsForParent(parent.identity.run_id);
+    const calls = this.options.checkpointer
+      .childWorkflowCallsForParent(parent.identity.run_id)
+      .filter((call) => (call.child_identity.playbook === "imagegen") === controlledImage);
     if (value.schema_version === 2) {
       if (policy.schema_version !== 1) {
         throw new Error("legacy child directive requires the exact legacy parent policy");
@@ -391,21 +593,18 @@ export class ChildWorkflowRuntimeOwner {
     ) {
       throw new Error("child workflow request does not bind the directive identity and policy");
     }
-    const start = genericChildStartParts(
-      parent.identity.playbook,
-      request,
-      registry,
-      this.options.projectRoot
-    );
+    const start =
+      imagePolicy !== undefined && imageAuthority !== undefined
+        ? imagegenChildStartParts(imageAuthority, request, value, imagePolicy, childRegistration)
+        : genericChildStartParts(
+            parent.identity.playbook,
+            request,
+            registry,
+            this.options.projectRoot
+          );
     if (start.child_name !== value.child_name) {
       throw new Error("child workflow start adapter selected a different provider");
     }
-    const child = this.options.engines.create({
-      registration: childRegistration,
-      ...(value.schema_version === 2
-        ? { maxSteps: value.budget.max_steps, wallClockMs: value.budget.wall_clock_ms }
-        : {}),
-    });
     const visit = this.options.checkpointer
       .stateVisits(parent.identity.run_id)
       .filter((candidate) => candidate.state_id === value.state_id)
@@ -417,8 +616,33 @@ export class ChildWorkflowRuntimeOwner {
       parent_visit_sequence: visit.event_sequence,
       parent_visit_offset: visit.offset,
       parent_registration_sha256: runtimeRegistrationSha256(parentEngine.registration),
-      child_registration_sha256: runtimeRegistrationSha256(child.engine.registration),
+      child_registration_sha256: runtimeRegistrationSha256(childRegistration),
       timestamp: utcNow(),
+    });
+    const prospectiveStart: StartRequest = {
+      schema_version: 2,
+      action: "start",
+      identity: record.child_identity,
+      goal: start.goal,
+      constraints: start.constraints,
+      project_root: parent.projectRoot,
+      trust_profile: parent.trustProfile,
+      // Imagegen's native source/mask ports live in its typed asset request, not generic
+      // semantic composition. They remain exact call operands and initial selected artifacts.
+      ...(controlledImage || value.input_artifacts.artifacts.length === 0
+        ? {}
+        : { input_artifacts: value.input_artifacts }),
+    };
+    const preparedAssurance = this.preflightCompositionStart(
+      childRegistration,
+      record,
+      prospectiveStart,
+      request.provider_request
+    );
+    const child = this.options.engines.create({
+      registration: childRegistration,
+      parentRunId: parent.identity.run_id,
+      ...(value.schema_version === 2 ? { maxSteps: value.budget.max_steps } : {}),
     });
     const childContext = RunContext.create({
       identity: record.child_identity,
@@ -427,6 +651,12 @@ export class ChildWorkflowRuntimeOwner {
       projectRoot: parent.projectRoot,
       trustProfile: parent.trustProfile,
       maxSteps: child.maxSteps,
+      maxIterations: child.engine.maxIterations,
+      sealCorrectionLimit: childRegistration.seal_policy?.correction_limit,
+      initialArtifacts: [
+        ...value.input_artifacts.artifacts.map((binding) => binding.ref),
+        ...(preparedAssurance === undefined ? [] : [preparedAssurance]),
+      ],
       registrationContractBinding: {
         schema_version: 1,
         registration_name: child.engine.registration.name,
@@ -470,44 +700,50 @@ export class ChildWorkflowRuntimeOwner {
         identity: value.identity,
       });
     }
+    let delivered: Directive | undefined;
+    if (currentRecord.lifecycle === "waiting_user") {
+      const parentNow = this.options.checkpointer.loadRun(currentRecord.parent_identity);
+      const responseRef = parentNow.selectedArtifacts
+        .filter((ref) => ref.kind === "child-gate-response")
+        .reverse()
+        .find((ref) => {
+          const response = validateContract(
+            ProjectedChildResponseV1Schema,
+            JSON.parse(this.options.artifacts.readById(ref.artifact_id).toString("utf8")),
+            "ProjectedChildResponseV1"
+          );
+          return response.projection.call_id === currentRecord.call_id;
+        });
+      if (responseRef === undefined)
+        throw new Error("waiting child has no exact committed parent reply");
+      delivered = child.engine.respondProjectedChildGate(currentRecord, responseRef);
+      currentRecord = this.state.transition({
+        call_id: currentRecord.call_id,
+        from: "waiting_user",
+        next: encodeChildWorkflowCallRecord({
+          ...currentRecord,
+          lifecycle: "running",
+          updated_at: utcNow(),
+        }).record,
+      });
+    }
     if (currentRecord.lifecycle !== "running") {
       throw new Error(
         `child workflow '${currentRecord.call_id}' cannot dispatch from '${currentRecord.lifecycle}'`
       );
     }
-    const childStart: StartRequest = {
-      schema_version: 2,
-      action: "start",
-      identity: currentRecord.child_identity,
-      goal: start.goal,
-      constraints: start.constraints,
-      project_root: parent.projectRoot,
-      trust_profile: parent.trustProfile,
-      ...(value.input_artifacts.artifacts.length === 0
-        ? {}
-        : { input_artifacts: value.input_artifacts }),
-    };
+    const childStart = prospectiveStart;
     const childContextBeforeStart = this.options.checkpointer.loadRun(currentRecord.child_identity);
     const childInitial =
-      childContextBeforeStart.stateId === "intake" &&
+      delivered ??
+      (childContextBeforeStart.stateId === "intake" &&
       childContextBeforeStart.pendingDirective === null
         ? child.engine.startReservedChild(childStart)
         : child.engine.handle({
             schema_version: 2,
             action: "recover",
             identity: currentRecord.child_identity,
-          });
-    if (currentRecord.schema_version === 1) {
-      const boundary = await child.runner.runUntilBoundary(childInitial, signal);
-      return this.captureBoundary(
-        parentEngine,
-        child.engine,
-        currentRecord,
-        boundary,
-        signal.aborted
-      );
-    }
-
+          }));
     const executionController = new AbortController();
     const forwardParentCancellation = (): void => executionController.abort(signal.reason);
     if (signal.aborted) forwardParentCancellation();
@@ -519,13 +755,17 @@ export class ChildWorkflowRuntimeOwner {
       worker_session_id: currentRecord.child_identity.run_id,
       fencing_token_sha256: sha256(randomUUID()),
     };
+    const progressLease =
+      currentRecord.schema_version === 2
+        ? currentRecord.progress_lease
+        : childExecutionProgressLeaseBinding();
     const startedAtMs = Date.now();
     let leaseState: ChildWorkflowProgressLeaseStateV1 = validateChildWorkflowProgressLeaseState({
       schema_version: 1,
-      binding: currentRecord.progress_lease,
+      binding: progressLease,
       fence,
       state: "active",
-      lease_expires_at_ms: startedAtMs + currentRecord.progress_lease.inactivity_interval_ms,
+      lease_expires_at_ms: startedAtMs + progressLease.inactivity_interval_ms,
       last_accepted_signal_sequence: 0,
       last_accepted_at_ms: startedAtMs,
       last_activity: null,
@@ -621,6 +861,23 @@ export class ChildWorkflowRuntimeOwner {
     );
   }
 
+  private validateOutput(
+    record: ChildWorkflowCallRecord,
+    output: ArtifactRef | null
+  ): readonly ArtifactRef[] {
+    if (record.child_identity.playbook === "imagegen") {
+      const imageAuthority = this.imageAuthority(record.parent_identity.run_id);
+      assertImagegenChildAuthority(
+        imageAuthority,
+        this.options.artifacts,
+        this.options.checkpointer
+      );
+      return imagegenChildOutput(imageAuthority, record, output);
+    }
+    validateExactOutputCore(this.options.artifacts, output, record.expected_output);
+    return [];
+  }
+
   private captureBoundary(
     parentEngine: OrchestrationEngine,
     childEngine: OrchestrationEngine,
@@ -629,6 +886,52 @@ export class ChildWorkflowRuntimeOwner {
     parentCancellationRequested: boolean
   ): Directive {
     this.assertFrozenRegistrationBinding(record, parentEngine, childEngine);
+    if (boundary.action === "await_user") {
+      const parentNow = this.options.checkpointer.loadRun(record.parent_identity);
+      if (parentNow.terminalDirective !== null) {
+        const terminal = terminalAction(
+          childEngine.handle({
+            schema_version: 2,
+            action: "cancel",
+            identity: record.child_identity,
+            reason: "parent cancelled while child reached a human wait",
+          })
+        );
+        this.state.transition({
+          call_id: record.call_id,
+          from: "running",
+          next: encodeChildWorkflowCallRecord({
+            ...record,
+            lifecycle: "cancelled",
+            terminal_action: terminal.action,
+            terminal_sha256: sha256(canonicalJson(terminal)),
+            usage: {
+              schema_version: 1,
+              ...childEngine.liveness.resourceUsage(record.child_identity.run_id),
+              steps: this.options.checkpointer.loadRun(record.child_identity).stepCount,
+              output_bytes: 0,
+              unknown_usage: false,
+            },
+            updated_at: utcNow(),
+          }).record,
+        });
+        return parentNow.terminalDirective;
+      }
+      const projected = projectChildGate(record, boundary);
+      parentNow.pendingDirective = projected;
+      parentNow.status = "awaiting_user";
+      this.state.transition({
+        call_id: record.call_id,
+        from: "running",
+        parentContext: parentNow,
+        next: encodeChildWorkflowCallRecord({
+          ...record,
+          lifecycle: "waiting_user",
+          updated_at: utcNow(),
+        }).record,
+      });
+      return projected;
+    }
     const terminal = terminalAction(boundary);
     const childContext = this.options.checkpointer.loadRun(record.child_identity);
     if (
@@ -637,8 +940,13 @@ export class ChildWorkflowRuntimeOwner {
     ) {
       throw new Error("child workflow terminal is not the exact durable child terminal");
     }
+    this.assertTerminalCompositionAssurance(record, childEngine.registration, terminal);
     const output = exactOutput(terminal, record);
-    validateExactOutputCore(this.options.artifacts, output, record.expected_output);
+    const parentCancelled =
+      parentCancellationRequested ||
+      this.options.checkpointer.loadRun(record.parent_identity).terminalDirective?.action ===
+        "cancelled";
+    if (!parentCancelled) this.validateOutput(record, output);
     const observedUsage = childEngine.liveness.resourceUsage(record.child_identity.run_id);
     const observedOutputBytes = output?.byte_length ?? 0;
     if (
@@ -675,7 +983,7 @@ export class ChildWorkflowRuntimeOwner {
         unknown_usage: false,
       },
     });
-    if (parentCancellationRequested) {
+    if (parentCancelled) {
       const cancelled = encodeChildWorkflowCallRecord({
         ...record,
         lifecycle: "cancelled",
@@ -712,6 +1020,9 @@ export class ChildWorkflowRuntimeOwner {
       from: "running",
       next: terminalRecord,
     });
+    const parentAfterTerminal = this.options.checkpointer.loadRun(record.parent_identity);
+    if (parentAfterTerminal.terminalDirective !== null)
+      return parentAfterTerminal.terminalDirective;
     return this.consumeCapturedTerminal(parentEngine, childEngine, captured, resultRef);
   }
 
@@ -736,8 +1047,9 @@ export class ChildWorkflowRuntimeOwner {
     ) {
       throw new Error("captured child call has no durable terminal directive");
     }
+    this.assertTerminalCompositionAssurance(record, childEngine.registration, terminal);
     const output = exactOutput(terminal, record);
-    validateExactOutputCore(this.options.artifacts, output, record.expected_output);
+    this.validateOutput(record, output);
     const result = validateChildWorkflowResult({
       schema_version: 1,
       call_id: record.call_id,
@@ -761,16 +1073,20 @@ export class ChildWorkflowRuntimeOwner {
       record,
       outputArtifact: output,
       resultArtifact: resultRef,
+      importedArtifacts: this.validateOutput(record, output),
     });
     const consumed = encodeChildWorkflowCallRecord({
       ...record,
       lifecycle: "consumed",
       updated_at: utcNow(),
     }).record;
+    // Continuation preparation can run host code: recheck live custody/rights/G1 immediately at import.
+    this.validateOutput(record, output);
     this.state.consume({
       call_id: record.call_id,
       next: consumed,
       parentContext: prepared.context,
+      expected_parent_snapshot_sha256: prepared.source_snapshot_sha256,
       eventType: "child_workflow_consumed",
       payload: {
         call_id: record.call_id,
@@ -826,7 +1142,9 @@ export class ChildWorkflowRuntimeOwner {
     ) {
       throw new Error("child workflow result artifact failed exact re-read");
     }
-    this.options.artifacts.select(artifact);
+    // Serial asset results have separate exact operation IDs, not competing first revisions.
+    // Parent selection is committed with consumption. Preserve ordinary single-call replay.
+    if (record.child_identity.playbook !== "imagegen") this.options.artifacts.select(artifact);
     return artifact;
   }
 }

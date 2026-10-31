@@ -4,8 +4,8 @@ Runs four substantive repository checks and executes configured Python tests in
 isolated suite processes. File and node coverage are verified against an
 independent filesystem inventory plus closed pytest lifecycle evidence.
 
-Usage:
-    python scripts/system/checks/check_compliance.py
+Usage (after ``make setup-dev``):
+    .venv/bin/python scripts/system/checks/check_compliance.py
 """
 
 from __future__ import annotations

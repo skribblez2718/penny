@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Directive } from "../src/contracts.js";
+import type { Directive } from "../dist/contracts.js";
 import {
   errorCode,
   parseJson,

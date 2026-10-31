@@ -8,6 +8,12 @@ metadata:
     subagents: [annie, echo, demetri, vera, carren]
 ---
 
+## Liveness
+
+Derive values from actual operator policy, not test constants or model guesses. Do not invent finite step, agent-call, phase-cycle, semantic-repair or correction-attempt caps.
+
+Ordinary permitted work has no fixed wall-clock deadline at any layer. Productive execution may continue indefinitely while trusted activity or durable convergence renews its inactivity lease. A stall ends on inactivity expiry; explicit cancellation, errors, actual operator limits, and independent input/output/resource/containment limits remain enforceable.
+
 ## When to Use
 
 - Select one supplied feasible alternative or rank the complete feasible set.
@@ -45,6 +51,7 @@ The request port is `penny.decision-request.v1` v1. Selects among supplied alter
 
 - `decision_request` — input/inline_request; schema `penny.decision-request.v1` v1; 1..1 item(s).
 - `prior_grounded_synthesis` — input/artifact; schema `penny.grounded-synthesis.v1` v1; 0..1 item(s); artifact kind semantic-core.
+- `evidence_context` — input/artifact; schema `penny.evidence-context.v1` v1; 0..1 item(s); artifact kind evidence-context.
 - `decision` — output/artifact; schema `penny.decision.v2` v2; 1..1 item(s); artifact kind semantic-core.
 
 ### Runtime constraints schema
@@ -251,11 +258,11 @@ Vera and Carren emit only a closed gap kind plus repair owner. Engine-owned regi
 
 Every phase receives exact artifact refs. Ordinary workflow phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by the caller and task, and within the phase consequence boundary; they cannot bypass host-owned evidence admission. Request, analysis, evidence packet, draft, reviewer report, receipt, and feedback IDs are transport lineage, not semantic basis IDs. Only exact admitted `GroundedSynthesisV1` artifacts may contribute artifact basis IDs.
 
-Only the host-admitted Echo gap may acquire new evidence, and only through narrowly targeted read-only local inspection or web retrieval for the exact decision-sensitive fact when compatible with caller constraints. Echo must provide source locators, stop rather than broaden into open-ended research, and report unavailable, conflicting, disallowed, insufficient, or budget-exhausted evidence honestly as unresolved. Normal permitted work has no model-turn, phase-admission, tool-call, external-call, or total elapsed-work quota. Calibrated renewable inactivity leases stop stalled workers, independent host-operation deadlines remain an upper bound, and routing-only repair remains separately count-bounded.
+Only the host-admitted Echo gap may acquire new evidence, and only through narrowly targeted read-only local inspection or web retrieval for the exact decision-sensitive fact when compatible with caller constraints. Echo must provide source locators, stop rather than broaden into open-ended research, and report unavailable, conflicting, disallowed, insufficient, or budget-exhausted evidence honestly as unresolved. Normal permitted work has no invented model-turn, phase-admission, tool-call, external-call, or total elapsed-work quota; actual operator limits still apply. Calibrated renewable inactivity leases stop stalled workers, host operations use independent renewable inactivity leases, and routing-only repair remains separate, governed by actual operator policy and measured-error/inactivity controls.
 
 ## Product and Review Truth
 
-Demetri returns bounded decision prose, one closed `DECISION_CORE:<json>` footer, and one SUMMARY. The host validates and seals exact canonical `DecisionV2` bytes with request/source lineage and `execution_started:false`.
+Demetri returns bounded decision prose, one closed `DECISION_CORE:<json>` footer, and one SUMMARY. The host validates and seals exact canonical `DecisionV2` bytes with request/source lineage and `execution_started:false`. Seal corrections follow actual operator policy, with no invented finite allowance when unspecified. Each rejected draft gets its own exact diagnostic before another attempt or honest negative terminal; previous-epoch diagnostics are not current instructions. Product and diagnostic operations are separately draft-addressed at version 1, not run-global revision counters. Negative `seal_diagnostics` identifies a rejected draft separately from semantic `repair_diagnostics` and any accepted best partial; an older product requires new Vera-then-Carren review after replacement.
 
 Vera independently verifies validity. The host mints a validity receipt only for a latest-product PASS. Carren then critiques quality and is the sole approval authority; any major or critical finding requires revision. The host mints a quality receipt only for latest-product APPROVE, then deterministically validates product integrity and emits a `DecisionProductEnvelopeV1` that binds request, analysis, optional evidence, imports, draft, decision, both reports, both receipts, and integrity evidence.
 

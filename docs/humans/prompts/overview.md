@@ -11,6 +11,14 @@ and the current task so each concern has one owner.
 | Project Index      | Typed advisory routing to relevant guidance         | `AGENTS.md` indexes |
 | Invocation Context | Current goal, constraints, exact artifact IDs/paths | Runtime task        |
 
+## Reusable slash-command templates
+
+Markdown files in `.pi/prompts/` provide reusable `/` commands. Pi expands their arguments into task text; templates are not another system-policy layer. Run `/reload` after adding or editing one in an active session.
+
+`$ARGUMENTS` is the supported spelling for all arguments joined with spaces; `$@` is an alias. Penny uses `$ARGUMENTS` in a separate labeled block for free-form input and retains positional arguments for distinct inputs. Free-form tails also use plain Markdown blocks; compact paths and scalar values may use inline code. Backticks only affect presentation: they do not stop substitution, quote invocation arguments, or enforce a trust boundary.
+
+Quote multiword argument values when invoking a command. Unquoted argument whitespace is normalized; a multiline value supplied as one quoted argument retains its internal formatting. Use a source file when exact bytes matter. See the [template authoring convention](../../agents/prompts/prompt-templates.md) for examples, pitfalls, verification, and the route to the installed Pi documentation.
+
 ## Local catalog and remote services
 
 `.pi/agents` is the local worker catalog. It does not advertise remote service

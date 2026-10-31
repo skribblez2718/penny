@@ -4,14 +4,14 @@ import {
   SCA_CANDIDATE_ANALYSIS_SCHEMA,
   buildScaModelRegistryV1,
   type ScaModelRegistryV1,
-} from "../src/sca/agent-models.js";
-import { sealScaCandidateAnalysisResultV1 } from "../src/sca/deep-analysis-contracts.js";
+} from "../dist/sca/agent-models.js";
+import { sealScaCandidateAnalysisResultV1 } from "../dist/sca/deep-analysis-contracts.js";
 import {
   ScaModelExecutionError,
   executeScaModelAnalysisV1,
   type ScaAnalysisModelCallV1,
   type ScaAnalysisModelInvokerV1,
-} from "../src/sca/model-execution.js";
+} from "../dist/sca/model-execution.js";
 
 const TARGET_ID = `scatarget_${"a".repeat(64)}`;
 const SNAPSHOT = "b".repeat(64);

@@ -5,13 +5,13 @@ because a glob appears broad, and a test is not covered merely because it typech
 inspect the effective ESLint project, actual TypeScript program membership, and real Vitest runner
 mapping for every owned file.
 
-## Owned scope and current report
+## Owned scope and live inventory
 
-The dynamic inventory walks `.pi/extensions/`, `.pi/lib/`, `apps/observability/`,
-`apps/orchestration/`, and `apps/platform-memory/`, including non-ignored untracked TypeScript. The
-current report is 426/426 files with type-aware lint and strict-program coverage, plus 210/210 test or
-smoke files reachable from package `test:all`. Neither number is hardcoded; new files must be
-discovered and covered automatically.
+The dynamic inventory walks the roots configured by `typescript:inventory` in the root
+`package.json`, including non-ignored untracked TypeScript. Run `bun run typescript:inventory` for
+current file and test counts, effective type-aware lint and strict-program coverage, and runner
+reachability. New files must be discovered and covered automatically; a recorded count is not a
+coverage guarantee.
 
 ## Root command map
 
@@ -109,12 +109,28 @@ and fail-fast narrowing helpers. Explicit `any`, postfix `!`, and definite-assig
 prohibited in tests as well as runtime source. Malformed input remains `unknown` until a real parser
 handles it; missing required fixture values must fail rather than default.
 
-Only five centrally registered partial-host assertions exist: one orchestration `ExtensionContext`
-site, one PowerPoint `ExtensionAPI` site, and three questionnaire sites (`ExtensionAPI`, `TUI`, and
+Only five centrally registered partial-host assertions exist: one orchestration tool-execution context
+site (derived from the tool's SDK callback), one PowerPoint `ExtensionAPI` site, and three questionnaire sites (`ExtensionAPI`, `TUI`, and
 `Theme`). Each registry entry binds an exact path and AST expression to a local rationale, removal
 condition, single immediately preceding lint suppression, and named focused test. No package or test
 directory receives a broad exemption. The exact sites are listed in the
 [TypeScript guide](../coding/typescript.md#the-five-partial-host-test-seams).
+
+## SDK-backed extension fixtures
+
+Vitest extension tests share `createTestExtensionApi` and `createTestToolInfos` from
+`.pi/lib/tests/pi-test-host.ts`. They derive API shape and tool metadata from the installed SDK rather
+than maintaining another full copy of Pi's interfaces. SDK initialization bypasses consuming tests'
+module mocks, uses disposable in-memory state, and never prompts a model. The session is disposed and
+the temporary directory removed before fixtures are returned.
+
+The fixture models only the behavior a test supplies. Unmodeled SDK capabilities throw instead of
+calling the discarded session; adding a new Pi method does not silently grant working behavior to
+existing tests. Plain narrowing helpers remain separate in `.pi/lib/tests/test-narrowers.ts`, so real
+subprocess fixtures can use them without loading Vitest.
+
+Run `bun run test:pi-harness` for focused fixture and registration checks. `test:pi-compat` includes
+this command, so `pi:update` exercises it on both dependency graphs before changing global Pi.
 
 ## No migration baseline
 

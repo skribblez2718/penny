@@ -30,11 +30,11 @@ Durable memory and historical skill rooms are not handoff or resume authority. T
 The `skill` tool resolves only `ingress:skill` registrations from the sole executable
 `PLAYBOOK_REGISTRY`. `.pi/skills` is the one package root. Knowledge Base remains on
 `knowledge_base`. A model-visible package omits `disable-model-invocation`; only a hidden package
-sets `disable-model-invocation: true`. Redundant `false` is not permitted. Pi native and Penny model
-metadata include the visible packages, while `.pi/skills/.ignore` contains exactly explicitly
-model-disabled packages. A model-disabled development package may remain unregistered for static
-documentation work, but generic invocation refuses it with `SKILL_NOT_REGISTERED` until a playbook
-exists.
+sets `disable-model-invocation: true`. Redundant `false` is not permitted. Pi loads both classes
+through normal native discovery. Visible packages are advertised to the model and available to
+the user or Penny; hidden packages are omitted from automatic model advertising and remain
+manually invocable through `/skill:<name> <description>`. Unregistered packages refuse generic
+invocation with `SKILL_NOT_REGISTERED` regardless of visibility.
 
 ## Limits
 

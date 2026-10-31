@@ -30,8 +30,3 @@ Emitting security-relevant logs, audit events, metrics, traces, alerts, or diagn
 
 - [Error handling](error-handling.md) owns safe exceptional behavior.
 - [Incident response](incident-response.md) owns containment and recovery; [secrets](secrets.md) owns confidentiality.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

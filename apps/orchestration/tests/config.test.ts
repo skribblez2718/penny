@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadRuntimeConfig } from "../src/config.js";
-import { initializePennyState, resolvePennyRuntimeState } from "../src/state/index.js";
+import { loadRuntimeConfig } from "../dist/config.js";
+import { initializePennyState, resolvePennyRuntimeState } from "../dist/state/index.js";
 
 const roots: string[] = [];
 
@@ -23,10 +23,24 @@ afterEach(() => {
 });
 
 describe("TypeScript orchestration runtime configuration", () => {
+  it.each(["0", "-1", "1.5", "Infinity", "NaN", "9007199254740992"])(
+    "rejects invalid explicit cycle policy %s",
+    (value) => {
+      const { projectRoot, env } = fixture();
+      for (const key of ["PENNY_ORCHESTRATION_MAX_STEPS", "PENNY_ORCHESTRATION_MAX_ITERATIONS"]) {
+        expect(() => loadRuntimeConfig(projectRoot, { ...env, [key]: value })).toThrow(
+          "positive integer"
+        );
+      }
+    }
+  );
+
   it("uses project-bound stable target paths", () => {
     const { projectRoot, env } = fixture();
     const config = loadRuntimeConfig(projectRoot, env);
 
+    expect(config.maxSteps).toBeNull();
+    expect(config.maxIterations).toBeNull();
     expect(path.basename(config.dbPath)).toBe("orchestration.db");
     expect(path.basename(config.receiptKeyPath)).toBe("receipt-key");
     expect(path.basename(config.subagentSessionRoot)).toBe("subagent-sessions");
@@ -97,18 +111,15 @@ describe("TypeScript orchestration runtime configuration", () => {
     ).toThrow("PENNY_ORCH_V2_DB is retired");
   });
 
-  it("uses unversioned runtime limit names", () => {
+  it("uses unversioned finite-resource runtime limit names", () => {
     const { projectRoot, env } = fixture();
     const config = loadRuntimeConfig(projectRoot, {
       ...env,
       PENNY_ORCHESTRATION_MAX_STEPS: "12",
-      PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS: "30000",
       PENNY_ORCHESTRATION_PARALLEL_CONCURRENCY: "2",
       PENNY_ORCHESTRATION_MAX_RETAINED_RUNS: "100",
     });
     expect(config.maxSteps).toBe(12);
-    expect(config.hostOperationDeadlineMs).toBe(30_000);
-    expect(config.workerTimeoutMs).toBe(30_000); // compatibility alias
     expect(config.parallelConcurrency).toBe(2);
     expect(config.maxRetainedRuns).toBe(100);
     expect(() =>
@@ -118,6 +129,9 @@ describe("TypeScript orchestration runtime configuration", () => {
 
   it.each([
     "PENNY_ORCH_V2_MAX_STEPS",
+    "PENNY_ORCH_V2_WORKER_TIMEOUT_MS",
+    "PENNY_ORCHESTRATION_WORKER_TIMEOUT_MS",
+    "PENNY_ORCHESTRATION_HOST_OPERATION_DEADLINE_MS",
     "PENNY_ORCHESTRATION_WORKER_ACTIVE_WORK_BUDGET_MS",
     "PENNY_ORCHESTRATION_RUN_ACTIVE_WORK_BUDGET_MS",
   ])("rejects retired liveness/limit selector %s", (name) => {

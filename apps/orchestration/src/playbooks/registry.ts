@@ -1,3 +1,5 @@
+import { validateImagegenChildPolicy } from "../child-workflows/imagegen-policy.js";
+import { validatePhaseResultProjector } from "../phase-result-projection.js";
 /**
  * W2 — Playbook registry (Foundation stage, workstream 1 of 3).
  *
@@ -65,8 +67,10 @@ import type {
   ArtifactHostStore,
   ArtifactReader,
   ArtifactRevisionLookup,
+  ArtifactStore,
 } from "../artifact-store.js";
 import type { ResearchContextOwnerV2 } from "../research-context.js";
+import type { ImagegenStartAdmissionProvidersV1 } from "../imagegen/types.js";
 import {
   canonicalizeResearchRequest,
   ResearchCallerConstraintsV1Schema,
@@ -74,17 +78,14 @@ import {
   validateResearchRequest,
 } from "../skill-contracts/research.js";
 import { childExecutionProgressLeaseBinding } from "../liveness-profiles.js";
-import {
-  legacyResearchLivenessPolicy,
-  researchBootstrapLivenessPolicy,
-  researchLivenessPolicy,
-} from "../liveness.js";
+import { researchBootstrapLivenessPolicy, researchLivenessPolicy } from "../liveness.js";
 import { validateRegisteredBrowserNetworkAllowlist } from "../browser-policy-carrier.js";
 import {
   CATALOG_AGENT_NAME_PATTERN,
   parseSsotTools,
   type GenericChildCatalogAgentYamlMaximumCarrierV1,
 } from "../model-client.js";
+import { validateRequiredModelIdentity, type RequiredModelIdentityV1 } from "../required-model.js";
 import {
   validateChildProviderDescriptor,
   type ChildProviderDescriptorV1,
@@ -97,6 +98,10 @@ import {
   type ChildWorkflowPolicyV1,
 } from "../child-workflows/contracts.js";
 import {
+  validateHostOperationAuthority,
+  type HostOperationAuthorityV1,
+} from "../host-operations/contracts.js";
+import {
   assessmentRequestConstraints,
   validateAssessmentRequest,
 } from "../skill-contracts/assess.js";
@@ -106,13 +111,19 @@ import {
   validateDiagnosisRequest,
 } from "../skill-contracts/diagnose.js";
 import type { EffectEvidenceProviderV1 } from "../skill-contracts/effects.js";
+import { validateSealPolicy, type SealPolicyV1 } from "../skill-contracts/sealing.js";
+import {
+  definitionRequestConstraints,
+  validateDefinitionRequest,
+} from "../skill-contracts/define.js";
 import { planRequestConstraints, validatePlanRequest } from "../skill-contracts/plan.js";
 import { produceRequestConstraints, validateProduceRequest } from "../skill-contracts/produce.js";
-import type { CompletionReceiptPredicateV1, PlaybookV1 } from "./playbook.js";
+import type { CompletionReceiptPredicateV1, Playbook } from "./playbook.js";
 import {
   AGENT_BY_STATE,
   RESEARCH_COMPLETION_RECEIPT_PREDICATES,
   RESEARCH_SKILL_CONTRACT,
+  RESEARCH_SEAL_POLICY,
   ResearchPlaybook,
   researchSummarySchema,
 } from "./research.js";
@@ -125,22 +136,44 @@ import {
   validateKnowledgeBasePhaseDetails,
   type KbAgentPhase,
 } from "./knowledge-base.js";
-import { ASSESS_PLAYBOOK_REGISTRATION } from "./assess.js";
-import { DECIDE_PLAYBOOK_REGISTRATION } from "./decide.js";
-import { DIAGNOSE_PLAYBOOK_REGISTRATION } from "./diagnose.js";
-import { PLAN_PLAYBOOK_REGISTRATION } from "./plan.js";
-import { PRODUCE_PLAYBOOK_REGISTRATION } from "./produce.js";
+import { ASSESS_PLAYBOOK_REGISTRATION, AssessPlaybook } from "./assess.js";
+import { DECIDE_PLAYBOOK_REGISTRATION, DecidePlaybook } from "./decide.js";
+import { DIAGNOSE_PLAYBOOK_REGISTRATION, DiagnosePlaybook } from "./diagnose.js";
+import { DEFINE_PLAYBOOK_REGISTRATION, DefinePlaybook } from "./define.js";
+import { VIDEOGEN_PLAYBOOK_REGISTRATION } from "./videogen-unconfigured.js";
+import { IMAGEGEN_PLAYBOOK_REGISTRATION } from "./imagegen.js";
+import { PLAN_PLAYBOOK_REGISTRATION, PlanPlaybook } from "./plan.js";
+import { PRODUCE_PLAYBOOK_REGISTRATION, ProducePlaybook } from "./produce.js";
 import { SCA_PLAYBOOK_REGISTRATION } from "./sca.js";
+import type { ScaP02ComponentValidationAuthorityV1 } from "../sca/p02-contracts.js";
 
-export interface PlaybookConstructionOptionsV1 {
+export interface OrdinaryHostFaultPointV1 {
+  readonly skill: GenericChildWorkflowName;
+  readonly phase: string;
+  readonly point: string;
+  readonly boundary: "before_checkpoint_commit" | "after_checkpoint_commit";
+}
+
+/** In-process host option only; never a request, registration, environment or worker field. */
+export type OrdinaryHostFaultV1 = (point: OrdinaryHostFaultPointV1) => void;
+
+export interface PlaybookConstructionOptions {
+  readonly hostFault?: OrdinaryHostFaultV1;
   readonly artifactRevisions?: ArtifactRevisionLookup;
   readonly artifactReader?: ArtifactReader;
   readonly artifactStore?: ArtifactHostStore;
   readonly researchContext?: ResearchContextOwnerV2;
   readonly checkpointer?: Checkpointer;
+  readonly verifyExecutionReceipt?: import("../receipts.js").ExecutionReceiptVerifier;
   readonly researchHostFault?: (point: string) => void;
+  /** Trusted host clock for deterministic gate evaluation; never caller- or model-selected. */
+  readonly trustedClock?: () => Date;
+  /** Host-owned P02 component admission authority; absence is deny-by-default. */
+  readonly scaP02ComponentValidationAuthority?: ScaP02ComponentValidationAuthorityV1;
   /** Optional trusted, immutable effect-trace snapshot provider for scoped admission. */
   readonly effectEvidenceProvider?: EffectEvidenceProviderV1;
+  /** Private imagegen owner dependencies; absent is a fail-closed construction posture. */
+  readonly imagegen?: ImagegenStartAdmissionProvidersV1;
   /**
    * Optional custody seam for private start inputs (§5.6): playbooks whose start
    * actions carry private request bodies in host-allocated files read them back
@@ -172,16 +205,36 @@ export type WorkerRegistrationV1 =
           readonly result_schema_id: string;
           readonly result_schema_version: 1;
           readonly schema: TSchema;
+          /** Pure host projection, explicitly bound to this phase; absence preserves transport. */
+          readonly result_projection?: import("../phase-result-projection.js").PhaseResultProjectorV1;
+          /** Repair may only reproduce the exact source's independently valid final SUMMARY. */
+          readonly routing_repair_policy?: "preserve_source_summary_v1";
           /**
            * Sole catalog tool narrowing declaration: one fixed strict YAML subset for this phase.
            * Absence preserves YAML equality. The canonical registration digest includes it.
            */
           readonly allowed_tools?: readonly string[];
+          /** Registration-owned exact model identity; directives and observed sessions must match. */
+          readonly required_model?: RequiredModelIdentityV1;
+          /** Closed final-opening authorization policy. It requires an explicit zero-tool phase. */
+          readonly provider_opening_guard?:
+            | "sca_p04_payload_disclosure_v1"
+            | "sca_p05_payload_disclosure_v1"
+            | "sca_p06_payload_disclosure_v1"
+            | "sca_p08_payload_disclosure_v1"
+            | "sca_p10_payload_disclosure_v1"
+            | "sca_p11_payload_disclosure_v1";
           /**
            * Optional immutable, canonical browser destination policy owned only by this phase.
            * Absence preserves ordinary browser behavior; an explicitly empty list denies all.
            */
           readonly browser_network_allowlist?: readonly string[];
+          /** Optional directive state shared by heterogeneous branches with distinct phase keys. */
+          readonly directive_state_id?: string;
+          /** Optional guidance filename state when a fan branch has an internal execution state. */
+          readonly guidance_state_id?: string;
+          /** Require positive Pi model-metadata evidence for image input before every prompt. */
+          readonly requires_image_input?: true;
         }
       >;
     }
@@ -202,6 +255,19 @@ export type WorkerRegistrationV1 =
           readonly validate: (details: Record<string, JsonValue>) => Record<string, JsonValue>;
         }
       >;
+    }
+  | {
+      /** Deterministic host-state/host-operation playbooks. No worker may be dispatched. */
+      readonly kind: "none";
+      readonly workflow_name: string;
+      readonly guidance: SkillContract["guidance"];
+      readonly documentation_sources?: readonly StaticDocumentSource[];
+      readonly prompt_sources?: readonly StaticDocumentSource[];
+      readonly guidance_required: true;
+      readonly result_transport: "host_typed";
+      readonly opening_policy: "none";
+      readonly model_policy: "none";
+      readonly phases: ReadonlyMap<string, never>;
     };
 
 type CatalogWorkerRegistrationV1 = Extract<WorkerRegistrationV1, { kind: "catalog-agent" }>;
@@ -220,17 +286,33 @@ export interface PreparedStartV1 {
 
 export interface StartAdmissionReadOnlyHostV1 {
   readonly artifactReader?: ArtifactReader;
+  /** Exact project-bound verifier, never caller-supplied. */
+  readonly assurance?: {
+    readonly artifacts: ArtifactStore;
+    readonly checkpointer: Checkpointer;
+    readonly project_id: string;
+    readonly project_root: string;
+    readonly consumer: import("../composition-assurance.js").CompositionAssuranceV1["consumer"];
+    /** Exact active Define registration accepted as a reviewed producer, or null when unavailable. */
+    readonly supported_define_registration_sha256: string | null;
+  };
   readonly researchContext?: ResearchContextOwnerV2;
+  /** Private host-owned profile, export, and storage registries; absent is deny-by-default. */
+  readonly imagegen?: ImagegenStartAdmissionProvidersV1;
 }
 
 export interface StartAdmissionArtifactHostV1 extends StartAdmissionReadOnlyHostV1 {
   readonly run_id: string;
   readonly artifactStore?: ArtifactHostStore;
+  /** Host-owned admission clock; caller content cannot select it. */
+  readonly trustedClock?: () => Date;
 }
 
 export interface StartAdmissionV1 {
   readonly schema_id: string;
   readonly schema_version: number;
+  /** Bound to the runtime registration digest; only declared invocation versions work. */
+  readonly invocation_versions?: readonly number[];
   prepare(request: StartRequest, host: StartAdmissionReadOnlyHostV1): PreparedStartV1;
   materialize(
     prepared: PreparedStartV1,
@@ -274,6 +356,8 @@ export interface GenericChildProviderPhaseV1 {
   readonly result_schema_id: string;
   readonly result_schema_version: 1;
   readonly result_schema: TSchema;
+  readonly result_projection?: import("../phase-result-projection.js").PhaseResultProjectionDeclarationV1;
+  readonly routing_repair_policy?: "preserve_source_summary_v1";
   /** Exact fixed worker/model-client authority carrier; never request-selected. */
   readonly tool_authority: GenericChildToolAuthorityV1;
   /** The only registered destination policy. Null means the existing phase has none. */
@@ -372,7 +456,7 @@ export interface GenericChildAuthorityV2 {
 
 export type GenericChildAuthority = GenericChildAuthorityV1 | GenericChildAuthorityV2;
 
-export interface PlaybookRegistrationV1 {
+export interface PlaybookRegistration {
   readonly name: string;
   /** W3: the skill's declared contract. Validated at dispatch. */
   readonly contract: SkillContract;
@@ -380,6 +464,7 @@ export interface PlaybookRegistrationV1 {
   readonly ingress: "skill" | "dedicated_tool";
   /** Required for every skill-ingress registration and forbidden for dedicated tools. */
   readonly start_admission?: StartAdmissionV1;
+  readonly contextual_inputs?: "accepted_terminal_products_v1";
   /** Required for generic skill ingress; generated SKILL.md source of truth. */
   readonly caller_documentation?: CallerDocumentationV1;
   /** Registration-owned finite execution and thinking posture. */
@@ -393,16 +478,70 @@ export interface PlaybookRegistrationV1 {
    * Every ordinary registration in PLAYBOOK_REGISTRY carries the explicit static projection.
    */
   readonly generic_child?: GenericChildAuthority;
+  /** Separate explicit parent-only authority; never projects this workflow as a provider. */
+  readonly information_child?: InformationChildAuthorityV1;
+  /** Explicit asset-only child authority. Absence does not grant imagegen composition. */
+  readonly imagegen_child?: import("../child-workflows/imagegen-policy.js").ImagegenChildPolicyV1;
+  /** Opt-in only; legacy/other registrations retain their exact existing digest. */
+  readonly seal_policy?: SealPolicyV1;
+  /** Optional registered asynchronous host-operation authority. Absence is deny-by-default. */
+  readonly host_operations?: HostOperationAuthorityV1;
+  /** Opt-in exact recurrence measurement; requires both repair-progress playbook methods.
+   * Version changes when the host's semantic fingerprint basis changes. Absence is unchanged. */
+  readonly repair_progress_policy?: "exact_fingerprint_v1";
   /** W7: host-owned predicates named by the closed completion gate. */
   readonly completionReceiptPredicates: ReadonlyMap<string, CompletionReceiptPredicateV1>;
-  construct(options: PlaybookConstructionOptionsV1): PlaybookV1;
+  construct(options: PlaybookConstructionOptions): Playbook;
 }
 
-export type PlaybookRegistryV1 = ReadonlyMap<string, PlaybookRegistrationV1>;
+export interface InformationChildAuthorityV1 {
+  readonly schema_version: 1;
+  readonly authorization_id: "operator.videogen-information-child.v1";
+  readonly parent_states: readonly ["child_call"];
+  readonly parent_policy: Omit<GenericChildParentPolicyV2, "authorization_id" | "max_calls"> & {
+    readonly authorization_id: "operator.videogen-information-child.v1";
+    readonly max_calls: number;
+  };
+}
+export type PlaybookRegistry = ReadonlyMap<string, PlaybookRegistration>;
+
+function validateInformationChildAuthority(registration: PlaybookRegistration): void {
+  const a = registration.information_child;
+  if (a === undefined) return;
+  const p = a.parent_policy;
+  if (
+    registration.name !== "videogen" ||
+    registration.ingress !== "skill" ||
+    registration.generic_child !== undefined ||
+    a.schema_version !== 1 ||
+    a.authorization_id !== "operator.videogen-information-child.v1" ||
+    canonicalJson(a.parent_states) !== canonicalJson(["child_call"]) ||
+    p.schema_version !== 2 ||
+    p.authorization_id !== a.authorization_id ||
+    canonicalJson(p.request_envelope) !==
+      canonicalJson({ schema_id: "penny.child-workflow-request.v1", schema_version: 1 }) ||
+    p.max_nesting_depth !== 1 ||
+    p.max_active_children !== 1 ||
+    p.project_concurrency_limit !== 1 ||
+    !Number.isSafeInteger(p.max_calls) ||
+    p.max_calls < 1 ||
+    p.max_calls > 6 ||
+    p.targets.length < 1 ||
+    p.targets.length > 7 ||
+    new Set(p.targets.map((t) => t.child_name)).size !== p.targets.length
+  )
+    throw new Error("invalid explicit videogen information-child authority");
+  for (const t of p.targets) {
+    const ordinary = GENERIC_CHILD_PARENT_POLICY.targets.find((x) => x.child_name === t.child_name);
+    if (ordinary === undefined || canonicalJson(t) !== canonicalJson(ordinary))
+      throw new Error("information child must bind an unchanged ordinary native provider target");
+  }
+}
 
 export const GENERIC_CHILD_WORKFLOW_NAMES = Object.freeze([
   "assess",
   "decide",
+  "define",
   "diagnose",
   "plan",
   "produce",
@@ -448,7 +587,7 @@ export const GENERIC_CHILD_AGGREGATE_BUDGET_V1 = Object.freeze({
  * authority declaration and never mutates a production registration or its digest.
  */
 export interface ChildWorkflowCandidateRegistrationV1 {
-  readonly registration: PlaybookRegistrationV1;
+  readonly registration: PlaybookRegistration;
   readonly parent_policy: ChildWorkflowPolicyV1;
   readonly provider?: ChildProviderDescriptorV1;
 }
@@ -489,7 +628,10 @@ interface GenericChildNativeRequestValidatorV1 {
    * provider's native request semantics while constructing the child engine's closed start
    * envelope; the generic dispatcher never switches on a provider name.
    */
-  start(value: unknown): { readonly goal: string; readonly constraints: Record<string, JsonValue> };
+  start(
+    value: unknown,
+    policy: import("../child-workflows/contracts.js").ChildWorkflowRequestV1["invocation_policy"]
+  ): { readonly goal: string; readonly constraints: Record<string, JsonValue> };
 }
 
 function expectedChildOutput(
@@ -533,7 +675,7 @@ function catalogAgentYamlMaximum(catalogProjectRoot: string, agent: string): rea
 }
 
 function projectGenericChildProvider(
-  registration: PlaybookRegistrationV1,
+  registration: PlaybookRegistration,
   validator: GenericChildNativeRequestValidatorV1,
   catalogProjectRoot?: string
 ): GenericChildProviderDeclarationV1 {
@@ -562,6 +704,12 @@ function projectGenericChildProvider(
         result_schema_id: phase.result_schema_id,
         result_schema_version: phase.result_schema_version,
         result_schema: phase.schema,
+        ...(phase.result_projection === undefined
+          ? {}
+          : { result_projection: phase.result_projection.declaration }),
+        ...(phase.routing_repair_policy === undefined
+          ? {}
+          : { routing_repair_policy: phase.routing_repair_policy }),
         tool_authority: Object.freeze(
           phase.allowed_tools === undefined
             ? {
@@ -813,6 +961,7 @@ const RESEARCH_WORKER_PHASES: CatalogWorkerRegistrationV1["phases"] = new Map([
       result_schema_id: "penny.research.critiquing-plan-summary",
       result_schema_version: 1,
       schema: researchSummarySchema("critiquing_plan"),
+      routing_repair_policy: "preserve_source_summary_v1",
     },
   ],
   [
@@ -840,6 +989,7 @@ const RESEARCH_WORKER_PHASES: CatalogWorkerRegistrationV1["phases"] = new Map([
       result_schema_id: "penny.research.critiquing-report-summary",
       result_schema_version: 1,
       schema: researchSummarySchema("critiquing_report"),
+      routing_repair_policy: "preserve_source_summary_v1",
     },
   ],
   [
@@ -849,15 +999,19 @@ const RESEARCH_WORKER_PHASES: CatalogWorkerRegistrationV1["phases"] = new Map([
       result_schema_id: "penny.research.validating-summary",
       result_schema_version: 1,
       schema: researchSummarySchema("validating"),
+      routing_repair_policy: "preserve_source_summary_v1",
     },
   ],
 ]);
 
-const RESEARCH_REGISTRATION: PlaybookRegistrationV1 = {
+const RESEARCH_REGISTRATION: PlaybookRegistration = {
   name: DEFAULT_PLAYBOOK_NAME,
   contract: RESEARCH_SKILL_CONTRACT,
   ingress: "skill",
   start_admission: RESEARCH_START_ADMISSION,
+  seal_policy: RESEARCH_SEAL_POLICY,
+  repair_progress_policy: "exact_fingerprint_v1",
+  host_states: ["sealing_core", "rendering"],
   caller_documentation: {
     constraints_schema: ResearchCallerConstraintsV1Schema,
     example: {
@@ -872,13 +1026,8 @@ const RESEARCH_REGISTRATION: PlaybookRegistrationV1 = {
   },
   liveness: {
     resolver_id: "researchLivenessPolicy",
-    resolve: (context, boundPolicy) => {
+    resolve: (context) => {
       const selected = context.research.mode.length === 0 ? undefined : context.research.mode;
-      // A durable V1 Research bootstrap upgrades only to a V1 selected preset. New
-      // bootstraps upgrade to V2, while non-bootstrap policies are retained by the controller.
-      if (boundPolicy?.schema_version === 1) {
-        return selected === undefined ? undefined : legacyResearchLivenessPolicy(selected);
-      }
       return selected === undefined
         ? researchBootstrapLivenessPolicy()
         : researchLivenessPolicy(selected);
@@ -902,7 +1051,8 @@ const RESEARCH_REGISTRATION: PlaybookRegistrationV1 = {
       options.researchContext,
       options.artifactStore,
       options.checkpointer,
-      options.researchHostFault
+      options.researchHostFault,
+      RESEARCH_SEAL_POLICY
     ),
 };
 
@@ -928,7 +1078,7 @@ const KNOWLEDGE_BASE_WORKER_PHASES: HostPrivateWorkerRegistrationV1["phases"] = 
   KB_AGENT_PHASES.map((phase) => [phase, knowledgeBasePhaseContract(phase)])
 );
 
-const KNOWLEDGE_BASE_REGISTRATION: PlaybookRegistrationV1 = {
+const KNOWLEDGE_BASE_REGISTRATION: PlaybookRegistration = {
   name: "knowledge-base",
   contract: KNOWLEDGE_BASE_SKILL_CONTRACT,
   ingress: "dedicated_tool",
@@ -1005,13 +1155,46 @@ const GENERIC_CHILD_NATIVE_REQUEST_VALIDATORS: ReadonlyMap<
     },
   ],
   [
+    "define",
+    {
+      validator_id: "penny.definition-request.v1.invocation-v2.validator",
+      validate: validateDefinitionRequest,
+      start: (value, policy) => {
+        const request = validateDefinitionRequest(value);
+        const native = definitionRequestConstraints(request);
+        return {
+          goal: request.goal,
+          constraints:
+            policy === undefined
+              ? native
+              : {
+                  schema_version: 2,
+                  request: native,
+                  specification_assurance: policy.specification_assurance,
+                },
+        };
+      },
+    },
+  ],
+  [
     "plan",
     {
-      validator_id: "penny.plan-request.v1.validator",
+      validator_id: "penny.plan-request.v1.invocation-v2.validator",
       validate: validatePlanRequest,
-      start: (value) => {
+      start: (value, policy) => {
         const request = validatePlanRequest(value);
-        return { goal: request.goal, constraints: planRequestConstraints(request) };
+        const native = planRequestConstraints(request);
+        return {
+          goal: request.goal,
+          constraints:
+            policy === undefined
+              ? native
+              : {
+                  schema_version: 2,
+                  request: native,
+                  specification_assurance: policy.specification_assurance,
+                },
+        };
       },
     },
   ],
@@ -1055,6 +1238,7 @@ const ORDINARY_BASE_REGISTRATIONS = [
   ASSESS_PLAYBOOK_REGISTRATION,
   DECIDE_PLAYBOOK_REGISTRATION,
   DIAGNOSE_PLAYBOOK_REGISTRATION,
+  DEFINE_PLAYBOOK_REGISTRATION,
   PLAN_PLAYBOOK_REGISTRATION,
   PRODUCE_PLAYBOOK_REGISTRATION,
   RESEARCH_REGISTRATION,
@@ -1080,9 +1264,31 @@ const GENERIC_CHILD_PROVIDERS = ORDINARY_BASE_REGISTRATIONS.map((registration) =
 );
 const LEGACY_GENERIC_CHILD_PARENT_POLICY =
   buildLegacyGenericChildParentPolicy(GENERIC_CHILD_PROVIDERS);
-const GENERIC_CHILD_PARENT_POLICY = buildGenericChildParentPolicy(GENERIC_CHILD_PROVIDERS);
+export const GENERIC_CHILD_PARENT_POLICY = buildGenericChildParentPolicy(GENERIC_CHILD_PROVIDERS);
 
-function withGenericChildAuthority(registration: PlaybookRegistrationV1): PlaybookRegistrationV1 {
+function ordinaryFaultAdapter(
+  skill: GenericChildWorkflowName,
+  hook: OrdinaryHostFaultV1 | undefined
+): ((point: string) => void) | undefined {
+  if (hook === undefined) return undefined;
+  return (point) => {
+    const separator = point.indexOf(":");
+    if (separator <= 0 || separator === point.length - 1) {
+      throw new Error("registered host fault point has no phase or name");
+    }
+    hook({
+      skill,
+      phase: point.slice(0, separator),
+      point,
+      boundary:
+        point.endsWith(":completion-admission") || point === "rendering:final-checkpoint-admission"
+          ? "after_checkpoint_commit"
+          : "before_checkpoint_commit",
+    });
+  };
+}
+
+function withGenericChildAuthority(registration: PlaybookRegistration): PlaybookRegistration {
   const provider = GENERIC_CHILD_PROVIDERS.find(
     (candidate) => candidate.provider_name === registration.name
   );
@@ -1091,6 +1297,81 @@ function withGenericChildAuthority(registration: PlaybookRegistrationV1): Playbo
   }
   return Object.freeze({
     ...registration,
+    contextual_inputs: "accepted_terminal_products_v1",
+    // Constructors in the skill source retain their legacy optional callback positions.
+    // This registry adapter wires the ordinary host-only seam without changing skill source
+    // or the serialized registration/contract digest.
+    construct: (options: PlaybookConstructionOptions): Playbook => {
+      if (options.hostFault !== undefined && options.researchHostFault !== undefined) {
+        throw new Error("ambiguous host fault hooks: choose hostFault or researchHostFault");
+      }
+      if (registration.name === "research") {
+        const hook =
+          options.researchHostFault ?? ordinaryFaultAdapter("research", options.hostFault);
+        return registration.construct({
+          ...options,
+          ...(hook === undefined ? {} : { researchHostFault: hook }),
+        });
+      }
+      if (
+        registration.name !== "assess" &&
+        registration.name !== "decide" &&
+        registration.name !== "define" &&
+        registration.name !== "diagnose" &&
+        registration.name !== "plan" &&
+        registration.name !== "produce"
+      ) {
+        throw new Error("ordinary host fault adapter requires an ordinary registration");
+      }
+      const hook = ordinaryFaultAdapter(registration.name, options.hostFault);
+      switch (registration.name) {
+        case "assess":
+          return new AssessPlaybook(
+            options.artifactRevisions,
+            options.artifactStore,
+            options.checkpointer,
+            hook,
+            options.effectEvidenceProvider
+          );
+        case "decide":
+          return new DecidePlaybook(
+            options.artifactRevisions,
+            options.artifactStore,
+            options.checkpointer,
+            hook
+          );
+        case "define":
+          return new DefinePlaybook(
+            options.artifactRevisions,
+            options.artifactStore,
+            options.checkpointer,
+            hook
+          );
+        case "diagnose":
+          return new DiagnosePlaybook(
+            options.artifactRevisions,
+            options.artifactStore,
+            options.checkpointer,
+            hook
+          );
+        case "plan":
+          return new PlanPlaybook(
+            options.artifactRevisions,
+            options.artifactStore,
+            options.checkpointer,
+            hook
+          );
+        case "produce":
+          return new ProducePlaybook(
+            options.artifactRevisions,
+            options.artifactStore,
+            options.checkpointer,
+            hook,
+            options.effectEvidenceProvider,
+            options.verifyExecutionReceipt
+          );
+      }
+    },
     generic_child: Object.freeze({
       schema_version: 2,
       parent_policy: GENERIC_CHILD_PARENT_POLICY,
@@ -1099,7 +1380,7 @@ function withGenericChildAuthority(registration: PlaybookRegistrationV1): Playbo
   });
 }
 
-function registrationPromptSourcePaths(registration: PlaybookRegistrationV1): readonly string[] {
+function registrationPromptSourcePaths(registration: PlaybookRegistration): readonly string[] {
   const rolePaths = [
     ...new Set(
       [...registration.worker.phases.values()].map((phase) => `.pi/agents/${phase.agent}.md`)
@@ -1110,7 +1391,11 @@ function registrationPromptSourcePaths(registration: PlaybookRegistrationV1): re
     .map(([stateId, phase]) =>
       registration.worker.guidance.resolution === "per_agent"
         ? `${registration.worker.guidance.skill_root}/${phase.agent}.md`
-        : `${registration.worker.guidance.skill_root}/${phase.agent}-${stateId}.md`
+        : `${registration.worker.guidance.skill_root}/${phase.agent}-${
+            "guidance_state_id" in phase && phase.guidance_state_id !== undefined
+              ? phase.guidance_state_id
+              : stateId
+          }.md`
     );
   return [...new Set([".pi/SYSTEM.md", "AGENTS.md", ...rolePaths, ...guidancePaths])];
 }
@@ -1130,11 +1415,20 @@ function hasCompletePromptCatalog(projectRoot: string): boolean {
  * catalog is present, the active registration carries its exact lists in the runtime digest.
  */
 export function bindGenericChildYamlAuthority(
-  registration: PlaybookRegistrationV1,
+  registration: PlaybookRegistration,
   catalogProjectRoot: string
-): PlaybookRegistrationV1 {
+): PlaybookRegistration {
   if (!path.isAbsolute(catalogProjectRoot)) {
     throw new Error("generic child catalog project root must be absolute");
+  }
+  // Preserve the policy for alternate constructors using the same native admission owner.
+  if (
+    ORDINARY_BASE_REGISTRATIONS.some(
+      (base) =>
+        base.name === registration.name && base.start_admission === registration.start_admission
+    )
+  ) {
+    registration = { ...registration, contextual_inputs: "accepted_terminal_products_v1" };
   }
   const declarations = registration.contract.guidance.documentation;
   let boundRegistration = registration;
@@ -1220,7 +1514,17 @@ const ACTIVE_ORDINARY_REGISTRATIONS = new Map(
   })
 );
 
-function activeOrdinaryRegistration(name: GenericChildWorkflowName): PlaybookRegistrationV1 {
+/** Preserve an explicitly supplied base registration's digest while wiring its normal host seam. */
+export function withOrdinaryFaultConstructor(
+  registration: PlaybookRegistration
+): PlaybookRegistration {
+  if (!ORDINARY_BASE_REGISTRATIONS.some((base) => base === registration)) return registration;
+  const active = ACTIVE_ORDINARY_REGISTRATIONS.get(registration.name);
+  if (active === undefined) throw new Error("ordinary host fault constructor is unavailable");
+  return { ...registration, construct: active.construct };
+}
+
+function activeOrdinaryRegistration(name: GenericChildWorkflowName): PlaybookRegistration {
   const registration = ACTIVE_ORDINARY_REGISTRATIONS.get(name);
   if (registration === undefined) {
     throw new Error(`active ordinary registration '${name}' is absent`);
@@ -1229,15 +1533,20 @@ function activeOrdinaryRegistration(name: GenericChildWorkflowName): PlaybookReg
 }
 
 /** Every executable registered playbook. Model visibility alone still grants no authority. */
-export const PLAYBOOK_REGISTRY: PlaybookRegistryV1 = new Map([
+export const PLAYBOOK_REGISTRY: PlaybookRegistry = new Map([
   ["assess", activeOrdinaryRegistration("assess")],
   ["decide", activeOrdinaryRegistration("decide")],
+  ["define", activeOrdinaryRegistration("define")],
   ["diagnose", activeOrdinaryRegistration("diagnose")],
+  // Hidden, model-invisible, explicitly invocable. It carries no generic-child authority, and
+  // every new start still passes the host-owned activation gate before any effect.
+  [IMAGEGEN_PLAYBOOK_REGISTRATION.name, IMAGEGEN_PLAYBOOK_REGISTRATION],
   [KNOWLEDGE_BASE_REGISTRATION.name, KNOWLEDGE_BASE_REGISTRATION],
   ["plan", activeOrdinaryRegistration("plan")],
   ["produce", activeOrdinaryRegistration("produce")],
   [DEFAULT_PLAYBOOK_NAME, activeOrdinaryRegistration(DEFAULT_PLAYBOOK_NAME)],
   [SCA_PLAYBOOK_REGISTRATION.name, SCA_PLAYBOOK_REGISTRATION],
+  [VIDEOGEN_PLAYBOOK_REGISTRATION.name, VIDEOGEN_PLAYBOOK_REGISTRATION],
 ]);
 
 export function skillContractSha256(contractValue: SkillContract): string {
@@ -1245,95 +1554,16 @@ export function skillContractSha256(contractValue: SkillContract): string {
   return sha256(canonicalJson(contract));
 }
 
-/**
- * Canonical runtime registration digest. Catalog phase `allowed_tools` is serialized as either
- * its exact list or null. The optional browser policy is serialized only when registered. The full
- * static generic-child parent/provider declaration is included, so any authority drift changes the
- * binding while declaration-absent synthetic/dedicated registrations carry an explicit null.
- */
-export function runtimeRegistrationSha256(registration: PlaybookRegistrationV1): string {
-  const worker =
-    registration.worker.kind === "catalog-agent"
-      ? {
-          kind: registration.worker.kind,
-          workflow_name: registration.worker.workflow_name,
-          guidance: registration.worker.guidance,
-          ...(registration.worker.documentation_sources === undefined
-            ? {}
-            : { documentation_sources: registration.worker.documentation_sources }),
-          ...(registration.worker.prompt_sources === undefined
-            ? {}
-            : { prompt_sources: registration.worker.prompt_sources }),
-          guidance_required: registration.worker.guidance_required,
-          result_transport: registration.worker.result_transport,
-          opening_policy: registration.worker.opening_policy,
-          model_policy: registration.worker.model_policy,
-          phases: [...registration.worker.phases.entries()]
-            .sort(([left], [right]) => left.localeCompare(right))
-            .map(([state_id, phase]) => ({
-              state_id,
-              agent: phase.agent,
-              result_schema_id: phase.result_schema_id,
-              result_schema_version: phase.result_schema_version,
-              schema: phase.schema,
-              allowed_tools: phase.allowed_tools ?? null,
-              ...(phase.browser_network_allowlist === undefined
-                ? {}
-                : { browser_network_allowlist: phase.browser_network_allowlist }),
-            })),
-        }
-      : {
-          kind: registration.worker.kind,
-          workflow_name: registration.worker.workflow_name,
-          guidance: registration.worker.guidance,
-          ...(registration.worker.documentation_sources === undefined
-            ? {}
-            : { documentation_sources: registration.worker.documentation_sources }),
-          ...(registration.worker.prompt_sources === undefined
-            ? {}
-            : { prompt_sources: registration.worker.prompt_sources }),
-          guidance_required: registration.worker.guidance_required,
-          result_transport: registration.worker.result_transport,
-          opening_policy: registration.worker.opening_policy,
-          model_policy: registration.worker.model_policy,
-          phases: [...registration.worker.phases.entries()]
-            .sort(([left], [right]) => left.localeCompare(right))
-            .map(([state_id, phase]) => ({ state_id, agent: phase.agent })),
-        };
-  return sha256(
-    canonicalJson({
-      name: registration.name,
-      contract: registration.contract,
-      ingress: registration.ingress,
-      start_admission:
-        registration.start_admission === undefined
-          ? null
-          : {
-              schema_id: registration.start_admission.schema_id,
-              schema_version: registration.start_admission.schema_version,
-            },
-      liveness: {
-        resolver_id: registration.liveness.resolver_id,
-        thinking_policy: registration.liveness.thinking_policy,
-      },
-      worker,
-      host_states: [...(registration.host_states ?? [])],
-      generic_child: registration.generic_child ?? null,
-      completion_receipt_predicate_ids: [...registration.completionReceiptPredicates.keys()].sort(),
-    })
-  );
-}
+export { runtimeRegistrationSha256 } from "./runtime-registration-digest.js";
 
 /** Registered names, sorted, for diagnostics and tests. */
-export function registeredPlaybookNames(
-  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY
-): string[] {
+export function registeredPlaybookNames(registry: PlaybookRegistry = PLAYBOOK_REGISTRY): string[] {
   return [...registry.keys()].sort();
 }
 
 export function isRegisteredPlaybook(
   name: string,
-  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY
+  registry: PlaybookRegistry = PLAYBOOK_REGISTRY
 ): boolean {
   return registry.has(name);
 }
@@ -1384,7 +1614,7 @@ function validateGenericChildParentPolicy(
     new Set(names).size !== names.length
   ) {
     throw new Error(
-      `generic child parent policy for '${registrationName}' must target exactly the six ordinary workflows`
+      `generic child parent policy for '${registrationName}' must target exactly the seven ordinary workflows`
     );
   }
   for (const target of policy.targets) {
@@ -1424,13 +1654,13 @@ function validateGenericChildParentPolicy(
   const expectedPolicy = legacy ? LEGACY_GENERIC_CHILD_PARENT_POLICY : GENERIC_CHILD_PARENT_POLICY;
   if (canonicalJson(policy) !== canonicalJson(expectedPolicy)) {
     throw new Error(
-      `generic child parent policy for '${registrationName}' diverges from the fixed all-six projection`
+      `generic child parent policy for '${registrationName}' diverges from the fixed all-seven projection`
     );
   }
 }
 
 function validateGenericChildAuthority(
-  registration: PlaybookRegistrationV1,
+  registration: PlaybookRegistration,
   catalogProjectRoot?: string
 ): void {
   const authority = registration.generic_child;
@@ -1490,15 +1720,15 @@ function targetMatchesProvider(
 export function isGenericChildWorkflowEligible(
   parentName: string,
   childName: string,
-  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY,
+  registry: PlaybookRegistry = PLAYBOOK_REGISTRY,
   catalogProjectRoot?: string
 ): boolean {
   const parent = registry.get(parentName);
   const child = registry.get(childName);
   if (
-    parent?.generic_child === undefined ||
+    (parent?.generic_child === undefined && parent?.information_child === undefined) ||
     child?.generic_child === undefined ||
-    !isGenericChildWorkflowName(parentName) ||
+    (!isGenericChildWorkflowName(parentName) && parentName !== "videogen") ||
     !isGenericChildWorkflowName(childName)
   ) {
     return false;
@@ -1506,9 +1736,9 @@ export function isGenericChildWorkflowEligible(
   try {
     validateRegistrationContract(parent, catalogProjectRoot);
     validateRegistrationContract(child, catalogProjectRoot);
-    const target = parent.generic_child.parent_policy.targets.find(
-      (candidate) => candidate.child_name === childName
-    );
+    const target = (
+      parent.generic_child?.parent_policy ?? parent.information_child?.parent_policy
+    )?.targets.find((candidate) => candidate.child_name === childName);
     return target !== undefined && targetMatchesProvider(target, child.generic_child.provider);
   } catch {
     return false;
@@ -1519,7 +1749,7 @@ export function isGenericChildWorkflowEligible(
 export function validateGenericChildProviderRequest(
   parentName: string,
   value: unknown,
-  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY,
+  registry: PlaybookRegistry = PLAYBOOK_REGISTRY,
   catalogProjectRoot?: string
 ): JsonValue {
   const request = validateChildWorkflowRequest(value);
@@ -1568,7 +1798,7 @@ export function validateGenericChildProviderRequest(
 export function genericChildStartParts(
   parentName: string,
   value: unknown,
-  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY,
+  registry: PlaybookRegistry = PLAYBOOK_REGISTRY,
   catalogProjectRoot?: string
 ): {
   readonly child_name: string;
@@ -1582,8 +1812,15 @@ export function genericChildStartParts(
     registry,
     catalogProjectRoot
   );
+  if (
+    request.invocation_policy !== undefined &&
+    request.child_name !== "define" &&
+    request.child_name !== "plan"
+  ) {
+    throw new Error("generic child invocation policy is supported only by Define/Plan");
+  }
   const adapter = genericChildValidator(request.child_name);
-  const start = adapter.start(nativeRequest);
+  const start = adapter.start(nativeRequest, request.invocation_policy);
   if (canonicalJson(adapter.validate(nativeRequest)) !== canonicalJson(nativeRequest)) {
     throw new Error(
       `generic child provider '${request.child_name}' start adapter changed native bytes`
@@ -1592,9 +1829,9 @@ export function genericChildStartParts(
   return { child_name: request.child_name, ...start };
 }
 
-/** Exact all-six production projection check; Gate 2/live qualification remains intentionally absent. */
+/** Exact all-seven production projection check; Gate 2/live qualification remains intentionally absent. */
 export function assertGenericChildAuthorityProjection(
-  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY,
+  registry: PlaybookRegistry = PLAYBOOK_REGISTRY,
   catalogProjectRoot?: string
 ): void {
   const knowledgeBase = registry.get("knowledge-base");
@@ -1629,7 +1866,7 @@ export function assertGenericChildAuthorityProjection(
       canonicalJson(authority.parent_policy) !== canonicalJson(expectedPolicy)
     ) {
       throw new Error(
-        `generic child parent policy for '${registration.name}' diverges from the all-six provider projection`
+        `generic child parent policy for '${registration.name}' diverges from the all-seven provider projection`
       );
     }
     for (const childName of GENERIC_CHILD_WORKFLOW_NAMES) {
@@ -1653,8 +1890,8 @@ export function assertGenericChildAuthorityProjection(
  */
 export function resolvePlaybook(
   name: string,
-  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY
-): PlaybookRegistrationV1 | undefined {
+  registry: PlaybookRegistry = PLAYBOOK_REGISTRY
+): PlaybookRegistration | undefined {
   const registration = registry.get(name);
   if (registry === PLAYBOOK_REGISTRY) {
     assertGenericChildAuthorityProjection(registry);
@@ -1672,9 +1909,22 @@ export function resolvePlaybook(
  * rather than a warning.
  */
 export function validateRegistrationContract(
-  registration: PlaybookRegistrationV1,
+  registration: PlaybookRegistration,
   catalogProjectRoot?: string
 ): SkillContract {
+  if (
+    registration.contextual_inputs !== undefined &&
+    (registration.contextual_inputs !== "accepted_terminal_products_v1" ||
+      registration.ingress !== "skill")
+  )
+    throw new Error("invalid registration contextual-input policy");
+  if (
+    registration.repair_progress_policy !== undefined &&
+    registration.repair_progress_policy !== "exact_fingerprint_v1"
+  )
+    throw new Error("invalid repair progress policy");
+  if (registration.imagegen_child !== undefined)
+    validateImagegenChildPolicy(registration.imagegen_child);
   const contract = validateContract(
     SkillContractSchema,
     registration.contract,
@@ -1846,7 +2096,22 @@ export function validateRegistrationContract(
       }
     }
   }
-  if (worker.phases.size === 0) {
+  if (worker.kind === "none") {
+    if (worker.phases.size !== 0) {
+      throw new Error(
+        `worker registration '${registration.name}' with kind 'none' must declare zero phases`
+      );
+    }
+    if (
+      worker.result_transport !== "host_typed" ||
+      worker.opening_policy !== "none" ||
+      worker.model_policy !== "none"
+    ) {
+      throw new Error(
+        `worker registration '${registration.name}' has invalid deterministic worker policy`
+      );
+    }
+  } else if (worker.phases.size === 0) {
     throw new Error(`worker registration '${registration.name}' declares no phases`);
   }
   if (worker.kind === "catalog-agent") {
@@ -1859,18 +2124,66 @@ export function validateRegistrationContract(
           `catalog worker phase '${registration.name}:${state}' has an invalid result schema identity`
         );
       }
-      // Structural validation belongs to the registration. PiAgentClient revalidates strict
+      if (
+        phase.routing_repair_policy !== undefined &&
+        phase.routing_repair_policy !== "preserve_source_summary_v1"
+      )
+        throw new Error("invalid catalog routing repair policy");
+      if (phase.result_projection !== undefined) {
+        validatePhaseResultProjector({
+          projector: phase.result_projection,
+          registrationName: registration.name,
+          stateId: state,
+          agent: phase.agent,
+          resultSchemaId: phase.result_schema_id,
+          resultSchemaVersion: phase.result_schema_version,
+        });
+        if (phase.provider_opening_guard !== undefined || phase.directive_state_id !== undefined) {
+          throw new Error("phase result projection cannot override guarded or aliased transport");
+        }
+      }
+      // Structural validation belongs to the registration. PiAgentClient revalidates exact
       // YAML membership before session creation; provider load/activation is checked before prompt.
       if (phase.allowed_tools !== undefined) {
         if (
-          phase.allowed_tools.length === 0 ||
           phase.allowed_tools.some((tool) => !/^[a-z][a-z0-9_]*$/u.test(tool)) ||
-          new Set(phase.allowed_tools).size !== phase.allowed_tools.length
+          new Set(phase.allowed_tools).size !== phase.allowed_tools.length ||
+          (phase.allowed_tools.length === 0 && phase.provider_opening_guard === undefined)
         ) {
           throw new Error(
             `catalog worker phase '${registration.name}:${state}' has an invalid exact tool subset`
           );
         }
+      }
+      const openingGuardMatchesRegistration =
+        phase.provider_opening_guard === undefined ||
+        (phase.provider_opening_guard === "sca_p04_payload_disclosure_v1" &&
+          registration.name === "sca-p04-candidate") ||
+        (phase.provider_opening_guard === "sca_p05_payload_disclosure_v1" &&
+          registration.name === "sca-p05-candidate") ||
+        (phase.provider_opening_guard === "sca_p06_payload_disclosure_v1" &&
+          registration.name === "sca-p06-candidate") ||
+        (phase.provider_opening_guard === "sca_p08_payload_disclosure_v1" &&
+          registration.name === "sca-p08-candidate") ||
+        (phase.provider_opening_guard === "sca_p10_payload_disclosure_v1" &&
+          registration.name === "sca-p10-candidate") ||
+        (phase.provider_opening_guard === "sca_p11_payload_disclosure_v1" &&
+          registration.name === "sca-p11-candidate");
+      if (
+        phase.provider_opening_guard !== undefined &&
+        (!openingGuardMatchesRegistration ||
+          phase.allowed_tools?.length !== 0 ||
+          phase.required_model === undefined)
+      ) {
+        throw new Error(
+          `catalog worker phase '${registration.name}:${state}' has an invalid provider opening guard`
+        );
+      }
+      if (phase.required_model !== undefined) {
+        validateRequiredModelIdentity(
+          phase.required_model,
+          `catalog worker phase '${registration.name}:${state}' required model`
+        );
       }
       if (phase.browser_network_allowlist !== undefined) {
         validateRegisteredBrowserNetworkAllowlist(
@@ -1879,17 +2192,36 @@ export function validateRegistrationContract(
         );
       }
     }
-  } else {
+  } else if (worker.kind === "host-private") {
     if (registration.ingress !== "dedicated_tool") {
       throw new Error("host-private worker registrations require dedicated_tool ingress");
     }
     for (const [state, phase] of worker.phases) {
+      if ("result_projection" in phase || "routing_repair_policy" in phase) {
+        throw new Error("host-private phases cannot opt into catalog result policies");
+      }
       if (state.trim().length === 0 || phase.agent.trim().length === 0) {
         throw new Error(`worker registration '${registration.name}' has an empty state or agent`);
       }
     }
   }
   validateGenericChildAuthority(registration, catalogProjectRoot);
+  validateInformationChildAuthority(registration);
+  if (registration.seal_policy !== undefined) {
+    const policy = validateSealPolicy(registration.seal_policy);
+    if (policy.skill !== registration.name) {
+      throw new Error("registered seal policy skill does not match registration");
+    }
+    if (
+      !registration.host_states?.includes(policy.seal_phase) ||
+      !registration.worker.phases.has(policy.draft_phase)
+    ) {
+      throw new Error("registered seal policy phase is not part of the registration");
+    }
+  }
+  if (registration.host_operations !== undefined) {
+    validateHostOperationAuthority(registration.host_operations);
+  }
   const hostStates = registration.host_states ?? [];
   if (
     hostStates.some((state) => state.trim().length === 0) ||
@@ -1916,7 +2248,7 @@ export function validateRegistrationContract(
     if (route.feedback_kind === "malformed_result") {
       throw new Error("malformed_result remains engine-owned by P1.2 routing repair");
     }
-    if (!worker.phases.has(route.origin_state)) {
+    if (!worker.phases.has(route.origin_state) && !hostStates.includes(route.origin_state)) {
       throw new Error(
         `repair route origin '${route.origin_state}' is unreachable in '${registration.name}'`
       );
@@ -1941,12 +2273,15 @@ export function validateRegistrationContract(
 export const AUTHORIZED_PLAYBOOK_NAMES: readonly string[] = [
   "assess",
   "decide",
+  "define",
   "diagnose",
+  "imagegen",
   "knowledge-base",
   "plan",
   "produce",
   DEFAULT_PLAYBOOK_NAME,
   "sca",
+  "videogen",
 ];
 
 /**
@@ -1955,9 +2290,7 @@ export const AUTHORIZED_PLAYBOOK_NAMES: readonly string[] = [
  * unauthorized name may ship (a registration is an authority grant, so an
  * accidental one is a hard error rather than a warning).
  */
-export function assertExpectedRegistrations(
-  registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY
-): void {
+export function assertExpectedRegistrations(registry: PlaybookRegistry = PLAYBOOK_REGISTRY): void {
   const names = registeredPlaybookNames(registry);
   if (!names.includes(DEFAULT_PLAYBOOK_NAME)) {
     throw new Error(`research playbook is missing from the registry; found [${names.join(", ")}]`);

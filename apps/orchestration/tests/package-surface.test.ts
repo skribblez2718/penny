@@ -13,8 +13,8 @@ import {
   parseBunPackDryRun,
   parseGateDecisionReceiptJcs,
   validatePackageSurfaceDecision,
-} from "../src/kb/gate-decisions.js";
-import { canonicalJson, sha256Hex, type PackageSurfaceDecisionV1 } from "../src/kb/contracts.js";
+} from "../dist/kb/gate-decisions.js";
+import { canonicalJson, sha256Hex, type PackageSurfaceDecisionV1 } from "../dist/kb/contracts.js";
 
 const PACKAGE_INTERNAL_P2_MODULES = [
   "./research-context.js",
@@ -65,11 +65,24 @@ function reviewedPackageDecision(): PackageSurfaceDecisionV1 {
 }
 
 describe("§5.13 package-surface contract/oracle", () => {
-  it("keeps approved packed P2 modules package-internal", () => {
+  it("keeps P2 modules out of the root barrel; only shared primitives have a compiled subpath", () => {
     const reexports = sourceIndexReexports();
     for (const moduleSpecifier of PACKAGE_INTERNAL_P2_MODULES) {
       expect(reexports).not.toContain(moduleSpecifier);
     }
+    const manifest: unknown = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8")
+    );
+    if (typeof manifest !== "object" || manifest === null || !("exports" in manifest))
+      throw new Error("Missing package exports");
+    const exports = manifest.exports;
+    if (typeof exports !== "object" || exports === null) throw new Error("Invalid package exports");
+    expect(exports).toHaveProperty("./skill-contracts/common", {
+      types: "./dist/skill-contracts/common.d.ts",
+      default: "./dist/skill-contracts/common.js",
+    });
+    expect(Object.keys(exports)).not.toContain("./research-context");
+    expect(Object.keys(exports)).not.toContain("./skill-contracts/research");
   });
 
   it("accepts exact closed JCS and exact live fields/files", () => {

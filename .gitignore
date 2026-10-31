@@ -2,9 +2,9 @@
 # Penny Project .gitignore
 # ===========================================
 
-# Penny rule: NEVER write temporary files into the project tree.
-# Runtime artifacts (downloads, dumps, caches, scratch state) belong in
-# /tmp/ or user-configured locations outside the project.
+# Incidental scratch files belong in /tmp/ or user-configured locations outside
+# the project. Build publication may use explicitly ignored sibling directories
+# to keep staging, rollback and live output on the same filesystem.
 
 # Skill extension checkpoint dir (runtime resume state)
 .pi/skill-checkpoints/
@@ -27,6 +27,8 @@
 node_modules/
 dist/
 build/
+# Orchestration's build/ and out/ are covered above; never track its build lock.
+/apps/orchestration/.build-lock/
 out/
 *.tsbuildinfo
 

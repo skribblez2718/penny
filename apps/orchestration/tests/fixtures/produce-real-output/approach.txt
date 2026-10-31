@@ -1,0 +1,2 @@
+ARTIFACT_APPROACH:{"approaches":[{"approach_id":"approach_fixed_json","description":"Evidence-backed: produce the sole compact JSON representation fixed by the three required keys, string values, and structural-equality acceptance criterion; no presentation dimension remains to vary.","title":"Fixed JSON structure","tradeoffs":["Permits no contextual fields, formatting alternatives, or explanatory content because any addition or deviation fails the stated structure."]}],"confidence":"CERTAIN","schema_version":1}
+SUMMARY:{"complete":true,"confidence":"CERTAIN"}

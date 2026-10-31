@@ -94,7 +94,9 @@ update, but human navigation remains prose-based.
 
 ## Paths and current-state documentation
 
-Paths live in the index chain, never in the always-on Cognitive Frame. Documentation
+Documentation/navigation paths live in the index chain, not the always-on Cognitive
+Frame. Operational literals required by universal policy, such as `/tmp/` for scratch
+files, are allowed; keep operator-specific paths out of tracked guidance. Documentation
 describes current behavior rather than retaining deprecation ledgers; update or remove
 superseded paths in the same change.
 

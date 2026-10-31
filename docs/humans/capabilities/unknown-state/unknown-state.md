@@ -26,7 +26,7 @@ When the run pauses, Penny shows you:
 
 ## What happens after you answer
 
-Your answer is handed back to the **same run** (matched by its run id). The engine records what you said, resumes at the working step the skill designates for clarifications, and injects your guidance into that step's next attempt. So your words actually steer the retry — they aren't just logged.
+Your answer is handed back to the **same run** only when run, gate, and challenge match the pending `await_user` boundary. The engine records what you said, resumes at the working step the skill designates for clarifications, and injects your guidance into that step's next attempt. So your words actually steer the retry — they aren't just logged.
 
 Each skill controls where a clarified run resumes. In the current research workflow, the answer returns to the producer that can act on it — planning, evidence gathering, synthesis, or validation — with your guidance in hand.
 
@@ -34,9 +34,9 @@ Each skill controls where a clarified run resumes. In the current research workf
 
 This escalation path is only for **UNCERTAIN / stalled** situations. Some skills also have **planned gates** — deliberate approval points (e.g. "approve this plan?") with specific options. Those are a separate, expected checkpoint, not a sign that Penny got stuck.
 
-## Nothing to configure
+## Gate authority
 
-Escalation is automatic. Every step's confidence is checked, and loops are watched for repetition and stalls, without any setup on your part.
+Escalation follows each playbook's registered conditions; it does not turn an answer into approval for unrelated work. KB ingest/save decisions use the authenticated host content-review service, not generic `respond`. Promotion has a separate signed approval service; public KB resume cannot carry a decision.
 
 ## Under the hood (durability)
 

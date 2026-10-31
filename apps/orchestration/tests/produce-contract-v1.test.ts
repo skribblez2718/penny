@@ -24,7 +24,7 @@ import {
   type ProduceArtifactKind,
   type ProduceRequestV1,
   type ProducedArtifactDraftV1,
-} from "../src/index.js";
+} from "../dist/index.js";
 
 const RUN_ID = "run-produce-contract";
 
@@ -184,15 +184,15 @@ describe("closed ProduceRequestV1", () => {
 });
 
 describe("ArtifactApproachV1, ArtifactApproachDecisionV1, and ProducedArtifactDraftV1", () => {
-  it("requires bounded unranked alternatives and a separate exact Demetri decision", () => {
+  it("accepts one to four bounded unranked options and requires a separate exact Demetri decision", () => {
     expect(validateArtifactApproach(approach()).approaches).toHaveLength(2);
     expect(parsePersistedArtifactApproach(Buffer.from(persistedApproach()))).toEqual({
       approach: approach(),
       summary: { confidence: "PROBABLE", complete: true },
     });
-    expect(() =>
-      validateArtifactApproach({ ...approach(), approaches: [approach().approaches[0]] })
-    ).toThrow();
+    expect(
+      validateArtifactApproach({ ...approach(), approaches: [approach().approaches[0]] }).approaches
+    ).toHaveLength(1);
     expect(() =>
       validateArtifactApproach({ ...approach(), recommended_approach_id: "direct" })
     ).toThrow(/additional properties/u);

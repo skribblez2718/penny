@@ -30,8 +30,3 @@ Untrusted data reaches query, command, template, expression, interpreter, header
 
 - [Input validation](input-validation.md) constrains external data.
 - [XSS](xss.md), [SSRF and egress](ssrf-egress.md), and [untrusted execution](untrusted-execution.md) own adjacent contexts.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

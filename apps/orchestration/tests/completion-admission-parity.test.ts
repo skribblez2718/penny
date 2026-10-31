@@ -14,26 +14,26 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer, canonicalJson, sha256 } from "../src/checkpointer.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer, canonicalJson, sha256 } from "../dist/checkpointer.js";
 import type {
   Confidence,
   Directive,
   JsonValue,
   RunIdentity,
   SkillContract,
-} from "../src/contracts.js";
-import { validateDirective } from "../src/contracts.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationEngine } from "../src/engine.js";
-import { readManifest, readPolicy } from "../src/kb/filesystem.js";
-import { checkpointDirectOperationResult } from "../src/kb/operation-starts.js";
-import { initKb, lintKb } from "../src/kb/workflows.js";
-import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
-import type { PlaybookCoreV1 } from "../src/playbooks/playbook.js";
-import { type PlaybookRegistrationV1, type PlaybookRegistryV1 } from "../src/playbooks/registry.js";
-import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
-import { WorkerExecutor } from "../src/worker.js";
+} from "../dist/contracts.js";
+import { validateDirective } from "../dist/contracts.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationEngine } from "../dist/engine.js";
+import { readManifest, readPolicy } from "../dist/kb/filesystem.js";
+import { checkpointDirectOperationResult } from "../dist/kb/operation-starts.js";
+import { initKb, lintKb } from "../dist/kb/workflows.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../dist/model-client.js";
+import type { PlaybookCore } from "../dist/playbooks/playbook.js";
+import { type PlaybookRegistration, type PlaybookRegistry } from "../dist/playbooks/registry.js";
+import { RESEARCH_SKILL_CONTRACT } from "../dist/playbooks/research.js";
+import { WorkerExecutor } from "../dist/worker.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import { requireValue } from "./helpers/narrowing.js";
@@ -113,7 +113,7 @@ function completeContext(
   return terminal;
 }
 
-class ParityPlaybook implements PlaybookCoreV1 {
+class ParityPlaybook implements PlaybookCore {
   initialize(context: RunContext): Directive {
     const outcome = requiredOutcome(context.constraints.fixture_outcome);
     const entryPath = requiredEntryPath(context.constraints.fixture_path);
@@ -214,7 +214,7 @@ const PARITY_RESULT_SCHEMA = Type.Object(
   { additionalProperties: false }
 );
 
-const PARITY_REGISTRATION: PlaybookRegistrationV1 = {
+const PARITY_REGISTRATION: PlaybookRegistration = {
   name: PARITY_PLAYBOOK,
   contract: PARITY_CONTRACT,
   ingress: "dedicated_tool",
@@ -256,11 +256,45 @@ const PARITY_REGISTRATION: PlaybookRegistrationV1 = {
   construct: () => new ParityPlaybook(),
 };
 
-const PARITY_REGISTRY: PlaybookRegistryV1 = new Map([
+const PARITY_REGISTRY: PlaybookRegistry = new Map([
   [PARITY_REGISTRATION.name, PARITY_REGISTRATION],
 ]);
 
-function parityRuntime(root: string): {
+const PRIVATE_RESPONSE = "PRIVATE_GATE_RESPONSE_734a6b";
+
+class DigestOnlyParityPlaybook extends ParityPlaybook {
+  genericGateResponseStorage(context: RunContext): "digest-only" {
+    if (context.status !== "awaiting_user" || context.pendingDirective?.action !== "await_user") {
+      throw new Error("storage policy must be resolved before resume changes the gate");
+    }
+    return "digest-only";
+  }
+
+  override resume(context: RunContext, response: JsonValue): Directive {
+    if (response !== PRIVATE_RESPONSE) throw new Error("unexpected fixture response");
+    return completeContext(context, "negative", "respond");
+  }
+}
+
+const DIGEST_ONLY_REGISTRY: PlaybookRegistry = new Map([
+  [PARITY_PLAYBOOK, { ...PARITY_REGISTRATION, construct: () => new DigestOnlyParityPlaybook() }],
+]);
+
+function storedGate(root: string, runId: string, gateId: string): unknown {
+  const sqlite = process.getBuiltinModule("node:sqlite");
+  if (sqlite === undefined) throw new Error("node:sqlite is unavailable");
+  using db = new sqlite.DatabaseSync(path.join(root, "orchestration-v2.db"), { readOnly: true });
+  return db
+    .prepare(
+      "SELECT status, response_digest, response_json FROM gates WHERE run_id = ? AND gate_id = ?"
+    )
+    .get(runId, gateId);
+}
+
+function parityRuntime(
+  root: string,
+  digestOnly = false
+): {
   checkpointer: Checkpointer;
   engine: OrchestrationEngine;
 } {
@@ -272,7 +306,7 @@ function parityRuntime(root: string): {
       projectRoot: root,
       maxSteps: ENGINE_MAX_STEPS,
       playbookName: PARITY_PLAYBOOK,
-      playbookRegistry: PARITY_REGISTRY,
+      playbookRegistry: digestOnly ? DIGEST_ONLY_REGISTRY : PARITY_REGISTRY,
     }),
   };
 }
@@ -417,6 +451,193 @@ describe("P1.1 completion-admission parity pin", () => {
       checkpointer.close();
     }
   );
+});
+
+describe("shared generic gate response storage", () => {
+  it("keeps full response bytes by default and replays the same run after restart", () => {
+    const root = temporaryRoot("gate-full");
+    const runId = "gate-full-run";
+    const identity = parityIdentity(runId);
+    const first = parityRuntime(root);
+    const gate = first.engine.handle(parityStartRequest(root, runId, "respond", "negative"));
+    if (gate.action !== "await_user") throw new Error("expected generic gate");
+    const terminal = requireTerminal(
+      first.engine.handle({
+        schema_version: 2,
+        action: "respond",
+        identity,
+        gate_id: gate.gate_id,
+        challenge: gate.challenge,
+        response: "negative",
+      }),
+      "full response"
+    );
+    expect(storedGate(root, runId, gate.gate_id)).toEqual({
+      status: "answered",
+      response_digest: sha256(canonicalJson("negative")),
+      response_json: canonicalJson("negative"),
+    });
+    first.checkpointer.close();
+    const restarted = parityRuntime(root);
+    expectExactReplay(restarted.engine, identity, terminal);
+    restarted.checkpointer.close();
+  });
+
+  it("atomically commits digest-only answer and context without raw event or observability body", () => {
+    const root = temporaryRoot("gate-digest");
+    const runId = "gate-digest-run";
+    const identity = parityIdentity(runId);
+    const observed: string[] = [];
+    // Use the same control store for the observer so it sees the committed event.
+    const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"), (event) => {
+      observed.push(JSON.stringify(event));
+    });
+    const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
+      projectRoot: root,
+      maxSteps: ENGINE_MAX_STEPS,
+      playbookName: PARITY_PLAYBOOK,
+      playbookRegistry: DIGEST_ONLY_REGISTRY,
+    });
+    const gate = engine.handle(parityStartRequest(root, runId, "respond", "negative"));
+    if (gate.action !== "await_user") throw new Error("expected generic gate");
+    expect(() =>
+      engine.handle({
+        schema_version: 2,
+        action: "respond",
+        identity,
+        gate_id: gate.gate_id,
+        challenge: "wrong challenge",
+        response: PRIVATE_RESPONSE,
+      })
+    ).toThrow(/challenge mismatch/);
+    expect(() =>
+      engine.handle({
+        schema_version: 2,
+        action: "respond",
+        identity,
+        gate_id: "wrong_gate",
+        challenge: gate.challenge,
+        response: PRIVATE_RESPONSE,
+      })
+    ).toThrow(/not awaiting gate/);
+    expect(storedGate(root, runId, gate.gate_id)).toEqual({
+      status: "pending",
+      response_digest: null,
+      response_json: null,
+    });
+
+    const digest = sha256(canonicalJson(PRIVATE_RESPONSE));
+    const payload = {
+      ...identity,
+      gate_id: gate.gate_id,
+      response_sha256: digest,
+      state_id: "incomplete",
+    };
+    expect(() =>
+      checkpointer.saveGateResponse(
+        checkpointer.loadRun(identity),
+        gate.gate_id,
+        gate.challenge,
+        PRIVATE_RESPONSE,
+        "user_gate_answered",
+        { ...payload, state_id: "report_writing", raw: PRIVATE_RESPONSE },
+        "digest-only"
+      )
+    ).toThrow(/body-free/);
+    const broken = checkpointer.loadRun(identity);
+    broken.status = "complete";
+    broken.stateId = "complete";
+    broken.met = true;
+    expect(() =>
+      checkpointer.saveGateResponse(
+        broken,
+        gate.gate_id,
+        gate.challenge,
+        PRIVATE_RESPONSE,
+        "user_gate_answered",
+        { ...payload, state_id: "complete" },
+        "digest-only"
+      )
+    ).toThrow();
+    expect(storedGate(root, runId, gate.gate_id)).toEqual({
+      status: "pending",
+      response_digest: null,
+      response_json: null,
+    });
+    expect(engine.handle({ schema_version: 2, action: "recover", identity })).toEqual(gate);
+    const terminal = requireTerminal(
+      engine.handle({
+        schema_version: 2,
+        action: "respond",
+        identity,
+        gate_id: gate.gate_id,
+        challenge: gate.challenge,
+        response: PRIVATE_RESPONSE,
+      }),
+      "digest-only response"
+    );
+    expect(storedGate(root, runId, gate.gate_id)).toEqual({
+      status: "answered",
+      response_digest: digest,
+      response_json: null,
+    });
+    expect(checkpointer.loadRun(identity).terminalDirective).toEqual(terminal);
+    const eventCount = checkpointer.events(runId).length;
+    expect(JSON.stringify(checkpointer.events(runId))).not.toContain(PRIVATE_RESPONSE);
+    expect(JSON.stringify(checkpointer.loadRun(identity).snapshot())).not.toContain(
+      PRIVATE_RESPONSE
+    );
+    expect(observed.join("\n")).not.toContain(PRIVATE_RESPONSE);
+    checkpointer.close();
+
+    const restarted = parityRuntime(root, true);
+    expectExactReplay(restarted.engine, identity, terminal);
+    restarted.checkpointer.saveGateResponse(
+      restarted.checkpointer.loadRun(identity),
+      gate.gate_id,
+      gate.challenge,
+      PRIVATE_RESPONSE,
+      "user_gate_answered",
+      payload,
+      "digest-only"
+    );
+    expect(restarted.checkpointer.events(runId)).toHaveLength(eventCount);
+    expect(() =>
+      restarted.checkpointer.saveGateResponse(
+        restarted.checkpointer.loadRun(identity),
+        gate.gate_id,
+        gate.challenge,
+        "changed answer",
+        "user_gate_answered",
+        { ...payload, response_sha256: sha256(canonicalJson("changed answer")) },
+        "digest-only"
+      )
+    ).toThrow(/already answered/);
+    expect(() =>
+      restarted.checkpointer.saveGateResponse(
+        restarted.checkpointer.loadRun(identity),
+        gate.gate_id,
+        gate.challenge,
+        PRIVATE_RESPONSE,
+        "user_gate_answered",
+        { ...payload, raw: PRIVATE_RESPONSE },
+        "digest-only"
+      )
+    ).toThrow(/body-free/);
+    expect(() =>
+      restarted.checkpointer.saveGateResponse(
+        restarted.checkpointer.loadRun(identity),
+        gate.gate_id,
+        gate.challenge,
+        PRIVATE_RESPONSE,
+        "user_gate_answered",
+        payload
+      )
+    ).toThrow(/already answered/);
+    expect(restarted.checkpointer.events(runId)).toHaveLength(eventCount);
+    restarted.checkpointer.close();
+  });
 });
 
 function createLintRun(input: {

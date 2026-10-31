@@ -1,5 +1,6 @@
 # Skills Feature Index
 
+- [Active Domain Skills](active-domain-skills.md): READ WHEN changing or consuming Define, Plan, or source-composition analysis interfaces — active products, composition, traceability, broker-tool, and consequence boundaries.
 - [Design Methodology](design-methodology.md): READ WHEN designing a new engine-backed skill — phase, failure-mode, and gate design.
 - [Flow Diagrams](flow-diagrams.md): READ WHEN creating or updating a skill flow diagram — diagram standard and drift checks.
 - [Loops](loops.md): READ WHEN selecting or changing an agentic loop pattern — termination, verifier, and quality guidance.

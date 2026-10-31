@@ -6,8 +6,8 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import observabilityExtension from "../../index.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
 import {
-  createTestExtensionApi,
   isRecord,
   requireArrayElement,
   requireDefined,

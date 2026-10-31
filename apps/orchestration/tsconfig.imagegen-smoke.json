@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "smoke/imagegen-*.ts",
+    "vitest.imagegen-live.config.ts",
+    "vitest.imagegen-model-smoke.config.ts",
+    "vitest.imagegen-recovery-live.config.ts",
+    "vitest.imagegen-security-inspection.config.ts",
+    "vitest.imagegen-canary.config.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

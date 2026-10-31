@@ -2,16 +2,12 @@
 
 ## Active workflow transport
 
-1. The playbook selects exact predecessor IDs/refs from any run.
-2. Owner code verifies every ID by manifest lookup plus digest/length before worker use.
-3. The directive carries those IDs and an output contract.
-4. The worker reads needed IDs with `artifact_read` plus `next_range`.
-5. The worker returns complete content and a routing-only final SUMMARY.
-6. Owner code persists and re-reads exact bytes before parsing routing.
+[Invocation](../agents/invocation.md) owns the shared transport/capture contract: exact supplied
+IDs, complete bounded reads, `missing_input:`, no discovery fallback, exact final-text concatenation,
+and owner persistence/readback before SUMMARY. Apply it without adding a skill-specific protocol.
 
-Parallel branches may receive independent explicit IDs; downstream fan-in can combine
-outputs from several branches/runs. Chain steps receive the prior ID automatically and may
-add extra IDs.
+Skill composition retains selected refs through retry, clarification, restart, partial fan recovery,
+and chain resume. Branches may use independent inputs; cross-run fan-in is valid.
 
 For a stored child call, `ChildWorkflowStateOwner` mints custody from one concrete
 `ArtifactStore`. The checkpointer proves that store and its own control database have
@@ -33,8 +29,10 @@ global artifact scan participates.
 
 Child-call storage recovery follows the same boundary. A committed exact call may be adopted after
 restart; artifact-only bytes, memory, logs, or prose never synthesize a call row or child run. The
-current storage slice does not dispatch children, accept results, or establish child artifact,
-receipt, or session-cohort retention.
+storage boundary alone does not prove dispatch, result acceptance, or cohort retention. The
+active runtime separately implements those controls, projected gates, and captured-terminal
+recovery; see the [engine status owner](../orchestration/overview.md#child-workflow-feature-status).
+Immutable artifact bytes remain preserved; Gate 2 is `not_run`.
 
 ## Invariants
 

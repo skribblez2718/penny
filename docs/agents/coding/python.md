@@ -2,9 +2,18 @@
 
 ## What
 
-All retained Python utilities, services, watchers, and scripts use explicit, reviewable contracts. Type annotations, data models, validation, and tests reduce ambiguity for both human maintainers and AI-assisted changes. Skill orchestration remains TypeScript-only.
+Penny-owned Python utilities, services, watchers, and scripts use explicit,
+reviewable contracts. Penny's skill orchestration remains TypeScript-only.
+
+For caller-owned Python, apply the transferable type, validation, and test guidance
+with the caller's toolchain and architecture; Penny's root commands and orchestration
+ownership rules are not downstream requirements.
 
 ## Required toolchain
+
+For Penny implementation work, run these gates. Review/diagnosis and planning follow
+[Coding Conventions task modes](conventions.md#task-modes), assessing or specifying
+evidence rather than claiming unrun checks passed.
 
 1. **Lint passes with zero errors.** `bun run py:lint`
 2. **Format passes.** `bun run py:format:check`
@@ -20,7 +29,7 @@ Mypy is a delivery gate. Do not silence an error with an untyped definition, `An
 - Model mutually exclusive states and results with tagged/discriminated unions (`Literal` tags plus dataclasses/Pydantic models), not a bag of optional dictionary keys.
 - Do not use `dict[str, Any]` as a substitute for a known model. If the shape is intentionally open, use `Mapping[str, object]` and document why.
 - Use `pathlib.Path` for filesystem paths, not `os.path` or string concatenation.
-- Do not implement skill workflows in Python. `python-statemachine` remains permitted only for independently owned Python subsystems such as the memory-canary authority FSM.
+- In Penny, do not implement skill workflows in Python. `python-statemachine` remains permitted only for independently owned Python subsystems such as the memory-canary authority FSM.
 
 ## Boundaries and validation
 
@@ -40,6 +49,9 @@ Test fakes should implement a narrow `Protocol` or a small concrete fake rather 
 - Do not use `sys.path` hacks; use proper package structure.
 
 ## Verification
+
+Implementation checklist for Penny-owned Python; use caller-owned equivalents outside
+Penny. Apply the task-mode distinction above for read-only work.
 
 - [ ] `bun run py:lint` passes
 - [ ] `bun run py:format:check` passes

@@ -1,5 +1,6 @@
 /** P4 deterministic ordinary-worker production-entrypoint research E2E. */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   cpSync,
   existsSync,
@@ -16,13 +17,32 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  InMemoryCredentialStore,
+  InMemoryModelsStore,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  formatSkillsForPrompt,
+  initTheme,
+  ModelRuntime,
+  parseFrontmatter,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import {
   ArtifactStore,
   Checkpointer,
   canonicalJson,
   initializePennyState,
+  parseCurrentSkillResult,
   sha256,
   type ArtifactRef,
-} from "@penny/orchestration/source";
+  type PiAgentClientOptions,
+} from "@penny/orchestration";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -30,8 +50,9 @@ import {
   validateResearchProductEnvelope,
   validateResearchProductGraph,
   validateResearchSemanticDraft,
-} from "../../../../../apps/orchestration/src/skill-contracts/research.js";
-import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
+} from "../../../../../apps/orchestration/dist/skill-contracts/research.js";
+import { createTestExtensionApi } from "../../../../lib/tests/pi-test-host.js";
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
 import { parseArtifactRef } from "../../artifact-client.js";
 import type { SkillResult } from "../../skill-utils.js";
 
@@ -52,12 +73,43 @@ const providerBoundary = vi.hoisted(() => ({
   respond: undefined as undefined | ((prompt: string) => string | ProviderAssistantErrorFixture),
 }));
 
+// Worker model identity is synthetic; no provider lookup or service call is needed.
+const fixtureWorkerModel: Awaited<ReturnType<NonNullable<PiAgentClientOptions["resolveModel"]>>> = {
+  id: "research-offline-fixture",
+  name: "Offline research fixture",
+  provider: "ollama",
+  api: "openai-completions",
+  baseUrl: "http://127.0.0.1:1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 131072,
+  maxTokens: 8192,
+};
+
+// Only the explicitly scoped parent factory call bypasses the worker cognition fixture.
+// Parent AgentSession.prompt, native expansion, tool dispatch and continuation stay real.
+const parentCreation = new AsyncLocalStorage<boolean>();
+vi.mock("../../../../../apps/orchestration/dist/model-client.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../../apps/orchestration/dist/model-client.js")>();
+  return {
+    ...actual,
+    PiAgentClient: class extends actual.PiAgentClient {
+      constructor(options: PiAgentClientOptions = {}) {
+        super({ ...options, resolveModel: () => fixtureWorkerModel });
+      }
+    },
+  };
+});
+
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
   return {
     ...actual,
     createAgentSession: vi.fn(async (...args: Parameters<typeof actual.createAgentSession>) => {
       const created = await actual.createAgentSession(...args);
+      if (parentCreation.getStore() === true) return created;
       const capture: SessionCapture = {
         requested: [...(args[0]?.tools ?? [])],
         active: [...created.session.getActiveToolNames()],
@@ -392,23 +444,287 @@ function phaseFromPrompt(prompt: string): "researching" | "synthesizing" | "vali
   throw new Error(`unexpected production research prompt: ${prompt.slice(0, 160)}`);
 }
 
+function researchProject(prefix: string) {
+  const sandbox = mkdtempSync(path.join(tmpdir(), prefix));
+  temporaryRoots.push(sandbox);
+  const projectRoot = path.join(sandbox, "project");
+  mkdirSync(path.join(projectRoot, ".pi"), { recursive: true, mode: 0o700 });
+  // Catalogs are private copies: never link fixture writes back into the real project.
+  for (const name of ["agents", "skills"]) {
+    cpSync(path.join(PROJECT_ROOT, ".pi", name), path.join(projectRoot, ".pi", name), {
+      recursive: true,
+    });
+  }
+  symlinkSync(
+    path.join(PROJECT_ROOT, ".pi", "extensions"),
+    path.join(projectRoot, ".pi", "extensions"),
+    "dir"
+  );
+  symlinkSync(path.join(PROJECT_ROOT, ".pi", "lib"), path.join(projectRoot, ".pi", "lib"), "dir");
+  cpSync(path.join(PROJECT_ROOT, ".pi", "SYSTEM.md"), path.join(projectRoot, ".pi", "SYSTEM.md"));
+  writeFileSync(path.join(projectRoot, "AGENTS.md"), "# Provider-free command fixture\n");
+  installCanonicalWritingDocs(projectRoot);
+  process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
+  process.env.PROJECT_ROOT = projectRoot;
+  process.env.PENNY_SKILLS_DIR = path.join(projectRoot, ".pi", "skills");
+  process.env.PI_OBSERVABILITY_ENABLED = "false";
+  process.env.PI_OBSERVABILITY_AUTO_START = "false";
+  process.env.PI_OBSERVABILITY_REST_URL = LOCAL_OBSERVABILITY_REST_URL;
+  delete process.env.PENNY_ARTIFACT_ROOT;
+  const state = initializePennyState(projectRoot, { env: process.env });
+  return { projectRoot, sandbox, state };
+}
+
 describe("P4 production skill entrypoint", () => {
+  it("expands visible /skill:research natively and completes Quick through the real parent skill-tool loop (fixture cognition only)", async () => {
+    const { projectRoot, sandbox, state } = researchProject("penny-research-native-command-");
+    const artifacts = ArtifactStore.openExisting(state.paths.artifacts.root, {
+      projectId: state.projectId,
+    });
+    const checkpointer = Checkpointer.openExisting(state.paths.orchestration.database, undefined, {
+      projectId: state.projectId,
+    });
+    const providerStates: string[] = [];
+    const providerReads: string[] = [];
+    // Explicit synthetic worker cognition, not evidence of live research or model quality.
+    providerBoundary.respond = (prompt) => {
+      const phase = phaseFromPrompt(prompt);
+      providerStates.push(phase);
+      const refs = artifactRefsFromPrompt(prompt);
+      for (const ref of refs) {
+        artifacts.read(ref);
+        providerReads.push(ref.artifact_id);
+      }
+      if (phase === "researching") {
+        return 'p4-provider-stub-1\nSUMMARY:{"confidence":"CERTAIN","explore_complete":true}';
+      }
+      if (phase === "synthesizing") {
+        return `${canonicalJson(buildDraft(refs))}\nSUMMARY:{"confidence":"CERTAIN","synthesis_complete":true}`;
+      }
+      return 'grounded\nSUMMARY:{"confidence":"CERTAIN","verdict":"PASS","unsupported_claims":[],"evidence":["exact provider-stub evidence"]}';
+    };
+    const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network forbidden"));
+    initTheme("dark", false);
+    const faux = fauxProvider({
+      tokensPerSecond: 0,
+      models: [
+        {
+          id: "research-command-parent",
+          contextWindow: 131072,
+          maxTokens: 8192,
+        },
+      ],
+    });
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      refreshOnCreate: false,
+      allowModelNetwork: false,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const settingsManager = SettingsManager.inMemory({
+      retry: { enabled: false },
+      cacheWarming: "off",
+    });
+    const prompts: string[] = [];
+    const errors: unknown[] = [];
+    const extension = await import("../../index.js");
+    const loader = new DefaultResourceLoader({
+      cwd: projectRoot,
+      agentDir: path.join(sandbox, "parent-agent"),
+      settingsManager,
+      noExtensions: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      // Same production default factory seam as the hidden VideoGen command E2E.
+      // No skill paths, overrides, custom slash commands or direct tool.execute calls.
+      extensionFactories: [
+        extension.default,
+        (pi) => {
+          pi.on("before_agent_start", (event) => {
+            if ("prompt" in event) prompts.push(event.prompt);
+          });
+        },
+      ],
+    });
+    await loader.reload();
+    const { session } = await parentCreation.run(true, () =>
+      createAgentSession({
+        cwd: projectRoot,
+        agentDir: path.join(sandbox, "parent-agent"),
+        modelRuntime,
+        model: faux.getModel(),
+        settingsManager,
+        sessionManager: SessionManager.inMemory(projectRoot),
+        resourceLoader: loader,
+        tools: ["skill", "read"],
+      })
+    );
+    const starts: { toolCallId: string; args: unknown }[] = [];
+    const outcomes: {
+      toolCallId: string;
+      isError: boolean;
+      result: unknown;
+    }[] = [];
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "tool_execution_start" && event.toolName === "skill") {
+        starts.push({ toolCallId: event.toolCallId, args: event.args });
+      }
+      if (event.type === "tool_execution_end" && event.toolName === "skill") {
+        outcomes.push({
+          toolCallId: event.toolCallId,
+          isError: event.isError,
+          result: event.result,
+        });
+      }
+    });
+    try {
+      await session.bindExtensions({
+        mode: "json",
+        onError: (error) => errors.push(error),
+      });
+      expect(loader.getExtensions().errors).toEqual([]);
+      expect(session.getActiveToolNames().sort()).toEqual(["read", "skill"]);
+      expect(vi.isMockFunction(session.prompt)).toBe(false);
+      expect(providerBoundary.captures).toEqual([]);
+      expect(loader.getSkills().skills.filter((skill) => skill.name === "research")).toMatchObject([
+        { disableModelInvocation: false },
+      ]);
+      expect(formatSkillsForPrompt(loader.getSkills().skills)).toContain("<name>research</name>");
+      expect(session.systemPrompt).toContain("<name>research</name>");
+      const goal = "Prove visible native Research dispatch with synthetic evidence only.";
+      const params = {
+        skill_name: "research",
+        goal,
+        session_id: "research-native-command",
+        model: `${fixtureWorkerModel.provider}/${fixtureWorkerModel.id}`,
+        constraints: { mode: "quick" },
+      };
+      faux.setResponses([
+        fauxAssistantMessage(fauxToolCall("skill", params), {
+          stopReason: "toolUse",
+        }),
+        (context) => {
+          const results = context.messages.filter(
+            (message) => message.role === "toolResult" && message.toolName === "skill"
+          );
+          expect(results).toHaveLength(1);
+          const result = results[0];
+          if (result === undefined || result.role !== "toolResult") {
+            throw new Error("parent continuation did not receive the real skill result");
+          }
+          expect(result.isError).toBe(false);
+          expect(result.toolCallId).toBe(outcomes[0]?.toolCallId);
+          return fauxAssistantMessage(
+            "Parent fixture observed the tool result; no live research claim."
+          );
+        },
+      ]);
+      await session.prompt(`/skill:research ${goal}`);
+      const manifest = path.join(projectRoot, ".pi", "skills", "research", "SKILL.md");
+      const body = parseFrontmatter(readFileSync(manifest, "utf8")).body.trim();
+      expect(prompts).toEqual([
+        `<skill name="research" location="${manifest}">\nReferences are relative to ${path.dirname(manifest)}.\n\n${body}\n</skill>\n\n${goal}`,
+      ]);
+      expect(faux.state.callCount).toBe(2);
+      expect(session.getLastAssistantText()).toBe(
+        "Parent fixture observed the tool result; no live research claim."
+      );
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.args).toEqual(params);
+      expect(outcomes).toHaveLength(1);
+      const outcome = outcomes[0];
+      if (outcome === undefined || !isRecord(outcome.result)) {
+        throw new Error("native parent skill execution did not return a tool result");
+      }
+      expect(outcome.toolCallId).toBe(starts[0]?.toolCallId);
+      expect(outcome.isError, JSON.stringify(outcome.result)).toBe(false);
+      const result = parseCurrentSkillResult(outcome.result.details);
+      expect(result).toMatchObject({
+        success: true,
+        session_id: params.session_id,
+        skill_name: "research",
+        state: "complete",
+        requires_approval: false,
+        errors: [],
+      });
+      const durable = checkpointer.loadRunById(params.session_id);
+      if (durable === undefined) throw new Error("native Research run was not persisted");
+      expect(durable.status).toBe("complete");
+      expect(durable.met).toBe(true);
+      expect(checkpointer.stateVisits(params.session_id).map((visit) => visit.state_id)).toEqual([
+        "intake",
+        "researching",
+        "synthesizing",
+        "sealing_core",
+        "validating",
+        "rendering",
+      ]);
+      expect(checkpointer.completionAdmission(params.session_id)?.origin_state).toBe("rendering");
+      expect(providerStates).toEqual(["researching", "synthesizing", "validating"]);
+      expect(providerBoundary.captures).toHaveLength(3);
+      for (const [index, agent] of ["echo", "synthia", "vera"].entries()) {
+        const expected = independentYamlTools(agent);
+        const capture = providerBoundary.captures[index];
+        if (capture === undefined) throw new Error(`missing ${agent} worker capture`);
+        expect(capture.requested).toEqual(expected);
+        expect([...capture.active].sort()).toEqual([...expected].sort());
+      }
+      expect(providerReads.length).toBeGreaterThan(0);
+      const output = result.output_artifact_ref;
+      if (output === undefined || !isRecord(result.result)) {
+        throw new Error("native Research result omitted its real product");
+      }
+      expect(output).toMatchObject({
+        kind: "semantic-core",
+        phase: "sealing_core",
+      });
+      const core = validateGroundedSynthesis(JSON.parse(artifacts.read(output).toString("utf8")));
+      const envelopeRef = parseArtifactRef(result.result.product_envelope_ref);
+      const envelope = validateResearchProductEnvelope(
+        JSON.parse(artifacts.read(envelopeRef).toString("utf8"))
+      );
+      expect(envelope.semantic_core.artifact_ref).toEqual(output);
+      const receipts: unknown[] = envelope.receipts.map((binding) => {
+        const value: unknown = JSON.parse(artifacts.read(binding.artifact_ref).toString("utf8"));
+        return value;
+      });
+      validateResearchProductGraph({
+        core,
+        envelope,
+        receipts,
+        renders: envelope.renders,
+      });
+      expect(envelope.receipts.map((binding) => binding.receipt_kind).sort()).toEqual([
+        "deterministic_product_validation",
+        "grounding_verification",
+      ]);
+      expect(envelope.renders.map((render) => render.render_name).sort()).toEqual([
+        "readme",
+        "report",
+        "sources",
+      ]);
+      for (const render of envelope.renders) {
+        const bytes = readFileSync(
+          path.join(String(result.result.report_dir), render.target_relative_path)
+        );
+        expect(bytes).toEqual(artifacts.read(render.artifact_ref));
+        expect(sha256(bytes)).toBe(render.content_sha256);
+      }
+      expect(errors).toEqual([]);
+      expectOnlyLocalObservabilityDiagnostics(network.mock.calls);
+    } finally {
+      unsubscribe();
+      session.dispose();
+      checkpointer.close();
+      artifacts.close();
+    }
+  }, 120_000);
+
   it("completes Quick through ordinary PiAgentClient sessions with only provider responses stubbed", async () => {
-    const sandbox = mkdtempSync(path.join(tmpdir(), "penny-p4-production-entrypoint-"));
-    temporaryRoots.push(sandbox);
-    const projectRoot = path.join(sandbox, "project");
-    mkdirSync(projectRoot, { mode: 0o700 });
-    symlinkSync(path.join(PROJECT_ROOT, ".pi"), path.join(projectRoot, ".pi"), "dir");
-    writeFileSync(path.join(projectRoot, "AGENTS.md"), "Canonical project index sentinel");
-    installCanonicalWritingDocs(projectRoot);
-    process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
-    process.env.PROJECT_ROOT = projectRoot;
-    process.env.PENNY_SKILLS_DIR = path.join(projectRoot, ".pi", "skills");
-    process.env.PI_OBSERVABILITY_ENABLED = "false";
-    process.env.PI_OBSERVABILITY_AUTO_START = "false";
-    process.env.PI_OBSERVABILITY_REST_URL = LOCAL_OBSERVABILITY_REST_URL;
-    delete process.env.PENNY_ARTIFACT_ROOT;
-    const state = initializePennyState(projectRoot, { env: process.env });
+    const { projectRoot, state } = researchProject("penny-p4-production-entrypoint-");
     const artifacts = ArtifactStore.openExisting(state.paths.artifacts.root, {
       projectId: state.projectId,
     });
@@ -441,6 +757,7 @@ describe("P4 production skill entrypoint", () => {
         skill_name: "research",
         goal: "Prove the deterministic P4 production entrypoint.",
         session_id: "p4-production-entrypoint",
+        model: `${fixtureWorkerModel.provider}/${fixtureWorkerModel.id}`,
         constraints: { mode: "quick" },
       },
       undefined,
@@ -546,21 +863,7 @@ describe("P4 production skill entrypoint", () => {
   }, 120_000);
 
   it("returns durable incomplete for an exact mocked Pi liveness final", async () => {
-    const sandbox = mkdtempSync(path.join(tmpdir(), "penny-p4-production-liveness-"));
-    temporaryRoots.push(sandbox);
-    const projectRoot = path.join(sandbox, "project");
-    mkdirSync(projectRoot, { mode: 0o700 });
-    symlinkSync(path.join(PROJECT_ROOT, ".pi"), path.join(projectRoot, ".pi"), "dir");
-    writeFileSync(path.join(projectRoot, "AGENTS.md"), "Canonical project index sentinel");
-    installCanonicalWritingDocs(projectRoot);
-    process.env.PENNY_STATE_ROOT = path.join(sandbox, "state");
-    process.env.PROJECT_ROOT = projectRoot;
-    process.env.PENNY_SKILLS_DIR = path.join(projectRoot, ".pi", "skills");
-    process.env.PI_OBSERVABILITY_ENABLED = "false";
-    process.env.PI_OBSERVABILITY_AUTO_START = "false";
-    process.env.PI_OBSERVABILITY_REST_URL = LOCAL_OBSERVABILITY_REST_URL;
-    delete process.env.PENNY_ARTIFACT_ROOT;
-    const state = initializePennyState(projectRoot, { env: process.env });
+    const { projectRoot, state } = researchProject("penny-p4-production-liveness-");
 
     providerBoundary.respond = (prompt) => {
       expect(phaseFromPrompt(prompt)).toBe("researching");
@@ -581,6 +884,7 @@ describe("P4 production skill entrypoint", () => {
         skill_name: "research",
         goal: "Prove exact Pi liveness errors reach durable research terminal truth.",
         session_id: "p4-production-liveness",
+        model: `${fixtureWorkerModel.provider}/${fixtureWorkerModel.id}`,
         constraints: { mode: "quick" },
       },
       undefined,

@@ -23,13 +23,17 @@ Check all of the following against exact artifacts:
 - exact canonical request, Annie analysis, Carren draft, target, criterion, evidence, and draft lineage is current and intact;
 - the versioned effect graph has all four policy-required categories, exact worker/run/phase scope, host artifact writes excluded, and truthful observation/prevention fields; unknown evidence remains `unknown` and is never interpreted as absence.
 
+The host-built task includes canonical `HOST_MECHANICAL_CHECKS` for the exact current product and source refs, only after native canonical-byte, digest, draft, lineage, custody, and effect-shape checks execute. Its scope is `host_mechanical_only_not_semantic_or_effect_absence`. Use it as mechanical evidence, not semantic approval or proof of effect absence. Do not compute hashes or ask Carren to supply host-only fields. Validity receipts, integrity and envelopes are created **after** your PASS; their absence before review is not a defect.
+
+When required verification evidence or capability is unavailable, return `UNVERIFIABLE/verification_incomplete/none`, with findings and evidence limitations. This ends durably incomplete without author repair, positive validity receipt or admission. It is distinct from a verifiably valid inconclusive product. Unknown effect evidence alone is neither a defect nor a reason for UNVERIFIABLE.
+
 A valid `does_not_meet`, `partially_meets`, `inconclusive`, or `not_applicable` assessment may PASS. Do not externally verify supplied evidence or re-judge Carren's subjective quality conclusion.
 
 On FAIL classify exactly one root gap:
 
 - `analysis_gap` / `annie`: target or criterion decomposition is materially incomplete or invalid;
 - `evidence_gap` / `annie`: supplied-evidence mapping or evidence absence/contradiction treatment is materially incomplete or invalid;
-- `assessment_product_gap` / `carren`: the draft/product violates criterion coverage, disposition, request coverage, improvement bounds, canonical shape, no-score rule, effect-graph shape, or exact lineage.
+- `assessment_product_gap` / `carren`: the draft/product violates criterion coverage, disposition, request coverage, improvement bounds, authored shape or the no-score rule. Host-only mechanical failures are not an author repair target.
 
 Do not repair, author, score, browse, fetch, execute, write, start changes, call another role, or emit a target state. Engine-owned routing sends Annie repairs through Carren; every replacement is resealed and reverified.
 
@@ -42,6 +46,12 @@ SUMMARY:{"confidence":"CERTAIN","verdict":"PASS","gap_kind":"none","repair_owner
 FAIL example:
 
 SUMMARY:{"confidence":"PROBABLE","verdict":"FAIL","gap_kind":"assessment_product_gap","repair_owner":"carren","findings":["Criterion 0 is absent from criterion_outcomes."],"evidence":["The request has criterion index 0; the current draft does not."],"strategy_delta":"Replace the complete assessment draft with one exact outcome per criterion, then reseal and reverify."}
+
+UNVERIFIABLE example:
+
+SUMMARY:{"confidence":"UNCERTAIN","verdict":"UNVERIFIABLE","gap_kind":"verification_incomplete","repair_owner":"none","findings":["A required validity claim cannot be checked from the supplied basis."],"evidence":["Identify the exact missing verification support and what remains unverified."],"strategy_delta":"Stop incomplete; obtain the missing verification support outside the author loop."}
+
+The complete original SUMMARY is the closed judgment under `preserve_source_summary_v1`. Routing-only correction must preserve all details and confidence; it cannot infer a verdict from prose, invent a missing judgment or strengthen one. FAIL requires a supported authored defect, not merely unavailable verification. The host measures exact request/candidate/failure recurrence only for product gaps while all upstream analysis bytes remain unchanged throughout the run; recurrence then ends `repair_stalled`, preserving reports and product. Analysis/evidence gaps and any changed upstream prose are unmeasured (`null`): neither metadata churn nor unavailable measurement establishes progress. There is no prose classifier or invented repair cap.
 
 ## Writing integrity verification
 

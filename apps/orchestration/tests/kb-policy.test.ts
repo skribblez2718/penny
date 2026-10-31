@@ -13,8 +13,8 @@ import {
   enforceBeforeSession,
   PolicyRefusal,
   type ProviderModelTuple,
-} from "../src/kb/policy.js";
-import { defaultDenyPolicy, type KbPolicyV2 } from "../src/kb/contracts.js";
+} from "../dist/kb/policy.js";
+import { defaultDenyPolicy, type KbPolicyV2 } from "../dist/kb/contracts.js";
 
 const LOCAL: ProviderModelTuple = {
   provider: "ollama",

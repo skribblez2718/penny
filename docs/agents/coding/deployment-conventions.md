@@ -2,8 +2,10 @@
 
 ## Applies when
 
-Deployment, infrastructure, runtime configuration, release paths, ingress, health
-checks, migration/rollback behavior, or production operations change.
+Work on deployed services, infrastructure, ingress, release paths, operational
+configuration, health checks, migration/rollback behavior, or production operations.
+Local-only runtime settings use [Configuration Security](security/configuration.md);
+apply this guide when those settings affect a deployed service or release path.
 
 ## Security properties
 

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalBrowserNetworkAllowlist,
   runWithRegisteredBrowserPolicy,
-} from "../../../../../apps/orchestration/src/browser-policy-carrier.js";
+} from "../../../../../apps/orchestration/dist/browser-policy-carrier.js";
 import { BrowserManager, BrowserPolicyViolationError } from "../../browser.js";
 import {
   authorizeNetworkUrl,

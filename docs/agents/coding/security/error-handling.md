@@ -30,8 +30,3 @@ Code handles malformed requests, parser failures, exceptions, partial state, ret
 
 - [Logging and monitoring](logging-monitoring.md) owns operational visibility.
 - [Configuration](configuration.md), [API security](api-security.md), and [incident response](incident-response.md) own related controls.
-
-## Current external references
-
-- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
-- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

@@ -12,9 +12,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { defineTool, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { registerTool } from "../../../.pi/lib/pi-tool-registration.js";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Real catalog-YAML session creation now serializes each agent's full tool
 // surface, which exceeds the 5s default on slower hosts.
@@ -24,6 +25,8 @@ const lifecycleHarness = vi.hoisted(() => ({
   outcomes: [] as Array<
     | "success"
     | "private_success"
+    | "provider_error"
+    | "aborted"
     | "liveness"
     | "tool_mismatch"
     | "tool_addition"
@@ -31,6 +34,8 @@ const lifecycleHarness = vi.hoisted(() => ({
   >,
   events: [] as string[],
   promptCalls: 0,
+  partialText:
+    'partial αβ\nSUMMARY:{"confidence":"CERTAIN","plan_complete":true,"plan_steps":["first"]}',
   sdkActiveToolSets: [] as Array<readonly string[]>,
   sessionOptions: [] as Array<{
     readonly model: unknown;
@@ -110,7 +115,17 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
         }
         const message = {
           role: "assistant" as const,
-          content: [],
+          content:
+            outcome === "liveness"
+              ? []
+              : [
+                  { type: "text" as const, text: "partial α" },
+                  { type: "thinking" as const, thinking: "not assistant output" },
+                  {
+                    type: "text" as const,
+                    text: lifecycleHarness.partialText.slice("partial α".length),
+                  },
+                ],
           api: "anthropic-messages",
           provider: "lifecycle-fixture",
           model: "lifecycle-fixture",
@@ -122,8 +137,11 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
             totalTokens: 1,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           },
-          stopReason: "error" as const,
-          errorMessage: "external_request_budget_exhausted",
+          stopReason: outcome === "aborted" ? ("aborted" as const) : ("error" as const),
+          errorMessage:
+            outcome === "liveness"
+              ? "external_request_budget_exhausted"
+              : "PRIVATE_PROVIDER_ERROR_SENTINEL",
           timestamp: Date.now(),
         };
         created.session.messages.push(message);
@@ -134,25 +152,36 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   };
 });
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import type { Directive } from "../src/contracts.js";
-import { LivenessExhaustedError } from "../src/liveness.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
+import { initializePennyState } from "../dist/state/setup.js";
+import { OrchestrationService } from "../dist/service.js";
+import { ContractValidationError, type Directive } from "../dist/contracts.js";
+import { sha256 } from "../dist/checkpointer.js";
+import { LivenessExhaustedError } from "../dist/liveness.js";
+import { admitImageInputModel } from "../dist/model-vision.js";
 import {
   CATALOG_WORKER_CONTINUITY_METADATA,
   CATALOG_WORKER_SESSION_METADATA,
   PiAgentClient,
+  createWorkerResourceLoader,
   parseSsotTools,
   validateCatalogWorkerContinuityMetadata,
   type AgentInvocation,
   type InlineExtension,
   type ModelClient,
   type PiAgentClientOptions,
-} from "../src/model-client.js";
-import { DECIDE_PLAYBOOK_REGISTRATION } from "../src/playbooks/decide.js";
-import { validateContextSourceRef } from "../src/skill-contracts/research.js";
-import { resolvePlaybook } from "../src/playbooks/registry.js";
-import { WorkerExecutor } from "../src/worker.js";
+} from "../dist/model-client.js";
+import { DECIDE_PLAYBOOK_REGISTRATION } from "../dist/playbooks/decide.js";
+import { validateContextSourceRef } from "../dist/skill-contracts/research.js";
+import { resolvePlaybook } from "../dist/playbooks/registry.js";
+import { WorkerExecutor } from "../dist/worker.js";
 import { parseJson, requireRecord } from "./helpers/narrowing.js";
+
+import {
+  writeModelSelectionFixture,
+  FIXTURE_HEAVY_MODEL_ID,
+} from "./helpers/model-selection-fixture.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const temporaryRoots: string[] = [];
@@ -194,6 +223,14 @@ function temporaryProject(catalog: "linked" | "copied" | "absent" = "linked"): {
     cpSync(path.join(PROJECT_ROOT, ".pi", "SYSTEM.md"), path.join(projectRoot, ".pi", "SYSTEM.md"));
   }
   return { projectRoot, sessionRoot };
+}
+
+function offlineSessionRuntime(): NonNullable<PiAgentClientOptions["sessionRuntime"]> {
+  return {
+    settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "high" }),
+    noAmbientExtensions: true,
+    attach: () => () => {},
+  };
 }
 
 function trackedResourceExtension(): {
@@ -314,6 +351,13 @@ function decideCandidateInvocation(input: {
   };
 }
 
+beforeEach(() => {
+  const root = mkdtempSync(path.join(tmpdir(), "penny-lifecycle-model-config-"));
+  temporaryRoots.push(root);
+  writeModelSelectionFixture(root);
+  vi.stubEnv("PI_CODING_AGENT_DIR", root);
+});
+
 afterEach(() => {
   lifecycleHarness.outcomes.length = 0;
   lifecycleHarness.events.length = 0;
@@ -321,10 +365,216 @@ afterEach(() => {
   lifecycleHarness.sdkActiveToolSets.length = 0;
   lifecycleHarness.sessionOptions.length = 0;
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("PiAgentClient created-session lifecycle", () => {
+  it.each(["phase", "routing_repair"] as const)(
+    "refuses throwing and duplicate factories before model/session creation for %s",
+    async (purpose) => {
+      const { projectRoot } = temporaryProject("copied");
+      const sentinel = "PRIVATE_FACTORY_SENTINEL bearer=synthetic-secret /private/input";
+      const reader: InlineExtension = (pi) => {
+        registerTool(pi, {
+          name: "artifact_read",
+          label: "Fixture reader",
+          description: "Registration-only fixture; never invoked.",
+          parameters: Type.Object({}),
+          execute: async () => ({ content: [], details: {} }),
+        });
+      };
+      const scenarios = [
+        {
+          factories: [
+            {
+              name: sentinel,
+              factory: () => {
+                throw new Error(sentinel);
+              },
+            },
+          ],
+          classification: "EXTENSION_LOAD_ERROR",
+        },
+        {
+          factories: [
+            {
+              name: "artifact-worker-read",
+              factory: () => {
+                throw new Error(`ORCHESTRATION_BUILD_STALE: ${sentinel}`);
+              },
+            },
+          ],
+          classification: "ORCHESTRATION_BUILD_STALE",
+        },
+        {
+          factories: [
+            {
+              name: "artifact-worker-read",
+              factory: () => {
+                throw new Error("Installed artifact reader unavailable");
+              },
+            },
+          ],
+          classification: "INSTALLED_ARTIFACT_READER_UNAVAILABLE",
+        },
+        {
+          factories: [{ name: sentinel, factory: reader }, reader],
+          classification: "EXTENSION_CONFLICT",
+        },
+      ];
+      for (const [index, scenario] of scenarios.entries()) {
+        const resolveModel = vi.fn((): never => {
+          throw new Error("model must not resolve");
+        });
+        const attach = vi.fn(() => () => {});
+        const client = new PiAgentClient({
+          resolveModel,
+          workerExtensions: scenario.factories,
+          sessionRuntime: {
+            settingsManager: SettingsManager.inMemory(),
+            noAmbientExtensions: true,
+            attach,
+          },
+        });
+        const base = invocation(projectRoot, `factory-${purpose}-${index}`);
+        const active: AgentInvocation = {
+          ...base,
+          executionPurpose: purpose,
+          ...(purpose === "routing_repair"
+            ? { routingRepairGuidance: "Return SUMMARY only." }
+            : {}),
+          workflowSession: {
+            ...base.workflowSession,
+            run_id: `factory-${index}`,
+            workflow_session_id: `factory-${index}`,
+            branch_id: null,
+            attempt: 1,
+            worker_id: `factory-${index}`,
+            purpose,
+          },
+          registration: { ...base.registration, allowed_tools: ["artifact_read"] },
+        };
+        let failure: unknown;
+        try {
+          await client.runAgent(active);
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeInstanceOf(ContractValidationError);
+        if (!(failure instanceof ContractValidationError))
+          throw new Error("expected loader refusal");
+        expect(failure).toHaveProperty("code", "WORKER_EXTENSION_LOAD_FAILED");
+        expect(failure.message).toContain(scenario.classification);
+        if (index === 1 || index === 2)
+          expect(failure.message).toContain("installed_artifact_reader");
+        const disclosed = `${String(failure)} ${JSON.stringify(failure)} ${failure.stack}`;
+        expect(disclosed).not.toContain(sentinel);
+        expect(disclosed).not.toContain("synthetic-secret");
+        expect(failure.message).not.toContain("missing=[artifact_read]");
+        expect(resolveModel).not.toHaveBeenCalled();
+        expect(attach).not.toHaveBeenCalled();
+        expect(lifecycleHarness.sessionOptions).toHaveLength(0);
+        expect(lifecycleHarness.promptCalls).toBe(0);
+      }
+    }
+  );
+
+  it("bounds real SDK loader diagnostics without forwarding unknown bodies, paths or causes", async () => {
+    const { projectRoot } = temporaryProject("copied");
+    const sentinel = "PRIVATE_ERROR_PATH_SENTINEL";
+    const message = `${sentinel} token=not-a-real-secret ${"x".repeat(10_000)}`;
+    const factories: InlineExtension[] = Array.from({ length: 100 }, (_, index) => ({
+      name: `/private/${sentinel}/${index}`,
+      factory: () => {
+        throw new Error(message);
+      },
+    }));
+    factories.push({
+      name: "artifact-worker-read",
+      factory: () => {
+        throw new Error(`ORCHESTRATION_BUILD_STALE: ${message}`);
+      },
+    });
+    const load = async () => {
+      try {
+        await createWorkerResourceLoader(projectRoot, factories, undefined, {
+          settingsManager: SettingsManager.inMemory(),
+          noAmbientExtensions: true,
+          attach: () => () => {},
+        });
+      } catch (error) {
+        if (error instanceof ContractValidationError) return error;
+        throw error;
+      }
+      throw new Error("expected loader refusal");
+    };
+    const first = await load();
+    const repeated = await load();
+    expect(first.message).toBe(repeated.message);
+    expect(first.message.length).toBeLessThan(4096);
+    expect(first.issues[0]).toContain("extension_errors=101; omitted=93");
+    expect(first.issues.slice(1)).toHaveLength(8);
+    expect(first.issues[0]).toContain("installed_reader_errors=1; stale_build_errors=1");
+    for (const [index, issue] of first.issues.slice(1).entries()) {
+      expect(requireRecord(parseJson(issue), "safe extension diagnostic")).toEqual({
+        source: index === 0 ? "installed_artifact_reader" : "inline_extension",
+        classification: index === 0 ? "ORCHESTRATION_BUILD_STALE" : "EXTENSION_LOAD_ERROR",
+        path_sha256: sha256(
+          index === 0
+            ? "<inline:artifact-worker-read>"
+            : `<inline:/private/${sentinel}/${index - 1}>`
+        ),
+        error_sha256: sha256(index === 0 ? `ORCHESTRATION_BUILD_STALE: ${message}` : message),
+      });
+    }
+    expect(JSON.stringify(first)).not.toContain(sentinel);
+    expect(first).not.toHaveProperty("cause");
+    expect(lifecycleHarness.sessionOptions).toHaveLength(0);
+    expect(lifecycleHarness.promptCalls).toBe(0);
+  });
+
+  it.each(["phase", "routing_repair"] as const)(
+    "retains final exact equality refusal for a silently non-registering reader during %s",
+    async (purpose) => {
+      const { projectRoot } = temporaryProject("copied");
+      const base = invocation(projectRoot, `silent-${purpose}`);
+      const active: AgentInvocation = {
+        ...base,
+        executionPurpose: purpose,
+        ...(purpose === "routing_repair" ? { routingRepairGuidance: "Return SUMMARY only." } : {}),
+        workflowSession: {
+          run_id: "silent",
+          workflow_session_id: "silent",
+          branch_id: null,
+          attempt: 1,
+          worker_id: "silent",
+          purpose,
+        },
+        registration: { ...base.registration, allowed_tools: ["artifact_read"] },
+      };
+      const attach = vi.fn(() => () => {});
+      const client = new PiAgentClient({
+        workerExtensions: [{ name: "artifact-worker-read", factory: () => {} }],
+        testOnlySessionManagerFactory: () => SessionManager.inMemory(projectRoot),
+        sessionRuntime: {
+          settingsManager: SettingsManager.inMemory(),
+          noAmbientExtensions: true,
+          attach,
+        },
+      });
+      // Do not mask real SDK tool activation with the lifecycle harness's ordinary success seam.
+      lifecycleHarness.outcomes.push("private_success");
+      await expect(client.runAgent(active)).rejects.toThrow(
+        /tool surface mismatch before model invocation; missing=\[artifact_read\]/u
+      );
+      expect(lifecycleHarness.sdkActiveToolSets).toEqual([[]]);
+      expect(lifecycleHarness.sessionOptions).toHaveLength(1);
+      expect(lifecycleHarness.promptCalls).toBe(0);
+      expect(attach).not.toHaveBeenCalled();
+    }
+  );
+
   it("refuses an unbound generic-child YAML carrier before resource, session, or model work even when the catalog appears later", async () => {
     const { projectRoot, sessionRoot } = temporaryProject("absent");
     const tracked = trackedResourceExtension();
@@ -567,6 +817,7 @@ describe("PiAgentClient created-session lifecycle", () => {
 
   it("activates exact Demetri YAML for an ordinary Decide workflow phase", async () => {
     const { projectRoot, sessionRoot } = temporaryProject();
+    expect(DECIDE_PLAYBOOK_REGISTRATION.liveness.thinking_policy).toBe("agent_ssot");
     const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
     if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const phase = worker.phases.get("deciding");
@@ -577,6 +828,7 @@ describe("PiAgentClient created-session lifecycle", () => {
       "demetri"
     );
     const client = new PiAgentClient({
+      sessionRuntime: offlineSessionRuntime(),
       catalogSessions: {
         projectId: `prj_${"d".repeat(32)}`,
         root: sessionRoot,
@@ -590,6 +842,7 @@ describe("PiAgentClient created-session lifecycle", () => {
       })
     );
     expect(lifecycleHarness.sessionOptions[0]?.tools).toEqual(expected);
+    expect(lifecycleHarness.sessionOptions[0]?.thinkingLevel).toBe("xhigh");
     expect(lifecycleHarness.sessionOptions[0]?.tools).toContain("artifact_read");
     expect(lifecycleHarness.sessionOptions[0]?.tools).toContain("web_search");
   });
@@ -821,8 +1074,84 @@ describe("PiAgentClient created-session lifecycle", () => {
     expect(lifecycleHarness.promptCalls).toBe(0);
   });
 
-  it("passes model and host thinking together with host, test seam, settings precedence", async () => {
+  it("rechecks admitted image capability before override session creation and again before prompt", async () => {
     const { projectRoot, sessionRoot } = temporaryProject();
+    const baseModel = {
+      id: "vision-model",
+      name: "Vision Model",
+      api: "openai-completions",
+      provider: "fixture-provider",
+      baseUrl: "http://127.0.0.1:1",
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    } satisfies Awaited<ReturnType<NonNullable<PiAgentClientOptions["resolveModel"]>>>;
+    const admitted = admitImageInputModel(baseModel);
+    const textOnlyModel = { ...baseModel, input: ["text" as const] };
+    const refusingClient = new PiAgentClient({
+      resolveModel: () => textOnlyModel,
+      catalogSessions: {
+        projectId: `prj_${"d".repeat(32)}`,
+        root: sessionRoot,
+      },
+    });
+
+    await expect(
+      refusingClient.runAgent({
+        ...invocation(projectRoot, "vision-refused"),
+        modelOverride: "fixture-provider/vision-model",
+        requiredImageCapability: admitted,
+      })
+    ).rejects.toMatchObject({ code: "MODEL_IMAGE_INPUT_UNSUPPORTED" });
+    const registrationOwnedRefusal = invocation(projectRoot, "vision-registration-refused");
+    await expect(
+      refusingClient.runAgent({
+        ...registrationOwnedRefusal,
+        modelOverride: "fixture-provider/vision-model",
+        registration: {
+          ...registrationOwnedRefusal.registration,
+          requires_image_input: true,
+        },
+      })
+    ).rejects.toMatchObject({ code: "MODEL_IMAGE_INPUT_UNSUPPORTED" });
+    expect(lifecycleHarness.sessionOptions).toHaveLength(0);
+    expect(lifecycleHarness.promptCalls).toBe(0);
+
+    const acceptingClient = new PiAgentClient({
+      resolveModel: () => baseModel,
+      catalogSessions: {
+        projectId: `prj_${"d".repeat(32)}`,
+        root: sessionRoot,
+      },
+    });
+    lifecycleHarness.outcomes.push("success", "success");
+    await acceptingClient.runAgent({
+      ...invocation(projectRoot, "vision-accepted"),
+      modelOverride: "fixture-provider/vision-model",
+      requiredImageCapability: admitted,
+    });
+    const registrationOwnedAcceptance = invocation(projectRoot, "vision-registration-accepted");
+    await acceptingClient.runAgent({
+      ...registrationOwnedAcceptance,
+      modelOverride: "fixture-provider/vision-model",
+      registration: {
+        ...registrationOwnedAcceptance.registration,
+        requires_image_input: true,
+      },
+    });
+    expect(lifecycleHarness.sessionOptions).toHaveLength(2);
+    expect(lifecycleHarness.promptCalls).toBe(2);
+  });
+
+  it("passes model and thinking with explicit research preset, test seam, then catalog YAML precedence", async () => {
+    const { projectRoot, sessionRoot } = temporaryProject("copied");
+    const definition = path.join(projectRoot, ".pi", "agents", "echo.md");
+    writeFileSync(
+      definition,
+      readFileSync(definition, "utf8").replace("thinking: xhigh", 'thinking: "off"')
+    );
     const fixtureModel = {
       id: "fixture-model",
       name: "Fixture Model",
@@ -836,8 +1165,14 @@ describe("PiAgentClient created-session lifecycle", () => {
       maxTokens: 4_096,
     } satisfies Awaited<ReturnType<NonNullable<PiAgentClientOptions["resolveModel"]>>>;
     const client = new PiAgentClient({
-      resolveModel: () => fixtureModel,
+      resolveModel: (requested, provider) => {
+        if (requested === "sol" && provider === "openai-codex") {
+          return { ...fixtureModel, id: FIXTURE_HEAVY_MODEL_ID, name: "sol", provider };
+        }
+        return fixtureModel;
+      },
       testOnlyThinkingLevelOverride: "low",
+      sessionRuntime: offlineSessionRuntime(),
       catalogSessions: {
         projectId: `prj_${"c".repeat(32)}`,
         root: sessionRoot,
@@ -859,23 +1194,229 @@ describe("PiAgentClient created-session lifecycle", () => {
     await client.runAgent(invocation(projectRoot, "test-thinking"));
 
     const normalClient = new PiAgentClient({
+      sessionRuntime: offlineSessionRuntime(),
       catalogSessions: {
         projectId: `prj_${"c".repeat(32)}`,
         root: sessionRoot,
       },
     });
     lifecycleHarness.outcomes.push("success");
-    await normalClient.runAgent(invocation(projectRoot, "settings-thinking"));
+    await normalClient.runAgent(invocation(projectRoot, "catalog-thinking"));
 
     expect(boundSessionModels).toEqual([{ provider: "fixture-provider", model: "fixture-model" }]);
-    expect(
-      lifecycleHarness.sessionOptions.map(({ model, thinkingLevel }) => ({ model, thinkingLevel }))
-    ).toEqual([
-      { model: fixtureModel, thinkingLevel: "medium" },
-      { model: undefined, thinkingLevel: "low" },
-      { model: undefined, thinkingLevel: undefined },
+    expect(lifecycleHarness.sessionOptions.map(({ thinkingLevel }) => thinkingLevel)).toEqual([
+      "medium",
+      "low",
+      "off",
     ]);
+    expect(lifecycleHarness.sessionOptions.slice(0, 2).map(({ model }) => model)).toEqual([
+      fixtureModel,
+      { ...fixtureModel, id: FIXTURE_HEAVY_MODEL_ID, name: "sol", provider: "openai-codex" },
+    ]);
+    expect(lifecycleHarness.sessionOptions[2]).toMatchObject({
+      model: { id: FIXTURE_HEAVY_MODEL_ID, name: "sol", provider: "openai-codex" },
+    });
   }, 60_000);
+
+  it.each(["provider_error", "aborted"] as const)(
+    "rejects %s partial output through WorkerExecutor before any success receipt and awaits teardown",
+    async (outcome) => {
+      const { projectRoot, sessionRoot } = temporaryProject();
+      const tracked = trackedResourceExtension();
+      const client = new PiAgentClient({
+        workerExtensions: [tracked.extension],
+        sessionRuntime: offlineSessionRuntime(),
+        catalogSessions: { projectId: `prj_${"e".repeat(32)}`, root: sessionRoot },
+      });
+      using artifacts = new ArtifactStore(path.join(path.dirname(projectRoot), "failed-artifacts"));
+      const worker = new WorkerExecutor(client, artifacts, { projectRoot, parallelConcurrency: 1 });
+      worker.setReceiptAuthority(TEST_RECEIPT_AUTHORITY);
+      const directive = workerDirective({
+        runId: `failed-terminal-${outcome}`,
+        modelOverride: "openai-codex/sol",
+      });
+      lifecycleHarness.outcomes.push(outcome);
+      let failure: unknown;
+      try {
+        await worker.execute(directive);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({
+        name: "AgentTerminalError",
+        stopReason: outcome === "aborted" ? "aborted" : "error",
+        partialText: lifecycleHarness.partialText,
+      });
+      expect(
+        artifacts.refFor(
+          directive.identity.run_id,
+          "planning",
+          null,
+          "agent-output",
+          directive.output_artifact.operation_id,
+          1
+        )
+      ).toBeNull();
+      expect(lifecycleHarness.promptCalls).toBe(1);
+      expect(lifecycleHarness.events).toEqual([
+        "resource_open",
+        "shutdown_quit_start",
+        "shutdown_quit_end",
+        "dispose",
+      ]);
+      expect(tracked.isOpen()).toBe(false);
+      const files = readdirSync(path.join(sessionRoot, "piper")).filter((entry) =>
+        entry.endsWith(".jsonl")
+      );
+      expect(files).toHaveLength(1);
+      const file = files[0];
+      if (file === undefined) throw new Error("failed terminal transcript absent");
+      const transcript = readFileSync(path.join(sessionRoot, "piper", file), "utf8");
+      expect(transcript).toContain("partial α");
+      expect(transcript).toContain(
+        JSON.stringify({
+          type: "text",
+          text: lifecycleHarness.partialText.slice("partial α".length),
+        })
+      );
+      expect(transcript).toContain(`"stopReason":"${outcome === "aborted" ? "aborted" : "error"}"`);
+    }
+  );
+
+  it.each(["provider_error", "aborted"] as const)(
+    "does not admit a private typed result after %s or expose private partial evidence",
+    async (outcome) => {
+      const { projectRoot } = temporaryProject("absent");
+      const readResult = vi.fn(() => "must not become successful typed text");
+      const client = new PiAgentClient();
+      lifecycleHarness.outcomes.push(outcome);
+      let failure: unknown;
+      try {
+        await client.runAgent({
+          agent: "anonymous-private-failed",
+          stateId: "query",
+          task: "offline private terminal fixture",
+          projectRoot,
+          trustProfile: "hardened-untrusted",
+          inputArtifacts: [],
+          registration: {
+            playbook_name: "knowledge-base",
+            workflow_name: "knowledge-base",
+            guidance: {
+              skill_root: ".pi/skills/knowledge-base/assets/prompts",
+              resolution: "per_agent_phase",
+            },
+            result_transport: "host_typed",
+            opening_policy: "host_private_opening",
+            model_policy: "host_private_ssot_model",
+          },
+          session: {
+            isolatedSystemPrompt: "Private fixture system prompt.",
+            tools: ["read"],
+            opening: "Private fixture opening.",
+            sensitiveOutput: true,
+            readResult,
+          },
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ name: "AgentTerminalError", partialText: "" });
+      expect(readResult).not.toHaveBeenCalled();
+      expect(String(failure)).not.toContain(lifecycleHarness.partialText);
+      expect(JSON.stringify(failure)).not.toContain("PRIVATE_PROVIDER_ERROR_SENTINEL");
+      expect(lifecycleHarness.sessionOptions[0]).toMatchObject({ thinkingLevel: undefined });
+    }
+  );
+
+  it.each(["minimal", "low", "medium", "high", "xhigh", undefined])(
+    "reads catalog thinking %s without replacing omitted settings policy",
+    async (thinking) => {
+      const { projectRoot } = temporaryProject("copied");
+      const definition = path.join(projectRoot, ".pi", "agents", "echo.md");
+      writeFileSync(
+        definition,
+        readFileSync(definition, "utf8").replace(
+          "thinking: xhigh\n",
+          thinking === undefined ? "" : `thinking: ${thinking}\n`
+        )
+      );
+      const client = new PiAgentClient({
+        sessionRuntime: offlineSessionRuntime(),
+        testOnlySessionManagerFactory: () => SessionManager.inMemory(projectRoot),
+      });
+      lifecycleHarness.outcomes.push("success");
+      await client.runAgent(invocation(projectRoot, `thinking-${thinking}`));
+      expect(lifecycleHarness.sessionOptions[0]).toMatchObject({ thinkingLevel: thinking });
+    }
+  );
+
+  it.each(["unknown", "", "42", "null"])(
+    "refuses invalid catalog thinking '%s' before session creation",
+    async (thinking) => {
+      const { projectRoot } = temporaryProject("copied");
+      const definition = path.join(projectRoot, ".pi", "agents", "echo.md");
+      writeFileSync(
+        definition,
+        readFileSync(definition, "utf8").replace("thinking: xhigh", `thinking: ${thinking}`)
+      );
+      const client = new PiAgentClient({
+        sessionRuntime: offlineSessionRuntime(),
+        testOnlySessionManagerFactory: () => SessionManager.inMemory(projectRoot),
+      });
+      await expect(client.runAgent(invocation(projectRoot, "invalid-thinking"))).rejects.toThrow(
+        /invalid catalog thinking level/u
+      );
+      expect(lifecycleHarness.sessionOptions).toHaveLength(0);
+      expect(lifecycleHarness.promptCalls).toBe(0);
+    }
+  );
+
+  it("keeps engine receipt admission bound to the directive while the invocation override selects the SDK model", async () => {
+    vi.stubEnv("PENNY_RESEARCH_DEFAULT_MODEL", "openai-codex/terra");
+    const { projectRoot, sessionRoot } = temporaryProject();
+    const env = {
+      ...process.env,
+      PENNY_STATE_ROOT: path.join(sessionRoot, "state"),
+      PENNY_RESEARCH_DEFAULT_MODEL: "openai-codex/terra",
+    };
+    initializePennyState(projectRoot, { env });
+    using service = new OrchestrationService({
+      projectRoot,
+      env,
+      modelOverride: "fixture-other/approved",
+    });
+    const identity = {
+      schema_version: 2,
+      run_id: "override-receipt",
+      session_id: "override-receipt",
+      playbook: "research",
+      engine_owner: "typescript",
+    } as const;
+    const directive = service.engine.handle({
+      schema_version: 2,
+      action: "start",
+      identity,
+      goal: "Check override receipt admission",
+      constraints: {},
+      project_root: projectRoot,
+      trust_profile: "trusted-interactive",
+    });
+    if (directive.action !== "invoke_agent") throw new Error("expected Research worker directive");
+    expect(directive.model_override).toBe("openai-codex/terra");
+    lifecycleHarness.outcomes.push("success");
+    const results = await service.workers.execute(directive);
+    const result = results[0];
+    if (result === undefined) throw new Error("worker result absent");
+    expect(lifecycleHarness.sessionOptions[0]).toMatchObject({
+      model: { provider: "fixture-other", id: "zz-fixture-override" },
+    });
+    expect(result.worker_receipt.model).toBe(directive.model_override);
+    // The factory text deliberately has no SUMMARY. Receipt admission must succeed and route
+    // that independent malformed-output condition, not reject the selected override's receipt.
+    const next = service.engine.handle({ schema_version: 2, action: "step", identity, result });
+    expect(next).toMatchObject({ action: "invoke_agent", execution_purpose: "routing_repair" });
+  });
 
   it("awaits quit shutdown before dispose after success and exact liveness error", async () => {
     const { projectRoot, sessionRoot } = temporaryProject();

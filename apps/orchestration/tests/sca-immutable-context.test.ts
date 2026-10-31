@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { sha256 } from "../src/canonical-json.js";
+import { sha256 } from "../dist/canonical-json.js";
 import {
   ScaImmutableContextError,
   buildScaImmutableAnalysisContextV1,
   validateScaImmutableAnalysisContextV1,
-} from "../src/sca/immutable-context.js";
+} from "../dist/sca/immutable-context.js";
 
 const SOURCE = [
   "export function handler(input: string) {",

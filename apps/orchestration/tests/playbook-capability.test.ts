@@ -10,18 +10,18 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
-import type { RunContext } from "../src/context.js";
+import type { Confidence, Directive, JsonValue } from "../dist/contracts.js";
+import type { RunContext } from "../dist/context.js";
 import {
   hasExternalStartOperationGroup,
   hasFanAggregate,
   hasGenericResponsePolicy,
   hasHostReviewedGateValidation,
   hasStateAwareRepair,
-  type PlaybookCoreV1,
-  type PlaybookV1,
-} from "../src/playbooks/playbook.js";
-import { ResearchPlaybook } from "../src/playbooks/research.js";
+  type PlaybookCore,
+  type Playbook,
+} from "../dist/playbooks/playbook.js";
+import { ResearchPlaybook } from "../dist/playbooks/research.js";
 
 function terminal(met: boolean): Directive {
   return {
@@ -43,7 +43,7 @@ function terminal(met: boolean): Directive {
 }
 
 /** A playbook implementing the mandatory surface and nothing else. */
-class CoreOnlyPlaybook implements PlaybookCoreV1 {
+class CoreOnlyPlaybook implements PlaybookCore {
   initialize(): Directive {
     return terminal(true);
   }
@@ -76,14 +76,14 @@ class AggregatingCorePlaybook extends CoreOnlyPlaybook {
 
 describe("W1 capability probing", () => {
   it("detects the reference playbook's actual optional capabilities", () => {
-    const research: PlaybookV1 = new ResearchPlaybook();
+    const research: Playbook = new ResearchPlaybook();
     expect(hasFanAggregate(research)).toBe(true);
     expect(hasStateAwareRepair(research)).toBe(true);
     expect(hasGenericResponsePolicy(research)).toBe(false);
   });
 
   it("detects optional-capability absence on a core-only playbook", () => {
-    const core: PlaybookV1 = new CoreOnlyPlaybook();
+    const core: Playbook = new CoreOnlyPlaybook();
     expect(hasFanAggregate(core)).toBe(false);
     expect(hasStateAwareRepair(core)).toBe(false);
     expect(hasExternalStartOperationGroup(core)).toBe(false);
@@ -93,7 +93,7 @@ describe("W1 capability probing", () => {
   it("probes structurally, never by playbook identity", () => {
     // A bare object with the right shape must satisfy the probe: the engine asks
     // "can you aggregate?", not "are you research?".
-    const duck: PlaybookV1 = new AggregatingCorePlaybook();
+    const duck: Playbook = new AggregatingCorePlaybook();
     expect(hasFanAggregate(duck)).toBe(true);
     expect(hasStateAwareRepair(duck)).toBe(false);
   });

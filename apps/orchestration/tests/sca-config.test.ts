@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { ContractValidationError } from "../dist/contracts.js";
 import {
   scaPhaseRoleMapSha256,
   scaPolicySha256,
@@ -16,14 +17,14 @@ import {
   type ScaPolicyV1,
   type ScaProfileV1,
   type ScaTargetV1,
-} from "../src/sca/config.js";
+} from "../dist/sca/config.js";
 import {
   SCA_MODEL_OVERRIDE,
   scaModelOverride,
   scaModelPolicySha256,
   validateScaModelPolicy,
   validateScaResolvedModel,
-} from "../src/sca/model-policy.js";
+} from "../dist/sca/model-policy.js";
 import { requireValue } from "./helpers/narrowing.js";
 
 const FIXTURE_ROOT = new URL("./fixtures/sca/", import.meta.url);
@@ -45,6 +46,16 @@ function canonicalFixtures(): {
     policy: validateScaPolicy(fixture("policy.json")),
     target: validateScaTarget(fixture("target.json")),
   };
+}
+
+function schemaIssues(validate: () => unknown): readonly string[] {
+  try {
+    validate();
+  } catch (error) {
+    if (error instanceof ContractValidationError) return error.issues;
+    throw error;
+  }
+  throw new Error("expected malformed SCA input to fail schema validation");
 }
 
 function profileWithFirstRootRef(profile: ScaProfileV1, ref: string): unknown {
@@ -153,9 +164,9 @@ describe("S-00-T2 SCA configuration boundary", () => {
       target_id: "caller-public-target-v2",
       source_visibility: "public",
     });
-    expect(() => validateScaProfile({ ...values.profile, profile_id: "x".repeat(129) })).toThrow(
-      /128|length/u
-    );
+    expect(
+      schemaIssues(() => validateScaProfile({ ...values.profile, profile_id: "x".repeat(129) }))
+    ).toContain("/profile_id: maxLength constraint failed");
   });
 
   it("produces stable canonical SHA-256 values for every accepted fixture", () => {
@@ -165,7 +176,7 @@ describe("S-00-T2 SCA configuration boundary", () => {
       "b27de9d3106dd69bdf8a8bb191394eb0d8a872d89719d9179e76ab4970f88c2a"
     );
     expect(scaProfileSha256(values.profile)).toBe(
-      "f43c4a65bbb7bd1dc76f39b1ac84718d7d878e49be15db274219b5495e920b1e"
+      "8f5b6c721afb1f96128d0f58468cfdf41e9851b1384d0548b9fc4481e5ebf958"
     );
     expect(scaPolicySha256(values.policy)).toBe(
       "5638449989b76b8715370637251f3c6255281ac229cae75d58671b0d806c091d"
@@ -279,17 +290,19 @@ describe("S-00-T2 SCA configuration boundary", () => {
         model: "deepseek-v4.1-flash:cloud",
       })
     ).toEqual({ provider: "ollama", model: "deepseek-v4.1-flash:cloud" });
-    expect(() =>
-      validateScaModelPolicy({
-        ...modelPolicy,
-        aliases: [
-          {
-            ...alias,
-            resolved: { provider: "ollama", model: "different-model" },
-          },
-        ],
-      })
-    ).toThrow(/constant/u);
+    expect(
+      schemaIssues(() =>
+        validateScaModelPolicy({
+          ...modelPolicy,
+          aliases: [
+            {
+              ...alias,
+              resolved: { provider: "ollama", model: "different-model" },
+            },
+          ],
+        })
+      )
+    ).toContain("/aliases/resolved/model: const constraint failed");
     expect(() =>
       validateScaResolvedModel(modelPolicy, { provider: "other", model: alias.resolved.model })
     ).toThrow(/resolved model/u);
@@ -311,31 +324,35 @@ describe("S-00-T2 SCA configuration boundary", () => {
   it("rejects unsafe or broadened external destinations", () => {
     const { policy } = canonicalFixtures();
 
-    expect(() =>
-      validateScaPolicy({
-        ...policy,
-        destination: {
-          ...policy.destination,
-          osv_api: {
-            ...policy.destination.osv_api,
-            origin: "http://169.254.169.254/latest/meta-data",
+    expect(
+      schemaIssues(() =>
+        validateScaPolicy({
+          ...policy,
+          destination: {
+            ...policy.destination,
+            osv_api: {
+              ...policy.destination.osv_api,
+              origin: "http://169.254.169.254/latest/meta-data",
+            },
           },
-        },
-      })
-    ).toThrow(/constant/u);
-    expect(() =>
-      validateScaPolicy({
-        ...policy,
-        destination: {
-          ...policy.destination,
-          research_web: {
-            ...policy.destination.research_web,
-            status: "enabled",
-            allowed_origins: ["https://example.invalid"],
+        })
+      )
+    ).toContain("/destination/osv_api/origin: const constraint failed");
+    expect(
+      schemaIssues(() =>
+        validateScaPolicy({
+          ...policy,
+          destination: {
+            ...policy.destination,
+            research_web: {
+              ...policy.destination.research_web,
+              status: "enabled",
+              allowed_origins: ["https://example.invalid"],
+            },
           },
-        },
-      })
-    ).toThrow();
+        })
+      )
+    ).toContain("/destination/research_web/status: const constraint failed");
   });
 
   it("rejects enabled external capabilities without exact qualified runtime bindings", () => {
@@ -349,24 +366,30 @@ describe("S-00-T2 SCA configuration boundary", () => {
   it("rejects oversized refs and quota or numeric range violations", () => {
     const { profile } = canonicalFixtures();
 
-    expect(() =>
-      validateScaProfile(profileWithFirstRootRef(profile, `sca-boundary/${"x".repeat(513)}`))
-    ).toThrow(/characters|bytes|project-relative/u);
-    expect(() =>
-      validateScaProfile({
-        ...profile,
-        source_quotas: { ...profile.source_quotas, files: 100_001 },
-      })
-    ).toThrow(/100000|maximum/u);
-    expect(() =>
-      validateScaProfile({
-        ...profile,
-        jobs: {
-          ...profile.jobs,
-          cpg_query: { ...profile.jobs.cpg_query, attempts: 0 },
-        },
-      })
-    ).toThrow(/>= 1/u);
+    expect(
+      schemaIssues(() =>
+        validateScaProfile(profileWithFirstRootRef(profile, `sca-boundary/${"x".repeat(513)}`))
+      )
+    ).toContain("/roots/project_relative_ref: maxLength constraint failed");
+    expect(
+      schemaIssues(() =>
+        validateScaProfile({
+          ...profile,
+          source_quotas: { ...profile.source_quotas, files: 100_001 },
+        })
+      )
+    ).toContain("/source_quotas/files: maximum constraint failed");
+    expect(
+      schemaIssues(() =>
+        validateScaProfile({
+          ...profile,
+          jobs: {
+            ...profile.jobs,
+            cpg_query: { ...profile.jobs.cpg_query, attempts: 0 },
+          },
+        })
+      )
+    ).toContain("/jobs/cpg_query/attempts: minimum constraint failed");
   });
 
   it("rejects target snapshot substitution and unsafe target refs", () => {

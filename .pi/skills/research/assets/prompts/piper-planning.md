@@ -4,7 +4,7 @@
 
 Decompose the research query into focused, independently researchable sub-queries that collectively cover the query. The engine fans out one researcher per sub-query, so decomposition quality determines the run's leverage.
 
-Declare the **mode** unless the caller fixed it: `quick` (narrow question, no critique passes), `standard` (sub-query fan plus validation), or `deep` (plan and report critique). These are rigor/budget presets; choose by what the query needs, not keywords.
+Declare the **mode** unless the caller fixed it: `quick` (narrow question, no critique passes), `standard` (sub-query fan plus validation), or `deep` (plan and report critique). These select rigor/workflow, not finite iteration or correction budgets; choose by what the query needs, not keywords. Derive values from actual operator policy, not test constants or model guesses.
 
 ## Exact artifact handoff
 

@@ -13,11 +13,11 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Checkpointer } from "../src/checkpointer.js";
-import { RunContext } from "../src/context.js";
-import { OrchestrationRequestSchema, validateContract } from "../src/contracts.js";
-import { createPrivateSessionResourceLoader } from "../src/model-client.js";
-import { parsePromotionReceipt } from "../src/kb/approval-receipts.js";
+import { Checkpointer } from "../dist/checkpointer.js";
+import { RunContext } from "../dist/context.js";
+import { OrchestrationRequestSchema, validateContract } from "../dist/contracts.js";
+import { createPrivateSessionResourceLoader } from "../dist/model-client.js";
+import { parsePromotionReceipt } from "../dist/kb/approval-receipts.js";
 import {
   KbActionSchema,
   canonicalJson,
@@ -26,23 +26,23 @@ import {
   validateKbContract,
   type KbPolicy,
   type QueryKbRequest,
-} from "../src/kb/contracts.js";
+} from "../dist/kb/contracts.js";
 import {
   approveIngest,
   createTestOnlyIngestBodyRunner,
   ingestKb,
   type IngestSource,
   type PendingIngest,
-} from "../src/kb/ingest.js";
+} from "../dist/kb/ingest.js";
 import {
   ParentDeliveryGrantStore,
   decideParentDelivery,
   mintParentDeliveryGrant,
   validateQueryRequest,
-} from "../src/kb/parent-delivery.js";
-import { materializeRunInput, privateInputRoot, readRunInput } from "../src/private-inputs.js";
-import { RunArtifactStore } from "../src/kb/run-artifacts.js";
-import { initKb } from "../src/kb/workflows.js";
+} from "../dist/kb/parent-delivery.js";
+import { materializeRunInput, privateInputRoot, readRunInput } from "../dist/private-inputs.js";
+import { RunArtifactStore } from "../dist/kb/run-artifacts.js";
+import { initKb } from "../dist/kb/workflows.js";
 import { kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 
 const PROFILE = "kbp_privacy_matrix";

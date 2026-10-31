@@ -20,8 +20,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/artifact-store.js";
-import { Checkpointer } from "../src/checkpointer.js";
+import { ArtifactStore } from "../dist/artifact-store.js";
+import { Checkpointer } from "../dist/checkpointer.js";
 import {
   STATE_MIGRATION_FINALIZED_MARKER,
   applyStateMigration,
@@ -29,7 +29,7 @@ import {
   finalizeStateMigration,
   resolvePennyProjectState,
   verifyStateMigration,
-} from "../src/state/index.js";
+} from "../dist/state/index.js";
 
 const sqlite = process.getBuiltinModule("node:sqlite");
 const roots: string[] = [];
@@ -59,6 +59,7 @@ function fixture(root: string): {
     "apps/orchestration/tests/state-migration.test.ts:52"
   ).DatabaseSync)(database);
   sourceDatabase.exec(`
+    DROP TABLE host_operation_calls;
     DROP TABLE child_workflow_calls;
     DROP TABLE store_metadata;
     PRAGMA user_version=9;
@@ -216,7 +217,7 @@ describe("explicit state migration apply/verify/finalize", () => {
       "migrated child-workflow call count"
     );
     targetDatabase.close();
-    expect(requireNumber(version["user_version"], "migrated user_version")).toBe(12);
+    expect(requireNumber(version["user_version"], "migrated user_version")).toBe(13);
     expect(requireString(binding["project_id"], "migrated project_id")).toBe(
       plan.target_project_id
     );
@@ -360,6 +361,7 @@ describe("explicit state migration apply/verify/finalize", () => {
       sourceDatabase.exec(`
         PRAGMA journal_mode=WAL;
         PRAGMA wal_autocheckpoint=0;
+        DROP TABLE host_operation_calls;
         DROP TABLE child_workflow_calls;
         DROP TABLE store_metadata;
         PRAGMA user_version=9;

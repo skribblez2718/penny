@@ -8,7 +8,10 @@ argument-hint: "[scope, e.g. 'docs only' or '.pi/agents'] [additional details...
 Audit the current Penny working tree against its present purpose and governing architecture. Examine what the system actually says and does, classify every in-scope component, and recommend only changes that improve the user outcome without regressing a capability Penny already provides.
 
 Scope override (optional): `$1`
-Additional details (optional): `${@:2}`
+
+**Additional details (optional):**
+
+${@:2}
 
 Both are optional. If `$1` is clearly a repository path or a named audit surface, treat it as a scope override. If it is prose, context, emphasis, or another requirement, treat all arguments as additional details and audit the full harness. Quote multi-word scope values when invoking the template.
 

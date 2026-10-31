@@ -20,6 +20,13 @@ const GITLEAKS_PIN = {
 
 const ACTION_PINS = new Map([
   [
+    "actions/setup-node",
+    {
+      sha: "820762786026740c76f36085b0efc47a31fe5020",
+      version: "v7.0.0",
+    },
+  ],
+  [
     "actions/checkout",
     {
       sha: "3d3c42e5aac5ba805825da76410c181273ba90b1",
@@ -44,6 +51,7 @@ const ACTION_PINS = new Map([
 
 const REQUIRED_ROOT_COMMANDS = [
   "bun install --frozen-lockfile",
+  "node scripts/setup/preflight.mjs node",
   "bun run format:check",
   "bun run lint",
   "bun run typecheck",
@@ -129,6 +137,9 @@ for (const [action, count] of pinCounts) {
 }
 
 const typescript = readWorkflow(TYPESCRIPT_WORKFLOW);
+if (!typescript.includes('node-version-file: ".nvmrc"')) {
+  report(`${TYPESCRIPT_WORKFLOW}: Node must use the checked-in .nvmrc runtime`);
+}
 
 if (!/^on:\n {2}pull_request:\n {2}push:\n/mu.test(typescript)) {
   report(`${TYPESCRIPT_WORKFLOW}: pull_request and push must both be unrestricted triggers`);

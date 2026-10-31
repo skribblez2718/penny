@@ -324,6 +324,34 @@ describe("reconstructResumeChain (resume bug regression)", () => {
     expect(chain[1].goal).toBe("build {previous}"); // untouched
   });
 
+  it("retains explicit V2 assurance when resuming a failed step with a clarification", () => {
+    const policy = {
+      schema_version: 2,
+      request: { schema_version: 1 },
+      specification_assurance: "reviewed_definition",
+    };
+    const resumed = reconstructResumeChain(
+      {
+        steps: [
+          {
+            index: 0,
+            skill_name: "plan",
+            goal: "Use {previous}",
+            session_id: "strict-plan",
+            status: "failed",
+            constraints: policy,
+          },
+        ],
+      },
+      { 0: { constraints: { user_response: "The exact scope is unchanged." } } }
+    );
+    expect(resumed.chain[0]?.constraints).toEqual({
+      ...policy,
+      user_response: "The exact scope is unchanged.",
+    });
+    expect(resumed.chain[0]?.session_id).toBe("strict-plan");
+  });
+
   it("skips completed steps and returns them for {previous} handoff", () => {
     const cp = {
       steps: [

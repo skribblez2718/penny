@@ -32,6 +32,8 @@ The draft also contains a summary; strengths tied to criterion and evidence inde
 
 ## Host sealing and lineage
 
+A host `SealDiagnosticV1` is selected only for the current product epoch and binds the rejected draft, predecessor diagnostic (if any), and actual operator correction policy. Every rejection persists an exact diagnostic before another attempt or incomplete terminalization; no finite allowance is inferred when unspecified. A successfully sealed replacement receives fresh reviews in this skill’s native order; historical reports remain regression context, not approvals. Legacy feedback remains historical evidence, not a new correction allowance.
+
 The host transforms a valid draft into canonical `penny.assessment.v2`. The semantic core binds the canonical request and request digest plus exact source refs/content digests for:
 
 1. admitted request;
@@ -49,7 +51,13 @@ Closed engine-owned routes are:
 - `analysis_gap` or `evidence_gap` → Annie → Carren → host reseal → Vera;
 - `assessment_product_gap` → Carren → host reseal → Vera.
 
-There is no Carren approval receipt. Structural malformed routing uses the shared bounded routing-repair path and remains one event-type-scoped accepted execution group.
+Before review, the host re-runs native canonical-byte/digest, draft, exact lineage/custody and effect-graph shape validators. Only then does it append canonical `HOST_MECHANICAL_CHECKS:{schema_version:1,product_ref,source_refs,checks,scope:'host_mechanical_only_not_semantic_or_effect_absence'}` to the verifier task. The signed assignment task hash binds this evidence; no extra storage or model-computed hashes are involved. Host validator failure ends incomplete without an author loop. Recovery verifies and retains the frozen task.
+
+`UNVERIFIABLE/verification_incomplete/none` records missing verification support, findings and evidence limitations, and ends durably incomplete without author repair, positive validity receipt or admission. It differs from a valid inconclusive assessment. Unknown effects alone are not a product defect or verification failure.
+
+There is no Carren approval receipt. Review routing opts into `preserve_source_summary_v1`: the complete original SUMMARY is the closed judgment, and correction cannot invent a missing judgment or change any detail or confidence. There is no new review core wire. Unpreservable originals end incomplete before correction dispatch.
+
+Registration opts into `exact_fingerprint_v1`. For `assessment_product_gap`, the host fingerprints the validated canonical request, parsed authored draft and failed structured details, excluding `strategy_delta`, lineage, IDs, revisions and framing SUMMARY. This measurement is available only while all selected same-run Annie analyses are host-verified byte-identical: the unstructured prose has no safe semantic projection separating substance from embedded transport metadata. A new ref with identical bytes does not create progress. Any analysis byte change disables measurement for the run, including later product gaps, so an old fingerprint cannot falsely stall a changed basis. `analysis_gap` and `evidence_gap` always return `null` (unmeasured). Measurable exact recurrence after repair ends `repair_stalled` with current reports and best product retained. Neither `null` nor changed content proves improvement; no prose classifier or time/count cap is added.
 
 ## Validity, integrity, and completion
 
@@ -61,4 +69,4 @@ CompletionGate v2 re-reads the exact terminal graph and rejects stale, wrong-run
 
 ## Consequence boundary
 
-Ordinary workflow phases omit `allowed_tools`, so each assigned catalog agent's exact YAML tool list is active. `artifact_read` is mandatory for exact workflow predecessors, and no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant and permitted by caller/task and this closed assessment boundary. Ordinary permitted work has no model-turn, phase-admission, tool-call, external-call, or total elapsed-work quota; calibrated renewable inactivity leases stop stalled workers, independent host-operation deadlines remain an upper bound, and routing-only repair remains separately count-bounded. Those ceilings do not authorize external verification, numeric scoring, actions, writes, tests, changes, approval, executable registration or model discovery. Policy is not evidence: without an admitted trace or exact prevention-control evidence, effect status remains unknown.
+Ordinary workflow phases omit `allowed_tools`, so each assigned catalog agent's exact YAML tool list is active. `artifact_read` is mandatory for exact workflow predecessors, and no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant and permitted by caller/task and this closed assessment boundary. Ordinary permitted work has no invented model-turn, phase-admission, tool-call, external-call, or total elapsed-work quota; actual operator limits still apply; calibrated renewable inactivity leases stop stalled workers, host operations use independent renewable inactivity leases, and routing-only repair remains separate, governed by actual operator policy and measured-error/inactivity controls. Those controls do not authorize external verification, numeric scoring, actions, writes, tests, changes, approval, executable registration or model discovery. Policy is not evidence: without an admitted trace or exact prevention-control evidence, effect status remains unknown.

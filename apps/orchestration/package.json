@@ -7,15 +7,247 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./cli": "./dist/cli.js",
-    "./source": "./src/index.ts"
+    "./skill-invocation-docs": {
+      "types": "./dist/skill-invocation-docs.d.ts",
+      "default": "./dist/skill-invocation-docs.js"
+    },
+    "./artifact-store": {
+      "types": "./dist/artifact-store.d.ts",
+      "default": "./dist/artifact-store.js"
+    },
+    "./browser-policy-contract": {
+      "types": "./dist/browser-policy-contract.d.ts",
+      "default": "./dist/browser-policy-contract.js"
+    },
+    "./canonical-json": {
+      "types": "./dist/canonical-json.d.ts",
+      "default": "./dist/canonical-json.js"
+    },
+    "./checkpointer": {
+      "types": "./dist/checkpointer.d.ts",
+      "default": "./dist/checkpointer.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts.d.ts",
+      "default": "./dist/contracts.js"
+    },
+    "./host-operations/contracts": {
+      "types": "./dist/host-operations/contracts.d.ts",
+      "default": "./dist/host-operations/contracts.js"
+    },
+    "./host-operations/owner": {
+      "types": "./dist/host-operations/owner.d.ts",
+      "default": "./dist/host-operations/owner.js"
+    },
+    "./host-operations/result-cache": {
+      "types": "./dist/host-operations/result-cache.d.ts",
+      "default": "./dist/host-operations/result-cache.js"
+    },
+    "./model-client": {
+      "types": "./dist/model-client.d.ts",
+      "default": "./dist/model-client.js"
+    },
+    "./playbooks/registry": {
+      "types": "./dist/playbooks/registry.d.ts",
+      "default": "./dist/playbooks/registry.js"
+    },
+    "./playbooks/runtime-registration-digest": {
+      "types": "./dist/playbooks/runtime-registration-digest.d.ts",
+      "default": "./dist/playbooks/runtime-registration-digest.js"
+    },
+    "./sca/activation-owner": {
+      "types": "./dist/sca/activation-owner.d.ts",
+      "default": "./dist/sca/activation-owner.js"
+    },
+    "./sca/active-compliance": {
+      "types": "./dist/sca/active-compliance.d.ts",
+      "default": "./dist/sca/active-compliance.js"
+    },
+    "./sca/broker-contracts": {
+      "types": "./dist/sca/broker-contracts.d.ts",
+      "default": "./dist/sca/broker-contracts.js"
+    },
+    "./sca/human-authorization": {
+      "types": "./dist/sca/human-authorization.d.ts",
+      "default": "./dist/sca/human-authorization.js"
+    },
+    "./sca/ordinary-artifacts": {
+      "types": "./dist/sca/ordinary-artifacts.d.ts",
+      "default": "./dist/sca/ordinary-artifacts.js"
+    },
+    "./sca/ordinary-contracts": {
+      "types": "./dist/sca/ordinary-contracts.d.ts",
+      "default": "./dist/sca/ordinary-contracts.js"
+    },
+    "./sca/ordinary-host": {
+      "types": "./dist/sca/ordinary-host.d.ts",
+      "default": "./dist/sca/ordinary-host.js"
+    },
+    "./sca/p01-contracts": {
+      "types": "./dist/sca/p01-contracts.d.ts",
+      "default": "./dist/sca/p01-contracts.js"
+    },
+    "./sca/p01-policy-contracts": {
+      "types": "./dist/sca/p01-policy-contracts.d.ts",
+      "default": "./dist/sca/p01-policy-contracts.js"
+    },
+    "./sca/p02-activation-host": {
+      "types": "./dist/sca/p02-activation-host.d.ts",
+      "default": "./dist/sca/p02-activation-host.js"
+    },
+    "./sca/p02-admission": {
+      "types": "./dist/sca/p02-admission.d.ts",
+      "default": "./dist/sca/p02-admission.js"
+    },
+    "./sca/p02-contracts": {
+      "types": "./dist/sca/p02-contracts.d.ts",
+      "default": "./dist/sca/p02-contracts.js"
+    },
+    "./sca/p02-playbook": {
+      "types": "./dist/sca/p02-playbook.d.ts",
+      "default": "./dist/sca/p02-playbook.js"
+    },
+    "./sca/p03-activation-host": {
+      "types": "./dist/sca/p03-activation-host.d.ts",
+      "default": "./dist/sca/p03-activation-host.js"
+    },
+    "./sca/p03-admission": {
+      "types": "./dist/sca/p03-admission.d.ts",
+      "default": "./dist/sca/p03-admission.js"
+    },
+    "./sca/p03-bootstrap-contracts": {
+      "types": "./dist/sca/p03-bootstrap-contracts.d.ts",
+      "default": "./dist/sca/p03-bootstrap-contracts.js"
+    },
+    "./sca/p03-bootstrap-verification": {
+      "types": "./dist/sca/p03-bootstrap-verification.d.ts",
+      "default": "./dist/sca/p03-bootstrap-verification.js"
+    },
+    "./sca/p03-contracts": {
+      "types": "./dist/sca/p03-contracts.d.ts",
+      "default": "./dist/sca/p03-contracts.js"
+    },
+    "./sca/p03-initial-authorization": {
+      "types": "./dist/sca/p03-initial-authorization.d.ts",
+      "default": "./dist/sca/p03-initial-authorization.js"
+    },
+    "./sca/p03-initial-qualification": {
+      "types": "./dist/sca/p03-initial-qualification.d.ts",
+      "default": "./dist/sca/p03-initial-qualification.js"
+    },
+    "./sca/p03-p01-runtime-root": {
+      "types": "./dist/sca/p03-p01-runtime-root.d.ts",
+      "default": "./dist/sca/p03-p01-runtime-root.js"
+    },
+    "./sca/p03-p02-qualification-guard": {
+      "types": "./dist/sca/p03-p02-qualification-guard.d.ts",
+      "default": "./dist/sca/p03-p02-qualification-guard.js"
+    },
+    "./sca/p03-playbook": {
+      "types": "./dist/sca/p03-playbook.d.ts",
+      "default": "./dist/sca/p03-playbook.js"
+    },
+    "./sca/p03-qualification": {
+      "types": "./dist/sca/p03-qualification.d.ts",
+      "default": "./dist/sca/p03-qualification.js"
+    },
+    "./sca/p10-contracts": {
+      "types": "./dist/sca/p10-contracts.d.ts",
+      "default": "./dist/sca/p10-contracts.js"
+    },
+    "./sca/p10-native-tests": {
+      "types": "./dist/sca/p10-native-tests.d.ts",
+      "default": "./dist/sca/p10-native-tests.js"
+    },
+    "./sca/p10-production-host": {
+      "types": "./dist/sca/p10-production-host.d.ts",
+      "default": "./dist/sca/p10-production-host.js"
+    },
+    "./sca/p10-validation": {
+      "types": "./dist/sca/p10-validation.d.ts",
+      "default": "./dist/sca/p10-validation.js"
+    },
+    "./sca/p11-redaction": {
+      "types": "./dist/sca/p11-redaction.d.ts",
+      "default": "./dist/sca/p11-redaction.js"
+    },
+    "./sca/phase-activation": {
+      "types": "./dist/sca/phase-activation.d.ts",
+      "default": "./dist/sca/phase-activation.js"
+    },
+    "./sca/qualification-activation-contracts": {
+      "types": "./dist/sca/qualification-activation-contracts.d.ts",
+      "default": "./dist/sca/qualification-activation-contracts.js"
+    },
+    "./sca/qualification-activation": {
+      "types": "./dist/sca/qualification-activation.d.ts",
+      "default": "./dist/sca/qualification-activation.js"
+    },
+    "./sca/qualification-gate-contracts": {
+      "types": "./dist/sca/qualification-gate-contracts.d.ts",
+      "default": "./dist/sca/qualification-gate-contracts.js"
+    },
+    "./sca/static-normalization": {
+      "types": "./dist/sca/static-normalization.d.ts",
+      "default": "./dist/sca/static-normalization.js"
+    },
+    "./sca/stronger-evidence": {
+      "types": "./dist/sca/stronger-evidence.d.ts",
+      "default": "./dist/sca/stronger-evidence.js"
+    },
+    "./service": {
+      "types": "./dist/service.d.ts",
+      "default": "./dist/service.js"
+    },
+    "./skill-contracts/common": {
+      "types": "./dist/skill-contracts/common.d.ts",
+      "default": "./dist/skill-contracts/common.js"
+    },
+    "./state/paths": {
+      "types": "./dist/state/paths.d.ts",
+      "default": "./dist/state/paths.js"
+    },
+    "./state/sqlite-runtime": {
+      "types": "./dist/state/sqlite-runtime.d.ts",
+      "default": "./dist/state/sqlite-runtime.js"
+    },
+    "./videogen/bounds": {
+      "types": "./dist/videogen/bounds.d.ts",
+      "default": "./dist/videogen/bounds.js"
+    },
+    "./videogen/execution-state": {
+      "types": "./dist/videogen/execution-state.d.ts",
+      "default": "./dist/videogen/execution-state.js"
+    },
+    "./videogen/human-review-viewer": {
+      "types": "./dist/videogen/human-review-viewer.d.ts",
+      "default": "./dist/videogen/human-review-viewer.js"
+    },
+    "./videogen/human-review": {
+      "types": "./dist/videogen/human-review.d.ts",
+      "default": "./dist/videogen/human-review.js"
+    },
+    "./videogen/stage-contracts": {
+      "types": "./dist/videogen/stage-contracts.d.ts",
+      "default": "./dist/videogen/stage-contracts.js"
+    },
+    "./videogen/voice-json": {
+      "types": "./dist/videogen/voice-json.d.ts",
+      "default": "./dist/videogen/voice-json.js"
+    }
   },
   "bin": {
     "penny-orchestration": "./dist/cli.js",
     "penny-kb-gate": "./dist/kb-gate-cli.js",
+    "penny-sca-snapshot": "./dist/sca-snapshot-cli.js",
     "penny-state": "./dist/state-cli.js"
   },
   "files": [
@@ -23,13 +255,19 @@
     "src"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "typecheck": "bun run typecheck:source && bun run typecheck:tests && bun run typecheck:smoke",
+    "build": "node scripts/build.mjs",
+    "test:build": "node --test scripts/build.test.mjs",
+    "check:shipping": "node scripts/shipping-imports.mjs",
+    "typecheck": "bun run check:shipping && bun run typecheck:source && bun run typecheck:tests && bun run typecheck:smoke",
     "typecheck:source": "tsc -p tsconfig.typecheck.json",
     "typecheck:tests": "tsc -p tsconfig.test.json",
-    "typecheck:smoke": "tsc -p tsconfig.kb-model-smoke.json",
+    "typecheck:smoke": "bun run typecheck:kb-model-smoke && bun run typecheck:sca-p04-model-smoke && bun run typecheck:sca-p05-model-smoke && bun run typecheck:sca-p06-model-smoke && bun run typecheck:imagegen-smoke && bun run typecheck:sca-ordinary-deepseek && bun run typecheck:ordinary-skills-live",
+    "typecheck:sca-p04-model-smoke": "tsc -p tsconfig.sca-p04-model-smoke.json",
+    "typecheck:sca-p05-model-smoke": "tsc -p tsconfig.sca-p05-model-smoke.json",
+    "typecheck:sca-p06-model-smoke": "tsc -p tsconfig.sca-p06-model-smoke.json",
+    "typecheck:imagegen-smoke": "tsc -p tsconfig.imagegen-smoke.json",
     "test": "bun run build && node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
-    "test:unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
+    "test:unit": "bun run test:build && bun run build && node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:node-unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:pi-compat": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/artifact-provider-bundled-node.test.ts tests/kb-loader-policy.test.ts tests/model-client-lifecycle.test.ts tests/package-surface.test.ts tests/ssot-session.test.ts tests/worker-tool-surface-matrix.test.ts",
     "test:runner": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
@@ -37,9 +275,12 @@
     "test:integration": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts 'tests/**/*.integration.test.ts'",
     "test:parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts",
     "test:skill-conformance": "node scripts/provider-free-skill-conformance.mjs",
+    "typecheck:ordinary-skills-live": "tsc -p tsconfig.ordinary-skills-live.json",
+    "test:ordinary-skills-live": "test \"${PENNY_ORDINARY_SKILLS_LIVE:-}\" = \"1\" || { echo \"Set PENNY_ORDINARY_SKILLS_LIVE=1 to authorize the bounded synthetic ordinary-skills production cohort.\" >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.ordinary-skills-live.config.ts",
+    "test:ordinary-skills-live:aggregate": "if test \"${PENNY_ORDINARY_SKILLS_LIVE:-}\" = \"1\"; then bun run test:ordinary-skills-live; else echo \"Ordinary skills live qualification NOT RUN; set PENNY_ORDINARY_SKILLS_LIVE=1 for the bounded synthetic cohort.\"; fi",
     "generate:skill-invocations": "bun scripts/generate-skill-invocations.mjs --write",
     "check:skill-invocations": "bun scripts/generate-skill-invocations.mjs --check",
-    "test:all": "bun run typecheck && bun run test && bun run test:kb-model-smoke:aggregate && bun run test:child-workflow-model-smoke:aggregate",
+    "test:all": "bun run test:build && bun run typecheck && bun run test && bun run test:kb-model-smoke:aggregate && bun run test:child-workflow-model-smoke:aggregate && bun run test:sca-p04-model-smoke:aggregate && bun run test:sca-p05-model-smoke:aggregate && bun run test:sca-p06-model-smoke:aggregate && bun run test:imagegen-live:aggregate && bun run test:imagegen-model-smoke:aggregate && bun run test:imagegen-recovery-live:aggregate && bun run test:imagegen-security-inspection:aggregate && bun run test:imagegen-canary:aggregate && bun run test:videogen-media-cpu:aggregate && bun run test:sca-ordinary-deepseek:aggregate && bun run test:videogen-native-cpu:aggregate && bun run test:ordinary-skills-live:aggregate",
     "test:kb-core": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-*.test.ts",
     "test:kb-policy": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-policy.test.ts tests/kb-model-policy.test.ts tests/kb-profile-registry.test.ts tests/kb-profile-grants.test.ts",
     "test:kb-generations": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-generations.test.ts tests/kb-generation-carryforward.test.ts",
@@ -55,17 +296,41 @@
     "test:kb-e2e": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-e2e.test.ts",
     "test:kb-privacy": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-privacy.test.ts tests/safety.test.ts",
     "test:kb-model-smoke-contract": "env -u PENNY_KB_MODEL_SMOKE node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts smoke/kb-model-smoke-contract.test.ts",
-    "typecheck:kb-model-smoke": "bun run typecheck:smoke",
+    "typecheck:kb-model-smoke": "tsc -p tsconfig.kb-model-smoke.json",
     "test:kb-model-smoke:aggregate": "if test \"${PENNY_KB_MODEL_SMOKE:-}\" = \"1\"; then bun run test:kb-model-smoke; else echo 'Skipping opt-in live KB model smoke; set PENNY_KB_MODEL_SMOKE=1 to authorize it.'; fi",
     "test:kb-model-smoke": "test \"${PENNY_KB_MODEL_SMOKE:-}\" = \"1\" || { echo 'Set PENNY_KB_MODEL_SMOKE=1 to run the one predeclared live KB model cohort.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.kb-model-smoke.config.ts",
     "test:child-workflow-model-smoke:aggregate": "if test \"${PENNY_CHILD_WORKFLOW_MODEL_SMOKE:-}\" = \"1\"; then bun run test:child-workflow-model-smoke; else echo 'Skipping opt-in live child-workflow model smoke; set PENNY_CHILD_WORKFLOW_MODEL_SMOKE=1 to authorize it.'; fi",
     "test:child-workflow-model-smoke": "test \"${PENNY_CHILD_WORKFLOW_MODEL_SMOKE:-}\" = \"1\" || { echo 'Set PENNY_CHILD_WORKFLOW_MODEL_SMOKE=1 to run one disposable Ollama child-workflow smoke.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.child-workflow-model-smoke.config.ts",
+    "test:sca-p04-model-smoke:aggregate": "if test \"${PENNY_SCA_P04_MODEL_SMOKE:-}\" = \"1\"; then bun run test:sca-p04-model-smoke; else echo 'Skipping opt-in live SCA P04 DeepSeek full-gate smoke; set PENNY_SCA_P04_MODEL_SMOKE=1 to authorize it.'; fi",
+    "test:sca-p04-model-smoke": "test \"${PENNY_SCA_P04_MODEL_SMOKE:-}\" = \"1\" || { echo 'Set PENNY_SCA_P04_MODEL_SMOKE=1 to run the live SCA P04 DeepSeek full-gate smoke.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.sca-p04-model-smoke.config.ts",
+    "test:sca-p05-model-smoke:aggregate": "if test \"${PENNY_SCA_P05_MODEL_SMOKE:-}\" = \"1\"; then bun run test:sca-p05-model-smoke; else echo 'Skipping opt-in live SCA P05 DeepSeek schema smoke; set PENNY_SCA_P05_MODEL_SMOKE=1 to authorize it.'; fi",
+    "test:sca-p05-model-smoke": "test \"${PENNY_SCA_P05_MODEL_SMOKE:-}\" = \"1\" || { echo 'Set PENNY_SCA_P05_MODEL_SMOKE=1 to run the live SCA P05 DeepSeek schema/prompt smoke.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.sca-p05-model-smoke.config.ts",
+    "test:sca-p06-model-smoke:aggregate": "if test \"${PENNY_SCA_P06_MODEL_SMOKE:-}\" = \"1\"; then bun run test:sca-p06-model-smoke; else echo 'Skipping opt-in live SCA P06 DeepSeek blinded decision smoke; set PENNY_SCA_P06_MODEL_SMOKE=1 to authorize it.'; fi",
+    "test:sca-p06-model-smoke": "test \"${PENNY_SCA_P06_MODEL_SMOKE:-}\" = \"1\" || { echo 'Set PENNY_SCA_P06_MODEL_SMOKE=1 to run the live SCA P06 DeepSeek blinded decision smoke.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.sca-p06-model-smoke.config.ts",
+    "test:imagegen-live:aggregate": "if test \"${PENNY_IMAGEGEN_LIVE:-}\" = \"1\"; then bun run test:imagegen-live; else echo 'Skipping opt-in live imagegen backend smoke; set PENNY_IMAGEGEN_LIVE=1 to authorize it.'; fi",
+    "test:imagegen-live": "test \"${PENNY_IMAGEGEN_LIVE:-}\" = \"1\" || { echo 'Set PENNY_IMAGEGEN_LIVE=1 to run the live ComfyUI imagegen smoke.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.imagegen-live.config.ts",
+    "test:imagegen-model-smoke:aggregate": "if test \"${PENNY_IMAGEGEN_MODEL_SMOKE:-}\" = \"1\"; then bun run test:imagegen-model-smoke; else echo 'Skipping opt-in live imagegen multimodal critic smoke; set PENNY_IMAGEGEN_MODEL_SMOKE=1 to authorize it.'; fi",
+    "test:imagegen-model-smoke": "test \"${PENNY_IMAGEGEN_MODEL_SMOKE:-}\" = \"1\" || { echo 'Set PENNY_IMAGEGEN_MODEL_SMOKE=1 to run the live imagegen multimodal critic smoke.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.imagegen-model-smoke.config.ts",
+    "test:imagegen-recovery-live:aggregate": "if test \"${PENNY_IMAGEGEN_RECOVERY_LIVE:-}\" = \"1\"; then bun run test:imagegen-recovery-live; else echo 'Skipping opt-in live imagegen recovery experiment; set PENNY_IMAGEGEN_RECOVERY_LIVE=1 to authorize it.'; fi",
+    "test:imagegen-recovery-live": "test \"${PENNY_IMAGEGEN_RECOVERY_LIVE:-}\" = \"1\" || { echo 'Set PENNY_IMAGEGEN_RECOVERY_LIVE=1 to run the live imagegen recovery experiment.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.imagegen-recovery-live.config.ts",
+    "test:imagegen-security-inspection:aggregate": "if test \"${PENNY_IMAGEGEN_SECURITY_INSPECTION:-}\" = \"1\"; then bun run test:imagegen-security-inspection; else echo 'Skipping opt-in deployed imagegen security inspection; set PENNY_IMAGEGEN_SECURITY_INSPECTION=1 to authorize it.'; fi",
+    "test:imagegen-security-inspection": "test \"${PENNY_IMAGEGEN_SECURITY_INSPECTION:-}\" = \"1\" || { echo 'Set PENNY_IMAGEGEN_SECURITY_INSPECTION=1 to run the deployed imagegen security inspection.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.imagegen-security-inspection.config.ts",
+    "test:imagegen-canary:aggregate": "if test \"${PENNY_IMAGEGEN_CANARY:-}\" = \"1\" && test \"${PENNY_IMAGEGEN_LIVE:-}\" = \"1\" && test \"${PENNY_IMAGEGEN_MODEL_SMOKE:-}\" = \"1\"; then bun run test:imagegen-canary; else echo 'Skipping opt-in one-shot imagegen activation canary; set PENNY_IMAGEGEN_CANARY=1 PENNY_IMAGEGEN_LIVE=1 PENNY_IMAGEGEN_MODEL_SMOKE=1 to authorize it.'; fi",
+    "test:imagegen-canary": "test \"${PENNY_IMAGEGEN_CANARY:-}\" = \"1\" && test \"${PENNY_IMAGEGEN_LIVE:-}\" = \"1\" && test \"${PENNY_IMAGEGEN_MODEL_SMOKE:-}\" = \"1\" || { echo 'Set PENNY_IMAGEGEN_CANARY=1, PENNY_IMAGEGEN_LIVE=1, and PENNY_IMAGEGEN_MODEL_SMOKE=1 to run the one-shot imagegen activation canary.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.imagegen-canary.config.ts",
+    "test:videogen-media-cpu:aggregate": "if test \"${PENNY_VIDEOGEN_MEDIA_CPU:-}\" = \"1\"; then bun run test:videogen-media-cpu; else echo 'Skipping opt-in videogen media suite: external CPU qualification NOT RUN; set PENNY_VIDEOGEN_MEDIA_CPU=1 and supply private VIDEOGEN_MEDIA_TEST_BINDINGS JSON to run it.'; fi",
+    "test:videogen-media-cpu": "test \"${PENNY_VIDEOGEN_MEDIA_CPU:-}\" = \"1\" && test -n \"${VIDEOGEN_MEDIA_TEST_BINDINGS:-}\" || { echo 'Set PENNY_VIDEOGEN_MEDIA_CPU=1 and supply private VIDEOGEN_MEDIA_TEST_BINDINGS JSON for external CPU qualification (no discovery/install/defaults).' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.videogen-media-cpu.config.ts",
     "pending": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts --grep pending",
-    "smoke:research": "echo 'Smoke: set PENNY_RESEARCH_DEFAULT_MODEL and pipe a start request to dist/cli.js --execute'"
+    "smoke:research": "echo 'Smoke: set PENNY_RESEARCH_DEFAULT_MODEL and pipe a start request to dist/cli.js --execute'",
+    "typecheck:sca-ordinary-deepseek": "tsc -p tsconfig.sca-ordinary-deepseek.json",
+    "test:sca-ordinary-deepseek": "test \"${PENNY_SCA_ORDINARY_DEEPSEEK:-}\" = \"1\" || { echo \"Set PENNY_SCA_ORDINARY_DEEPSEEK=1 and PENNY_SCA_ORDINARY_LIVE_CONFIG for the bounded synthetic live cohort.\" >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.sca-ordinary-deepseek.config.ts",
+    "test:sca-ordinary-deepseek:aggregate": "if test \"${PENNY_SCA_ORDINARY_DEEPSEEK:-}\" = \"1\"; then bun run test:sca-ordinary-deepseek; else echo \"Skipping opt-in REAL ordinary SCA DeepSeek cohort.\"; fi",
+    "test:videogen-native-cpu:aggregate": "if test \"${PENNY_VIDEOGEN_NATIVE_CPU:-}\" = \"1\"; then bun run test:videogen-native-cpu; else echo \"Native/CPU qualification NOT RUN; set PENNY_VIDEOGEN_NATIVE_CPU=1 and supply explicit private native and media bindings.\"; fi",
+    "test:videogen-native-cpu": "test \"${PENNY_VIDEOGEN_NATIVE_CPU:-}\" = \"1\" && test -n \"${VIDEOGEN_NATIVE_TEST_BINDINGS:-}\" && test -n \"${VIDEOGEN_MEDIA_TEST_BINDINGS:-}\" || { echo \"Explicit native/CPU opt-in and private bindings required.\" >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.videogen-native-cpu.config.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
-    "typebox": "1.3.7"
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "php-parser": "3.7.0",
+    "typebox": "1.3.27"
   },
   "devDependencies": {
     "@types/node": "25.9.1",
@@ -73,6 +338,6 @@
     "vitest": "^2.1.0"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.21.0"
   }
 }

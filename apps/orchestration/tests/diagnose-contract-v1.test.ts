@@ -15,7 +15,7 @@ import {
   type ArtifactRef,
   type DiagnosisDraftV1,
   type DiagnosisRequestV1,
-} from "../src/index.js";
+} from "../dist/index.js";
 
 const RUN_ID = "run-diagnose-contract";
 

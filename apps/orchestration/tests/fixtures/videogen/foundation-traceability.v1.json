@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "scope": "provider-free-foundation-only",
+  "production_registration": false,
+  "work_packages": [
+    {
+      "wp": "VG-WP-001",
+      "ac": ["AC-048"]
+    },
+    {
+      "wp": "VG-WP-002",
+      "ac": ["AC-001", "AC-003", "AC-034", "AC-044"]
+    },
+    {
+      "wp": "VG-WP-003",
+      "ac": ["AC-004", "AC-018", "AC-041"]
+    },
+    {
+      "wp": "VG-WP-004",
+      "ac": ["AC-005", "AC-007", "AC-009", "AC-012", "AC-015", "AC-017", "AC-043"]
+    },
+    {
+      "wp": "VG-WP-005",
+      "ac": ["AC-008", "AC-033", "AC-038"]
+    }
+  ],
+  "deferred": [
+    "atomic_capacity_owner",
+    "media_proof_adapters",
+    "native_package_proof",
+    "delivery_proof",
+    "production_state_machine",
+    "live_qualification",
+    "UC-01..UC-18"
+  ]
+}

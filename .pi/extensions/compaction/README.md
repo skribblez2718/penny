@@ -2,6 +2,34 @@
 
 Pi compaction produces model-owned prose plus code-owned exact recovery references.
 
+## Always-enabled native compaction
+
+Every Penny-owned skill worker, child workflow worker, direct agent (single, parallel or
+chain), and anonymous private-KB session uses native Pi automatic compaction. The shared
+session-local policy keeps it enabled even when global, project or injected settings say
+`false`, including after reload, settings changes, model selection and direct-session
+replacement. The resource loader and session receive the same enforced settings manager.
+Worker policy never writes operator settings; reserve/recent-token preferences and
+model-specific overrides remain unchanged. Private-KB ambient-resource isolation is unchanged.
+
+Pi still owns threshold and context-overflow recovery, cancellation, summary persistence
+and retry. This extension augments eligible summaries with exact recovery references; when
+it yields, Pi's native summary remains available. Native summary streams retain the host's existing model/disclosure guard. Guarded hosts
+must exclude ambient custom summarizers that do not use their admitted session stream.
+
+Real streamed summary text/thinking deltas renew the existing worker/direct-agent inactivity
+lease through content-free activity records: class and positive byte count only. Both native
+and custom summaries report progress; silent summaries still expire. There is no extra model
+call, timer heartbeat or total-work deadline. Custom deltas use an owner-private
+callback injected only into the exact existing Penny producer; public event-bus messages
+have no liveness authority. Reload, completion and invocation cancellation retire stale
+observers. This closes accidental progress provenance, not hostile in-process JavaScript
+access to host objects.
+
+Optional artifact telemetry has a separate one-second network deadline, an unreferenced
+timer, cancellation propagation and response-body cleanup. A failed or stalled telemetry
+POST does not delay the summary or make another model request.
+
 ## Exact source set
 
 Artifact IDs enter `[RESUME-REFS v2]` only from:
@@ -21,11 +49,13 @@ makes custom compaction ineligible and yields to Pi's default path.
 
 ## Skill-result compatibility
 
-The only historical result admitted is the exact pre-engine `SkillResult` declared at commit
-`12e8c32922bae2db0da7cc706322d10b2eccb81d`. Its required boolean
-`requires_approval`, required and optional fields, nested result/question shapes, and mode enum are
-validated strictly. A current-era marker selects only the current parser; malformed current-like
-data is never retried as historical data.
+Current `skill` results use the shared, closed `SkillResultSchema` and
+`parseCurrentSkillResult` producer/consumer boundary. The parser validates the entire aggregate,
+including diagnostics, input assurance and canonical clarification continuations. Invalid or
+over-capacity results fail closed; there is no historical-result or obsolete pause adapter.
+Clarification run identity comes from the engine continuation, never a session ID or question field.
+Independent saved-artifact readers retain their existing schema-v1/v2 support; immutable saved
+artifacts are not rewritten.
 
 ## Output
 
@@ -101,8 +131,8 @@ bun run --cwd .pi/extensions/compaction lint
 bun run --cwd .pi/extensions/compaction format:check
 ```
 
-Tests cover authentic current/pre-engine skill-result fixtures, mandatory historical
-`requires_approval`, malformed historical/current fail-closed behavior, honest terminal statuses,
+Tests cover current skill-result fixtures, malformed and obsolete result rejection, bounded
+aggregate validation, canonical clarification continuations, honest terminal statuses,
 exact unique-ID call/result correlation (including out-of-order results), short goal pivots,
 current-session selection, prior exact refs, no global leakage, read-only checkpoint access,
 repeated compaction, handoff-index materialization, strict worker-metadata rejection, exact worker

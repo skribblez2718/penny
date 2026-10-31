@@ -62,7 +62,12 @@ The result includes validation evidence, normalization choices, the resolved pal
 
 ## Reliability guarantees
 
-The generator writes to a unique same-directory staging file, then checks:
+The generator writes to a unique same-directory staging file using exclusive creation. It requests
+owner-only mode `0600` on POSIX systems. Windows does not implement owner/group/other mode
+separation through Node-compatible filesystem APIs, so Windows access follows the destination
+directory's inherited ACL.
+
+The generator then checks:
 
 1. ZIP integrity and CRCs
 2. Required OPC/OOXML package parts
@@ -87,10 +92,11 @@ bun install --frozen-lockfile
 
 ## Configuration
 
-| Environment variable      | Purpose                                            |
-| ------------------------- | -------------------------------------------------- |
-| `PROJECT_ROOT`            | Optional project-root override.                    |
-| `PENNY_DOCGEN_TIMEOUT_MS` | Generator timeout in milliseconds (default 90000). |
+| Environment variable | Purpose                         |
+| -------------------- | ------------------------------- |
+| `PROJECT_ROOT`       | Optional project-root override. |
+
+Generation has no elapsed-time ceiling. The caller's cancellation signal and the supervising agent's renewable inactivity lease remain authoritative.
 
 ## Testing
 

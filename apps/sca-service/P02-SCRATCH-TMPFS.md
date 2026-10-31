@@ -1,0 +1,27 @@
+# P02 scratch tmpfs capacity boundary
+
+The host scanner/inventory and OSV bwrap runtimes enforce a per-invocation capacity on `/scratch`. This is **tmpfs capacity, not a disk quota**. It does not limit the parent-visible control bind, source/runtime staging, persistent disks, inode counts, total process memory, swap usage or concurrent jobs. Existing input/output checks, cgroup memory/task/CPU limits, cancellation and verified cleanup remain separate controls. Deployment storage and retention policy must cover those other resources.
+
+## Required configuration and deployment
+
+Both request contracts require `limits.scratch_bytes`: an integer from 4,096 through 2,147,483,648 inclusive, divisible by 4,096. It must also divide exactly into the running tmpfs block size; the launcher rejects a limit that would require kernel rounding rather than silently increasing it. No default or compatibility fallback is provided.
+
+Both `controls` objects require SHA-256 pins for `scratch_launcher`, `mount` and `setpriv`, in addition to `bwrap`, `systemd_run` and `systemctl`. The launcher source is the exact adjacent `src/p02-scratch-launcher.mjs` (or its byte-identical build copy), not a caller-selected program. The executable paths are fixed at `/usr/bin/mount` and `/usr/bin/setpriv`. The caller measures these pins, the Node executable, and the **complete dynamic-library closure for Node, mount and setpriv**. Do not repeat the control executable paths in `closure`. No operator path or binary measurement is embedded in the repository.
+
+The build copies the launcher and both standalone workers byte-for-byte into `dist`. The P02 fixed implementation-source manifest includes the launcher, declaration, changed build contract and adversarial tests. Re-measure the deployment, operation profiles and qualification source manifest after any change; old profiles and old configurations cannot authorize the new runtime. Historical boundary trials do not qualify this changed deployment.
+
+## Privileged setup, then capability-free execution
+
+Bwrap creates an isolated rootless user namespace with uid/gid 0 mapped only to the nonroot caller, isolated PID/network/IPC/UTS/cgroup namespaces, and only `CAP_SYS_ADMIN` and `CAP_SETPCAP`. Those capabilities belong only to this user namespace, not the host. The sandbox root and `/dev` mounts are read-only. Bwrap creates `/scratch` as a fresh private tmpfs, never a host-directory bind.
+
+The built-ins-only Node launcher checks the namespace maps, uid/gid, PID namespace, exact capability sets, canonical caller-bound scratch limit, exact current Node path/hash, its own hash, the adjacent worker hash and both control binary hashes. It rejects a missing, renamed, writable or drifting pin. It remounts the existing empty `/scratch` through fixed argument-vector `/usr/bin/mount` with exact `size=<bytes>,nosuid,nodev,noexec`. It checks mount identity/type/flags and the actual kernel `statfs` capacity, not merely configuration text or a command exit status.
+
+The launcher then replaces itself through `/usr/bin/setpriv`, clearing bounding, inheritable and ambient capabilities and setting no-new-privileges before executing the exact current Node executable with only the adjacent fixed `p02-host-worker.mjs` or `p02-osv-worker.mjs`. No privileged Node parent remains. Workers independently require **all five capability sets to be zero**, no-new-privileges to be set, and the actual `/scratch` tmpfs capacity/flags to match the bound limit before work and again before publishing a receipt. A worker cannot remount it larger. `noexec` blocks direct filesystem execution; it is not a prohibition on an interpreter reading data.
+
+OSV's one preconnected socket occupies **standard input (fd 0)** through systemd-run, bwrap, launcher exec and setpriv. Node's `execve` closes descriptors other than standard input/output/error, so the old fd 3 grant cannot survive this path. The launcher never reads the socket. The OSV worker opens only that inherited socket object after the control gate and verifies its kernel peer before TLS; it does not resolve or dial OSV.
+
+## Control and cleanup scope
+
+The parent-visible writable binds are `/p02/control` and `/osv/control`, backed by fresh private workspace directories. Host ready/go markers, receipts, the fixed probe-result marker and inventory output use `/p02/control`; OSV policy/canary/go/receipt/finish use `/osv/control`. The parent retains no-follow, exact-file, request binding, output-size and exact final-file-set checks through those binds. Scanner homes, temporary files and the actual scratch allocation/probe stay on `/scratch`; only the small fixed probe-result marker is exported through control. Scratch disappears with the mount namespace, while control/staging cleanup still requires independently verified process-tree termination. Uncertain workspaces can contain sensitive raw output or source bytes and require private quarantine and deployment-owned disposal.
+
+Offline tests exercise real non-sparse writes until `ENOSPC`, successful under-limit writes, zero-capability workers, failed enlargement/direct execution, parent-visible control files, stdin-grant preservation and missing/drifting limits/pins. These tests use disposable local namespaces, not live OSV traffic. Unsupported environments explicitly skip the kernel tests; static tests alone are not kernel-enforcement evidence. Full systemd deployment, actual scanner closures, live OSV transport and formal qualification still require separately authorized checks.

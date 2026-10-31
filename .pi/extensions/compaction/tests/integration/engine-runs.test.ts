@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Checkpointer, initializePennyState } from "@penny/orchestration/source";
+import { Checkpointer, initializePennyState } from "@penny/orchestration";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { readExactCheckpoints } from "../../checkpointer.js";
@@ -181,13 +181,15 @@ describe("readExactCheckpoints (TypeScript v2 read-only SQLite)", () => {
 
     {
       const stale = new DatabaseSync(databasePath);
-      stale.exec("DROP TABLE child_workflow_calls; PRAGMA user_version=10;");
+      stale.exec(
+        "DROP TABLE host_operation_calls; DROP TABLE child_workflow_calls; PRAGMA user_version=10;"
+      );
       stale.close();
     }
     expect(readExactCheckpoints(["run-current"], projectRoot)).toEqual({
       runs: [],
       artifactRefs: [],
-      issues: ["checkpointer state unavailable: STATE_SCHEMA_INCOMPATIBLE (10 → 12)"],
+      issues: ["checkpointer state unavailable: STATE_SCHEMA_INCOMPATIBLE (10 → 13)"],
     });
     Checkpointer.provision(databasePath, undefined, { projectId }).close();
 

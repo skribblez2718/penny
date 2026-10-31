@@ -11,7 +11,7 @@ import {
   validateCanonicalBrowserNetworkAllowlistV1,
   validateRegisteredBrowserPolicyCarrierV1,
   type RegisteredBrowserPolicyCarrierV1,
-} from "./browser-policy-contract-v1.js";
+} from "./browser-policy-contract.js";
 
 export { BrowserPolicyCarrierError };
 export type { RegisteredBrowserPolicyCarrierV1 };

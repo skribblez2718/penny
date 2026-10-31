@@ -1,9 +1,10 @@
+import { assertSupportedSqliteVersion } from "./sqlite-runtime.js";
 import { chmodSync, closeSync, openSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as DatabaseSyncType, SQLOutputValue } from "node:sqlite";
 
 import { assertOwnerDirectory, assertOwnerFile, fsyncDirectory } from "./custody.js";
-import { createReadOnlySqliteSnapshot } from "./sqlite-snapshot.js";
+import { assertSqliteHealthy, openReadOnlySqliteDatabase } from "./sqlite-health.js";
 
 export const OBSERVABILITY_SCHEMA_VERSION = 1 as const;
 const REQUIRED_OBSERVABILITY_TABLES = ["compactions", "logs"] as const;
@@ -42,6 +43,7 @@ function isSqliteModule(value: unknown): value is SqliteModule {
 }
 
 function sqliteModule(): SqliteModule {
+  assertSupportedSqliteVersion(process.versions.sqlite);
   const module: unknown = process.getBuiltinModule("node:" + "sqlite");
   if (!isSqliteModule(module)) throw new Error("Node.js runtime does not provide node:sqlite");
   return module;
@@ -149,16 +151,7 @@ function assertExistingSchema(database: DatabaseSyncType): void {
       }
     }
   }
-  const integrity = requiredRow(
-    database.prepare("PRAGMA integrity_check").get(),
-    "observability integrity"
-  );
-  if (sqliteText(integrity, "integrity_check", "observability integrity") !== "ok") {
-    throw new Error("observability database integrity check failed");
-  }
-  if (database.prepare("PRAGMA foreign_key_check").all().length !== 0) {
-    throw new Error("observability database foreign-key check failed");
-  }
+  assertSqliteHealthy(database, "observability");
 }
 
 /** Explicit state setup path. It may create or upgrade only the canonical observability store. */
@@ -226,15 +219,17 @@ export function openExistingObservabilityDatabase(databasePath: string): Databas
 }
 
 /**
- * Administrative readiness validation operates on a private no-atime copy.
- * node:sqlite creates WAL/SHM siblings even for a read-only connection, so
- * opening the canonical observability DB here would violate state custody.
+ * Administrative readiness validation uses a SQLite-managed read transaction.
+ * SQLite may manage sidecars and access metadata, never application rows/schema.
  */
 export function assertExistingObservabilityDatabase(databasePath: string): void {
   const resolved = path.resolve(databasePath);
   assertOwnerDirectory(path.dirname(resolved), "Penny observability directory");
-  using snapshot = createReadOnlySqliteSnapshot(resolved, "Penny observability database");
   const { DatabaseSync } = sqliteModule();
-  using database = new DatabaseSync(snapshot.databasePath, { readOnly: true });
+  using database = openReadOnlySqliteDatabase(
+    resolved,
+    "Penny observability database",
+    DatabaseSync
+  );
   assertExistingSchema(database);
 }

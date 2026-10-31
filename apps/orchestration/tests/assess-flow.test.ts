@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ASSESS_FLOW } from "../src/playbooks/assess.js";
+import { ASSESS_FLOW } from "../dist/playbooks/assess.js";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const html = readFileSync(
@@ -85,6 +85,7 @@ const EDGES = [
   "verifying_assessment→analyzing_assessment",
   "verifying_assessment→authoring_assessment",
   "verifying_assessment→admitting_assessment",
+  "verifying_assessment→incomplete",
   "admitting_assessment→complete",
 ] as const;
 

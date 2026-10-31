@@ -22,6 +22,6 @@ Produce a decision analysis, not a decision. Map the exact admitted `DecisionReq
 
 Emit a concise analysis report followed by exactly one compact final SUMMARY line:
 
-`SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","analysis_complete":true|false,"gap_kind":"none|evidence_gap","repair_owner":"none|echo","findings":["..."],"strategy_delta":"..."}`
+SUMMARY:{"confidence":"PROBABLE","analysis_complete":true,"gap_kind":"none","repair_owner":"none","findings":[],"strategy_delta":"Proceed to decision drafting from the complete analysis."}
 
 Use `true/none/none` when complete. Use `false/evidence_gap/echo` only for the closed decision-sensitive gap. Never emit a target state.

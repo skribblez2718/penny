@@ -23,4 +23,4 @@ Generate a complete bounded set of genuinely competing causal hypotheses from th
 
 Emit a concise, complete competing-hypotheses report followed by exactly one compact final SUMMARY line:
 
-`SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","complete":true}`
+SUMMARY:{"confidence":"PROBABLE","complete":true}
