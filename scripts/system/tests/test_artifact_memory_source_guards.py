@@ -260,13 +260,13 @@ def test_track_a_dispatch_control_is_forward_only_and_documented() -> None:
             ROOT / ".pi" / "extensions" / "artifacts" / "README.md",
             ROOT / "docs" / "agents" / "orchestration" / "overview.md",
             ROOT / "docs" / "agents" / "skills" / "orchestration.md",
-            ROOT / "CHANGELOG.md",
         )
     )
     for required in (
         "PENNY_ARTIFACT_DISPATCH_MODE",
         "forward-only",
-        "exact artifact reads",
+        "indexed exact lookup",
+        "verifies its SHA-256 digest and byte length",
         "unknown",
     ):
         assert required in documentation

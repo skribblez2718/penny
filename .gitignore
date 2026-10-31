@@ -137,6 +137,11 @@ entities.json
 /plans/
 /research/
 
+# Local draft documentation (not ready for publication)
+/CHANGELOG.md
+/SETUP.md
+/DEVELOPMENT.md
+
 # ===========================================
 # IDE & Editors
 # ===========================================
